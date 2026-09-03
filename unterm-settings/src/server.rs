@@ -493,6 +493,11 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/agent/close") => {
             super::agent_run::api_session_act(handler, "agent_session.close", &req.body)
         }
+        // 在真实终端里驱动一个 brain。只认 agent id，只碰自己开的 pane。
+        ("POST", "/api/pty/start") => super::pty_run::api_start(handler, &req.body),
+        ("POST", "/api/pty/input") => super::pty_run::api_input(handler, &req.body),
+        ("POST", "/api/pty/turn") => super::pty_run::api_turn(handler, &req.body),
+        ("POST", "/api/pty/stop") => super::pty_run::api_stop(handler, &req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),
