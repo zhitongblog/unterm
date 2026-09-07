@@ -356,7 +356,9 @@ mod audit_entry_tests {
         let allowed = judge("git status");
         assert!(allowed.allowed);
         assert_eq!(allowed.code.as_str(), "allowed");
-        assert_eq!(allowed.risk, Risk::LocalMutation);
+        // `exec.run` is the band it names now: running a command is not
+        // the file-write that `local_mutation` describes.
+        assert_eq!(allowed.risk, Risk::Exec);
 
         let blocked = judge("rm -rf /");
         assert!(!blocked.allowed);
@@ -3510,8 +3512,12 @@ mod engine_neutral_handler_tests {
                     "timeout_ms": 3000,
                 }),
             )?;
-            let _ = handler.handle(&ctx, "session.destroy", &json!({ "pane_id": first_id }));
-            let _ = handler.handle(&ctx, "session.destroy", &json!({ "pane_id": second_id }));
+            // Torn down under the engine rather than through the gate: a
+            // destructive action is answered one call at a time now, and a
+            // test's cleanup should not have to hold a permission to happen.
+            // What the handler does with `session.destroy` has its own test.
+            next_core().destroy_session(first_id).ok();
+            next_core().destroy_session(second_id).ok();
             Ok((
                 launch_wait,
                 broadcast,
@@ -5394,6 +5400,23 @@ fn load_persisted_trusted() -> std::collections::HashSet<String> {
 /// destructive action is what grants destruction. The two are different
 /// promises and the store keeps them apart.
 fn grant_agent_trust(agent: &str, ceiling: &str) {
+    // "Always allow" is a promise this can only keep below the top three.
+    // Secrets, money and destruction are answered one call at a time by
+    // contract, so a standing grant carrying that ceiling would be written,
+    // listed in the settings page, and never once answer anything -- with the
+    // user having been told they gave it. Capped rather than refused: the
+    // agent keeps the standing trust as far as it is allowed to reach, and
+    // the bands above it go on asking, which is what the user would have been
+    // agreeing to if the banner had been able to say so.
+    let ceiling = if unterm_tasks::risk_allows_standing_grant(ceiling) {
+        ceiling
+    } else {
+        log::info!(
+            "'always allow' for {agent} capped at external_side_effect: \
+             {ceiling} is answered one call at a time"
+        );
+        "external_side_effect"
+    };
     let Some(store) = unterm_services::cockpit::fleet_store::tasks() else {
         log::warn!("no task store: 'always allow' for {agent} will not survive a restart");
         return;

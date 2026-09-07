@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.71.4 — 2026-09-07
+
+### Fixed
+
+- **Every glyph only a colour font carries was drawn as its own negative.**
+  Claude Code opens each message with `⏺`, and it rendered as a filled block
+  with a round hole punched out of it — the photographic negative of a filled
+  disc. The character exists in no text font: not JetBrains Mono, FiraCode,
+  Menlo, SF Mono or Monaco, only in Noto Color Emoji and Apple Color Emoji.
+  So it always came from a colour face, and the rasterizer asked every face
+  for monochrome first, retrying in colour only when monochrome drew *nothing*.
+  A colour strike loaded without `FT_LOAD_COLOR` neither fails nor comes back
+  empty: FreeType flattens it to 8-bit grey, and the grey of a black disc on a
+  transparent ground is that disc inverted. Non-empty, so the colour retry was
+  never reached. Colour faces are now asked for colour first.
+
+- **A window that could not reach the Core said so only to stderr.** The
+  fallback is right — a user whose Core will not come up still gets a terminal
+  — but it costs the one thing the Core is for: sessions no longer outlive the
+  window, and the MCP surface it serves goes with them. That was announced on
+  stderr, which for a window opened from the Dock or the Start menu is nowhere
+  at all, so a front end could run for days in an arrangement its user never
+  chose. The status bar now leads with a `core:local` chip while it lasts, and
+  a press on it gives the handshake's own words, which name the Core and its
+  version.
+
+### Changed
+
+- **Risk has seven bands where it had three.** `read`, `local_mutation`,
+  `exec`, `external_side_effect`, `credential_access`, `financial`,
+  `destructive` — the vocabulary `contracts/v0` defines. The missing one that
+  mattered most was `exec`: running a command had to be filed either as a
+  local mutation, which is far too loose, or as destruction, which is far too
+  tight, and typing into a shell was classified as the same kind of act as
+  renaming a tab. Reaching a secret and sending bytes off the machine were
+  likewise unsayable, so `profile.*`, `upload.file`, `brain.fetch` and the
+  browser capability all travelled under whichever of the three fitted worst.
+
+- **The gate moved with the bands.** Only `destructive` used to be asked
+  about; everything else went through in silence, which meant handing an agent
+  a token was as quiet as resizing a pane. Anything from
+  `external_side_effect` upward now needs a person to say yes. `exec` and
+  below stay silent: a terminal runs commands all day, and a prompt on every
+  keystroke is a prompt nobody reads.
+
+- **Secrets, money and destruction are answered one call at a time.** They no
+  longer accept a permission that outlives the call — only a single-use grant
+  naming that very method. Narrowed where grants are *written*, not only where
+  they are matched: a grant that is stored, listed, and can never answer is
+  worse than no grant, because the user was told they gave one. "Allow for
+  this task" on a deletion becomes "allow once", and "always allow" on an
+  agent banner is capped at the highest band a standing permission may carry.
+
+- **Brain events carry the contract's names.** `tool_call.requested`,
+  `tool_call.result`, `usage.updated`, `turn.completed`, `session.closed`,
+  each with its own `schema_version` and the `cursor` it sits at, so an event
+  passed on by itself is still locatable. `output.delta` deliberately keeps
+  its `assistant`/`reasoning` discriminator rather than splitting reasoning
+  into an event of its own: rendering a transcript in order needs the two
+  interleaved, and two names make that the reader's problem.
+
+- **Failures come back as `{code, message, retryable}`.** A caller may branch
+  on `code` and must never parse `message`. Fifteen codes, each under one of
+  the ten categories the contract names, with the list closed and a test that
+  says so.
+
 ## v0.71.3 — 2026-09-02
 
 ### Fixed
