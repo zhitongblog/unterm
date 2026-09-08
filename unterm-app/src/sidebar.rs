@@ -123,6 +123,19 @@ pub fn footer_mark_width(row_height: f32) -> f32 {
 pub const ROBOT: char = '\u{f06a9}';
 /// The folder a project row leads with.
 pub const FOLDER: char = '\u{f07b}';
+/// The tab a press on the row at `at` is asking for.
+///
+/// A project row names a run of tabs rather than one, so going to the project
+/// means going to the first tab under it. Returns `None` only when the press
+/// was on the last project and it has no tabs to show -- folded ones are not
+/// in `rows` at all, which is why the caller unfolds before asking.
+pub fn tab_at_or_after(rows: &[Row], at: usize) -> Option<usize> {
+    rows.iter().skip(at).find_map(|row| match row {
+        Row::Tab { index, .. } => Some(*index),
+        Row::Group { .. } => None,
+    })
+}
+
 /// The disclosure arrows, closed and open.
 pub const CLOSED: char = '\u{25B8}';
 pub const OPEN: char = '\u{25BE}';
@@ -589,6 +602,50 @@ mod tests {
             active: index == 0,
             indicators: Indicators::default(),
         }
+    }
+
+
+    /// A press on a project row is asking for the project, and a project is
+    /// reached through the tab under it.
+    ///
+    /// This is what a press on that row could not do before: it folded, and
+    /// with one tab to a project -- the common shape -- folding hid the very
+    /// tab being aimed at. Two presses put it back, so the strip read as a
+    /// tab that would not switch.
+    #[test]
+    fn a_press_on_a_project_row_finds_the_tab_under_it() {
+        let tabs = vec![
+            tab(0, "one", Some("/work/alpha")),
+            tab(1, "two", Some("/work/beta")),
+            tab(2, "three", Some("/work/beta")),
+        ];
+        let rows = rows_of(&tabs);
+        // Every project row leads to the first tab beneath it, and every tab
+        // row leads to itself.
+        for (at, row) in rows.iter().enumerate() {
+            let found = tab_at_or_after(&rows, at);
+            match row {
+                Row::Tab { index, .. } => assert_eq!(found, Some(*index), "row {at}"),
+                Row::Group { .. } => {
+                    let next_tab = rows[at + 1..].iter().find_map(|row| match row {
+                        Row::Tab { index, .. } => Some(*index),
+                        Row::Group { .. } => None,
+                    });
+                    assert_eq!(found, next_tab, "row {at} is a project");
+                    assert!(found.is_some(), "a project row led nowhere at {at}");
+                }
+            }
+        }
+    }
+
+    /// Past the end there is nothing to go to, and saying so is better than
+    /// picking the nearest thing.
+    #[test]
+    fn a_press_past_every_tab_asks_for_none() {
+        let tabs = vec![tab(0, "one", Some("/work/alpha"))];
+        let rows = rows_of(&tabs);
+        assert_eq!(tab_at_or_after(&rows, rows.len()), None);
+        assert_eq!(tab_at_or_after(&[], 0), None);
     }
 
     fn labels(rows: &[Row]) -> Vec<String> {

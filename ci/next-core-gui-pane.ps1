@@ -307,11 +307,18 @@ $Suites = @(
         # multi-window work (the four session-ownership tests pinning
         # `window_should_adopt`, plus the D2 close-prompt test); before that it
         # sat at 0.67's 16 and this gate went red on CI for a whole release.
+        # 23 since the tab-switch resize guard: `placements` describes the
+        # active tab alone, so a pane behind another is never told about a
+        # window that changed size — and four of the five ways of bringing
+        # one forward forgot to tell it.
         # This number is meant to be edited by whoever adds a test here — that
         # is the whole mechanism, and it is why a test quietly disappearing is
         # caught.
-        ExpectedCount = 22
+        ExpectedCount = 24
         RequiredTests = @(
+            # Every way of bringing a tab forward must tell its panes
+            # how big the window is; only one of the five did.
+            "window::tests::every_tab_switch_resizes_the_panes_it_brings_forward",
             @(
                 "window::tests::a_wide_glyph_copies_without_its_spacer_cell",
                 "window::tests::the_configured_shell_is_used",
@@ -484,7 +491,7 @@ $Suites = @(
         Name = "left tab strip"
         Package = "unterm-app"
         Filter = "sidebar::tests::"
-        ExpectedCount = 21
+        ExpectedCount = 23
         RequiredTests = @(
             "sidebar::tests::a_single_project_gets_no_group_headers",
             "sidebar::tests::same_named_projects_are_told_apart_by_the_shortest_parent",

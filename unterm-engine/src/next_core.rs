@@ -4074,6 +4074,62 @@ mod tests {
         Ok(())
     }
 
+    /// Growing a pane brings back what shrinking it took away.
+    ///
+    /// Pinned rather than fixed: this already works, and the point of writing
+    /// it down is that a full-screen program depends on both halves and the
+    /// dependency is invisible from the resize code alone. Such a program
+    /// anchors its interface to the *bottom* of the screen, so if growing
+    /// handed out blank rows instead of the banked ones, the frame it drew
+    /// before the resize would sit stranded at the old bottom while its input
+    /// line moved to the new one -- with the height the pane gained lying
+    /// blank in between. That symptom was reported and this is what ruled the
+    /// resize path out of it.
+    #[test]
+    fn growing_a_pane_restores_the_rows_shrinking_it_banked() -> Result<()> {
+        let _guard = test_guard();
+        let _runtime_guard = reset_state_for_test();
+        let engine = NextCoreEngine;
+        let session = engine.create_session(CreateSessionRequest {
+            cols: 10,
+            rows: 6,
+            command_dir: None,
+            command: None,
+            env: Vec::new(),
+            launch_policy: Default::default(),
+        })?;
+
+        set_output_for_test(session.id, "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix")?;
+        let full = engine.read_screen(session.id)?;
+        assert_eq!(full.lines, vec!["one", "two", "three", "four", "five", "six"]);
+        let from_bottom = full.rows as isize - 1 - full.cursor.y;
+
+        engine.resize_session(session.id, 10, 3)?;
+        let small = engine.read_screen(session.id)?;
+        assert_eq!(
+            small.lines,
+            vec!["four", "five", "six"],
+            "shrinking banks the top rows"
+        );
+
+        engine.resize_session(session.id, 10, 6)?;
+        let back = engine.read_screen(session.id)?;
+        assert_eq!(
+            back.lines,
+            vec!["one", "two", "three", "four", "five", "six"],
+            "growing must take the banked rows back, not hand out blank ones"
+        );
+        assert_eq!(
+            back.rows as isize - 1 - back.cursor.y,
+            from_bottom,
+            "the cursor must keep its distance from the bottom, which is what \
+             a full-screen program positions its interface against"
+        );
+
+        engine.destroy_session(session.id)?;
+        Ok(())
+    }
+
     /// A window that reported no size used to cost a pane everything it held.
     ///
     /// Every fallback between a window's size and a pane's grid floored at

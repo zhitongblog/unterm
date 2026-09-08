@@ -3280,7 +3280,7 @@ impl App {
                 if renames {
                     self.open_tab_rename(index);
                 } else {
-                    self.select_tab(index as u8 + 1);
+                    self.select_tab_at(index);
                     // Keep holding to carry the tab to a new place in the
                     // strip; letting go before moving is just the click.
                     self.window.dragging_tab =
@@ -3292,8 +3292,35 @@ impl App {
                 }
             }
             crate::sidebar::Row::Group { key, .. } => {
-                if !self.window.sidebar_collapsed.remove(&key) {
-                    self.window.sidebar_collapsed.insert(key);
+                // The arrow folds the project; its name goes to it. The same
+                // split the file tree makes, for the same reason -- and here
+                // it is the difference between a click that does something
+                // and one that does not.
+                //
+                // Folding on any press meant a project row was the one row in
+                // the strip a click could not reach anything from. With one
+                // tab to a project, which is the common shape, pressing the
+                // name folded the tab being aimed at out of sight and
+                // pressing again put it back: two presses, nothing moved.
+                // That is what "sometimes the tab will not switch" was, and
+                // the presses are in `open.log` -- a run of them on one row,
+                // a second apart, then one on the row below that switched at
+                // once.
+                let on_arrow = self.sidebar_dock().is_some_and(|(left, _, _, _, row_height)| {
+                    self.window.pointer.0 < left + row_height
+                });
+                if on_arrow {
+                    if !self.window.sidebar_collapsed.remove(&key) {
+                        self.window.sidebar_collapsed.insert(key);
+                    }
+                } else {
+                    // Unfolded first: a project that is folded has no tab row
+                    // to find, and going to it is what was asked for.
+                    self.window.sidebar_collapsed.remove(&key);
+                    let rows = self.sidebar_rows();
+                    if let Some(index) = crate::sidebar::tab_at_or_after(&rows, at) {
+                        self.select_tab_at(index);
+                    }
                 }
             }
         }
@@ -4905,6 +4932,27 @@ impl App {
     ///
     /// Nine means the last one however many there are, which is what every
     /// browser does and what people reach for.
+    /// Show the tab at `index` in the strip, whatever number it would be.
+    ///
+    /// Not `select_tab`: that one takes a *number key*, where nine and above
+    /// mean "the last tab" -- right for a keyboard with nine keys, and wrong
+    /// for a strip whose ninth row is the ninth tab. Routing the strip
+    /// through it sent every click past the eighth row to the end instead,
+    /// which reads as a tab that will not switch.
+    fn select_tab_at(&mut self, index: usize) {
+        let Some(tab_id) = self.window.tabs.tab_ids().get(index).copied() else {
+            #[cfg(target_os = "macos")]
+            crate::macos_open::trace(&format!("select_tab_at {index}: no tab there"));
+            return;
+        };
+        #[cfg(target_os = "macos")]
+        crate::macos_open::trace(&format!(
+            "select_tab_at {index} -> tab {tab_id} pane {:?}",
+            self.window.tabs.active_pane(tab_id)
+        ));
+        self.activate_tab(tab_id);
+    }
+
     fn select_tab(&mut self, number: u8) {
         let ids = self.window.tabs.tab_ids();
         let Some(tab_id) = crate::topbar::tab_for_number(number, ids.len())
@@ -6709,6 +6757,10 @@ impl App {
         if let Some(live) = self.window.state.as_ref() {
             live.window.request_redraw();
         }
+        // A window that was behind has had its tabs settled without anyone
+        // resizing its panes: `resize_panes` only ever describes the window
+        // in front. Coming forward is when that debt is paid.
+        self.resize_panes();
         self.window.drawn_revision = None;
         true
     }
@@ -7100,7 +7152,7 @@ impl App {
                         if let Some(crate::sidebar::Row::Tab { index, .. }) =
                             self.sidebar_rows().get(at).cloned()
                         {
-                            self.select_tab(index as u8 + 1);
+                            self.select_tab_at(index);
                             self.open_tab_menu(index);
                         }
                     }
@@ -7700,6 +7752,25 @@ impl App {
         self.open_palette(self.tab_navigator_entries());
     }
 
+    /// Show a tab, and tell what is on it how big it now is.
+    ///
+    /// `placements` describes the *active* tab alone, so a pane behind
+    /// another one is not resized while it is there -- and bringing it
+    /// forward is therefore the only moment it can be told. Leave the line
+    /// out and the pane keeps whatever size it last had, until something
+    /// else happens to resize the window while that pane is the one in
+    /// front. Between those two moments its program is drawing to a grid
+    /// that no longer exists.
+    ///
+    /// A full-screen program shows it plainly, because it anchors its
+    /// interface to the bottom of the screen it believes it has: the frame
+    /// lands short of the real bottom and the input line lands somewhere
+    /// else entirely, with the difference in height lying blank in between.
+    /// That was the reported symptom, and forcing one resize by hand put it
+    /// right, which is what pointed here.
+    ///
+    /// `select_tab` has always had the line. Reaching the same tab through
+    /// the palette did not.
     fn activate_tab(&mut self, tab_id: usize) {
         if !self.window.tabs.set_active_tab(tab_id) {
             return;
@@ -7708,6 +7779,8 @@ impl App {
         if let Some(pane_id) = self.window.tabs.active_pane(tab_id) {
             self.focus_session(pane_id);
         }
+        self.resize_panes();
+        self.window.drawn_revision = None;
     }
 
     /// Open a palette whose line is a task rather than a filter.
@@ -8245,6 +8318,8 @@ impl App {
                 self.window.tabs.set_active_tab(tab_id);
                 self.window.tab_id = Some(tab_id);
                 self.focus_session(session.id);
+                self.resize_panes();
+                self.window.drawn_revision = None;
             }
             Err(err) => {
                 log::warn!("could not record the tab: {err:#}");
@@ -8277,6 +8352,9 @@ impl App {
         if let Some(pane) = self.window.tabs.active_pane(next) {
             self.focus_session(pane);
         }
+        // Whatever was behind has not been told about any window this size.
+        self.resize_panes();
+        self.window.drawn_revision = None;
     }
 
     /// Start the same native interactive screenshot flow 0.57.4 used.
@@ -8340,6 +8418,10 @@ impl App {
         if let Some(pane) = self.window.tabs.active_pane(next) {
             self.focus_session(pane);
         }
+        // The tab that takes over was behind until now, so it is owed the
+        // same telling as one brought forward any other way.
+        self.resize_panes();
+        self.window.drawn_revision = None;
     }
 
     /// Point the window at a pane, and redraw.
@@ -11788,6 +11870,81 @@ fn encode(logical: &winit::keyboard::Key, held: crate::mouse::Held) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every way of bringing a tab forward has to tell its panes how big this
+    /// window is.
+    ///
+    /// Checked against the source because there is no seam to check it at:
+    /// each of these is a few lines that set the active tab, and the resize
+    /// is one more line that is easy to leave out and silent when it is.
+    /// `select_tab` had the line; the palette's `activate_tab`, the
+    /// keyboard's `cycle_tab`, `close_tab` and `open_tab_with` did not, and
+    /// a pane brought forward by any of those four kept the size it had when
+    /// it was last in front.
+    ///
+    /// A heuristic, and worth knowing where it stops: it asks only that the
+    /// call appears within the next few lines, so it catches the omission it
+    /// was written for and would not catch a `resize_panes` put on a branch
+    /// that does not run. `settle_active_tab` is exempt on purpose -- it
+    /// takes a `WindowState` rather than the front end, so it cannot resize
+    /// anything, and both of its callers do it themselves.
+    #[test]
+    fn every_tab_switch_resizes_the_panes_it_brings_forward() {
+        let source = include_str!("window.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut missing = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.contains("tabs.set_active_tab(") {
+                continue;
+            }
+            let enclosing = lines[..=index]
+                .iter()
+                .rev()
+                .find(|candidate| candidate.trim_start().starts_with("fn "))
+                .map(|candidate| candidate.trim())
+                .unwrap_or("");
+            if enclosing.starts_with("fn settle_active_tab") {
+                continue;
+            }
+            let window = &lines[index..(index + 25).min(lines.len())];
+            if !window.iter().any(|line| line.contains("resize_panes()")) {
+                missing.push(format!("line {}: {enclosing}", index + 1));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "a tab is brought forward without its panes being resized:\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+
+    /// A row's position in the strip is not a number key.
+    ///
+    /// `select_tab` maps a *key*, and nine and above mean "the last tab"
+    /// there, which is right for a keyboard with nine of them. The strip has
+    /// no such limit: its ninth row is the ninth tab. Feeding a row index in
+    /// as a key sent every click past the eighth to the end of the strip --
+    /// a tab that switches, just not to the one under the pointer. Rows go
+    /// through `select_tab_at`, which takes the position it is given.
+    #[test]
+    fn a_row_position_never_arrives_as_a_number_key() {
+        let source = include_str!("window.rs");
+        let offenders: Vec<String> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                let line = line.trim();
+                line.starts_with("self.select_tab(") && line.contains("index")
+            })
+            .map(|(index, line)| format!("line {}: {}", index + 1, line.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "a strip position was passed as a number key:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
 
     /// A window with no size must not be mistaken for a one-cell one.
     ///
