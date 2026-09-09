@@ -316,10 +316,14 @@ $Suites = @(
         # caught.
         ExpectedCount = 24
         RequiredTests = @(
-            # Every way of bringing a tab forward must tell its panes
-            # how big the window is; only one of the five did.
-            "window::tests::every_tab_switch_resizes_the_panes_it_brings_forward",
             @(
+                # Every way of bringing a tab forward must tell its panes how
+                # big the window is; only one of the five did. And a row's
+                # position in the strip is not a number key: nine and above
+                # meant "the last tab" and sent every click past the eighth
+                # row to the end.
+                "window::tests::every_tab_switch_resizes_the_panes_it_brings_forward",
+                "window::tests::a_row_position_never_arrives_as_a_number_key",
                 "window::tests::a_wide_glyph_copies_without_its_spacer_cell",
                 "window::tests::the_configured_shell_is_used",
                 # The startup path and every later measurement must size the
