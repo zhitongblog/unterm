@@ -31,6 +31,28 @@ pub enum InstanceSubCommand {
 }
 
 pub fn run(cmd: InstanceCommand, json_out: bool) -> Result<()> {
+    // Naming an instance and asking what it is needs no server at all: the
+    // answer is its registry record, which is also what `instance.list`
+    // reads. Answered before connecting, for two reasons. Since 0.68 every
+    // front end serves through the Core's one MCP port, so the server cannot
+    // tell which of them the question was about and answers for whichever it
+    // considers current -- `--instance bravo` came back describing alpha.
+    // And a front end of another version refuses the handshake outright,
+    // which turned "what is this instance" into an error about bridges when
+    // the answer was sitting in a file.
+    if matches!(cmd.sub, InstanceSubCommand::Info) {
+        if let Some(record) = crate::client::target_instance()
+            .filter(|id| id != "core")
+            .and_then(|id| crate::client::instance_record(&id))
+        {
+            if json_out {
+                print_json(&record);
+            } else {
+                print_instance_info(&record);
+            }
+            return Ok(());
+        }
+    }
     let mut client = McpClient::connect()?;
     match cmd.sub {
         InstanceSubCommand::List => {

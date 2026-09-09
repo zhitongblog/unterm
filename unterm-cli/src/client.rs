@@ -585,6 +585,31 @@ pub fn http_post_json(path: &str, body: Value) -> Result<Value> {
     Ok(value)
 }
 
+/// The registry record for one named instance, as JSON.
+///
+/// `instance.info` asks the *server* who it is, and since 0.68 every window
+/// of every front end answers through the Core's one MCP port -- so with two
+/// front ends up, asking about `bravo` reached the same server as asking
+/// about `alpha`, and it answered for whichever one it considers current.
+/// The record is what tells them apart: it is per front end, it is what
+/// `instance.list` reads, and the endpoint was resolved from it a moment ago.
+pub fn instance_record(instance_id: &str) -> Option<Value> {
+    let dir = unterm_dir().ok()?;
+    let raw = fs::read_to_string(dir.join("instances").join(format!("{instance_id}.json"))).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let pid = value.get("pid").and_then(|pid| pid.as_u64())? as u32;
+    // Zero is not a process to ask about: on unix `kill(0, 0)` addresses the
+    // caller's own process group and answers yes, so a record left behind
+    // with no pid would read as live. Guarded the same way `read_live_record`
+    // guards it, and for the same reason.
+    (pid != 0 && pid_alive(pid)).then_some(value)
+}
+
+/// Which instance the caller named, if it named one.
+pub fn target_instance() -> Option<String> {
+    requested_instance_id()
+}
+
 /// Resolve the instance id whose GUI pid matches — used by `agent
 /// signal` to route hook events to the instance that owns the calling
 /// pane. Hooks inherit `WEZTERM_UNIX_SOCKET=…/gui-sock-<pid>` from the
@@ -816,6 +841,79 @@ mod compatibility_tests {
     /// reach it. It publishes its own record instead of registering in
     /// `instances/`, so the by-name path would otherwise fail for the one
     /// instance that is reachable with no window open.
+
+    /// Two front ends, one MCP port, and a question about one of them.
+    ///
+    /// Since 0.68 every window serves through the Core's port, so two front
+    /// ends register the same `mcp_port` and differ only by pid and their own
+    /// HTTP port. Asking the server which instance it is therefore answers
+    /// for whichever it considers current, whoever was asked about -- which
+    /// is why the record, not the server, is what tells them apart.
+    #[test]
+    fn a_named_instance_is_read_from_its_own_record() {
+        let _lock = env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let _guard = StateDirGuard::set(root.path());
+        let instances = root.path().join("instances");
+        fs::create_dir_all(&instances).unwrap();
+        for (id, http) in [("alpha", 19877u16), ("bravo", 19878)] {
+            fs::write(
+                instances.join(format!("{id}.json")),
+                serde_json::to_string(&json!({
+                    "id": id,
+                    "pid": std::process::id(),
+                    // The same port on purpose: that is the shape that made
+                    // the server unable to tell the two apart.
+                    "mcp_port": 62144,
+                    "http_port": http,
+                    "auth_token": format!("{id}-token"),
+                    "product_version": unterm_protocol::PRODUCT_VERSION,
+                    "protocol_version": unterm_protocol::PROTOCOL_VERSION,
+                    "data_schema_version": unterm_protocol::DATA_SCHEMA_VERSION,
+                    "process_role": "gui",
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+
+        for (id, http) in [("alpha", 19877u64), ("bravo", 19878)] {
+            std::env::set_var("UNTERM_INSTANCE", id);
+            let record = instance_record(id).expect("the record is there");
+            std::env::remove_var("UNTERM_INSTANCE");
+            assert_eq!(record.get("id").and_then(|v| v.as_str()), Some(id));
+            assert_eq!(record.get("http_port").and_then(|v| v.as_u64()), Some(http));
+        }
+
+        // A name nothing answers to is nothing, not the nearest match.
+        assert!(instance_record("charlie").is_none());
+    }
+
+    /// A record whose process has gone is not an answer.
+    #[test]
+    fn a_dead_instance_has_no_record_to_report() {
+        let _lock = env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let _guard = StateDirGuard::set(root.path());
+        let instances = root.path().join("instances");
+        fs::create_dir_all(&instances).unwrap();
+        fs::write(
+            instances.join("ghost.json"),
+            serde_json::to_string(&json!({
+                "id": "ghost",
+                // No process has pid 0, which is how every other reader here
+                // spells "this record outlived its front end".
+                "pid": 0,
+                "mcp_port": 62144,
+                "http_port": 19999,
+                "auth_token": "ghost-token",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(instance_record("ghost").is_none());
+    }
+
     #[test]
     fn the_instance_named_core_resolves_to_the_core() {
         let _lock = env_lock();
