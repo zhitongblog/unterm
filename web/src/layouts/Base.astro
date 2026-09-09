@@ -61,7 +61,7 @@ const ogAltLocales = alternates
 // ?v= busts the Cloudflare edge cache (assets/* carries max-age=86400,
 // so the bare URL can keep serving the previous card for up to a day
 // after a deploy). Bump it whenever og.png is regenerated.
-const ogImage = "https://unterm.app/assets/og.png?v=0.71.4";
+const ogImage = "https://unterm.app/assets/og.png?v=0.71.5";
 
 // Structured data (SEO rich results + GEO / answer-engine extraction).
 // SoftwareApplication is the primary entity; WebSite + Organization give
@@ -74,7 +74,7 @@ const defaultJsonLd = [
     alternateName: "Unterm — the terminal AI agents can drive",
     applicationCategory: "DeveloperApplication",
     operatingSystem: "macOS, Linux, Windows",
-    softwareVersion: "0.71.4",
+    softwareVersion: "0.71.5",
     url: "https://unterm.app/",
     downloadUrl: "https://github.com/zhitongblog/unterm/releases/latest",
     description: t("meta.desc"),
@@ -137,9 +137,9 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
 
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
-    <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png?v=0.71.4" />
-    <link rel="icon" type="image/png" sizes="256x256" href="/assets/icon-256.png?v=0.71.4" />
-    <link rel="icon" type="image/svg+xml" href="/assets/icon.svg?v=0.71.4" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png?v=0.71.5" />
+    <link rel="icon" type="image/png" sizes="256x256" href="/assets/icon-256.png?v=0.71.5" />
+    <link rel="icon" type="image/svg+xml" href="/assets/icon.svg?v=0.71.5" />
 
     <!-- Cloudflare Web Analytics (privacy-first, no cookies) -->
     <script
@@ -155,9 +155,9 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
     <header class="sticky top-0 z-30 backdrop-blur bg-notion-bg/80 border-b border-notion-border">
       <div class="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
         <a href={pathPrefix + "/"} class="flex items-center gap-2 group">
-          <img src="/assets/icon.svg?v=0.71.4" alt="" width="28" height="28" />
+          <img src="/assets/icon.svg?v=0.71.5" alt="" width="28" height="28" />
           <span class="font-semibold tracking-tight text-notion-ink group-hover:text-white">Unterm</span>
-          <span class="text-xs font-mono text-notion-faint hidden sm:inline">v0.71.4</span>
+          <span class="text-xs font-mono text-notion-faint hidden sm:inline">v0.71.5</span>
         </a>
         <nav class="hidden md:flex items-center gap-5 text-sm text-notion-muted">
           <a href={pathPrefix + "/#agents"} class="hover:text-notion-teal text-notion-teal">{t("nav.agents")}</a>
@@ -197,7 +197,7 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
       <div class="max-w-6xl mx-auto px-6 space-y-6">
         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
           <div class="flex items-center gap-2 text-notion-faint text-sm">
-            <img src="/assets/icon.svg?v=0.71.4" alt="" width="20" height="20" />
+            <img src="/assets/icon.svg?v=0.71.5" alt="" width="20" height="20" />
             <span class="font-semibold text-notion-ink">Unterm</span>
             <span>{t("footer.tag")}</span>
           </div>
