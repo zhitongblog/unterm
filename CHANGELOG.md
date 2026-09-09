@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.71.5 — 2026-09-10
+
+### Fixed
+
+- **A tab that had been behind another was never told how big the window is.**
+  The layout describes the active tab alone, so a pane waiting behind one is
+  not resized while it waits — which makes bringing it forward the only
+  moment it can be told, and five of the six ways of doing that did not.
+  Miss it and the pane keeps the size it last had until something else
+  happens to resize the window while that pane is the one in front. A
+  full-screen program shows it plainly: it anchors its interface to the
+  bottom of the screen it believes it has, so the frame lands short of the
+  real bottom and the input line lands somewhere else entirely, with the
+  difference in height lying blank in between.
+
+- **Pressing a project in the strip folded it away instead of going to it.**
+  The strip alternates project rows and tab rows, and a press on a project
+  only ever folded. With one tab to a project — the common shape — that
+  folded the very tab being aimed at out of sight, and pressing again put it
+  back: two presses, nothing moved. The arrow folds now and the name goes to
+  the project, which is the split the file tree already made.
+
+- **Past the eighth, a press in the strip went to the last tab.** The strip
+  routed its rows through the number-key path, where nine and above mean
+  "the last tab" — right for a keyboard with nine keys, wrong for a strip
+  whose ninth row is the ninth tab. It switched, just not to the one under
+  the pointer.
+
+- **`--instance` named one front end and answered for another.** Asking an
+  instance what it is asked the *server*, and since 0.68 every front end
+  answers through the Core's single MCP port, so the server replied for
+  whichever one it considered current. The registry record is what tells
+  them apart, and it is now what answers — before connecting, so the
+  question also survives a front end of a different version, which used to
+  turn it into an error about bridges.
+
 ## v0.71.4 — 2026-09-07
 
 ### Fixed

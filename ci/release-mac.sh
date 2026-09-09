@@ -61,17 +61,28 @@ if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>
   echo "keychain occasionally prunes the notarytool credential. To" >&2
   echo "restore it:" >&2
   echo >&2
-  echo "  1. Get the app-specific password from:" >&2
+  echo "  1. The three values are already on this machine, in" >&2
+  echo "     ~/.unterm/notary-credentials (chmod 600). This script and" >&2
+  echo "     ci/sign-macos.sh fall back to it when the Keychain has no" >&2
+  echo "     profile, so a missing profile need not stop a release." >&2
+  echo >&2
+  echo "  2. To put the Keychain profile back:" >&2
+  echo "       set -a; . ~/.unterm/notary-credentials; set +a" >&2
+  echo "       xcrun notarytool store-credentials $NOTARY_PROFILE \\" >&2
+  echo "         --apple-id \"$NOTARY_APPLE_ID\" --team-id \"$NOTARY_TEAM_ID\" \\" >&2
+  echo "         --password \"$NOTARY_PASSWORD\"" >&2
+  echo >&2
+  echo "     The Apple ID is slushy@139.com, not the git author's address —" >&2
+  echo "     a hint here once named the wrong one and cost an afternoon." >&2
+  echo "     Writing to the Keychain needs a session that may prompt; a" >&2
+  echo "     non-interactive shell gets \"User interaction is not allowed\"" >&2
+  echo "     even when the credentials themselves validate." >&2
+  echo >&2
+  echo "  3. If the password itself is gone, get a new one from:" >&2
   echo "     https://account.apple.com/account/manage" >&2
   echo "     → Sign-In and Security → App-Specific Passwords" >&2
   echo >&2
-  echo "  2. Run:" >&2
-  echo "       xcrun notarytool store-credentials $NOTARY_PROFILE \\" >&2
-  echo "         --apple-id lixd220@gmail.com \\" >&2
-  echo "         --team-id 6NQM3XP5RF \\" >&2
-  echo "         --password \"<paste-the-16-char-password>\"" >&2
-  echo >&2
-  echo "  3. Re-run: make release-mac" >&2
+  echo "  4. Re-run: make release-mac" >&2
   echo >&2
   echo "(See ci/release-mac.sh:44 for the pre-check that raised this.)" >&2
   exit 1
