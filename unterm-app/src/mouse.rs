@@ -249,18 +249,6 @@ mod tests {
     }
 }
 
-/// What a right-click does.
-///
-/// A gesture, not a menu. With something selected it copies and lets go of the
-/// selection -- the two things anyone does next, in one press. With nothing
-/// selected it pastes. Both are one motion where a context menu is three, and
-/// the terminal it replaces is the one people are used to on Windows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RightClick {
-    CopyAndClear,
-    Paste,
-}
-
 /// One physical secondary click acts once.
 ///
 /// macOS can deliver a single Control-click twice: as a right press, and as
@@ -294,12 +282,22 @@ impl SecondaryGesture {
     }
 }
 
-pub fn right_click(has_selection: bool) -> RightClick {
-    if has_selection {
-        RightClick::CopyAndClear
-    } else {
-        RightClick::Paste
-    }
+/// Whether a secondary press pastes.
+///
+/// Always, now. It used to copy when something was selected and paste only
+/// when nothing was -- two useful things in one motion, and defensible until
+/// you watch somebody use it. Selecting already puts the text on the
+/// clipboard the moment the button comes up, so the copying half was doing
+/// work that had just been done, and its cost was the other half: a press
+/// aimed at pasting landed on a selection nobody had cleared and copied
+/// instead. On macOS especially, where a right press *is* the paste gesture
+/// in muscle memory, that reads as right-click paste being broken.
+///
+/// The argument stays and is ignored on purpose: it is the record that this
+/// once turned on the selection, so the next person to wonder finds the
+/// answer here rather than reinventing the condition.
+pub fn secondary_press_pastes(_has_selection: bool) -> bool {
+    true
 }
 
 /// Whether a left press is really the platform's secondary click.
@@ -364,17 +362,19 @@ mod secondary_click_tests {
 mod right_click_tests {
     use super::*;
 
+    /// The rule, and the whole of it.
     #[test]
-    fn a_selection_is_copied_and_let_go_of() {
-        assert_eq!(right_click(true), RightClick::CopyAndClear);
+    fn a_secondary_press_pastes() {
+        assert!(secondary_press_pastes(false));
     }
 
-    /// The clearing matters: leaving the selection up means the next
-    /// right-click copies the same text again instead of pasting, which is
-    /// the opposite of what the second press was for.
+    /// Including when something is selected. Selecting already copied it --
+    /// that happens when the button comes up -- so a press that copied again
+    /// spent the gesture on work just done, and the paste it was aimed at
+    /// never happened.
     #[test]
-    fn with_nothing_selected_it_pastes() {
-        assert_eq!(right_click(false), RightClick::Paste);
+    fn a_selection_does_not_turn_the_press_back_into_a_copy() {
+        assert!(secondary_press_pastes(true));
     }
 }
 

@@ -11033,17 +11033,14 @@ impl ApplicationHandler for App {
                     if button == MouseButton::Left {
                         self.window.swallow_left_after_secondary = true;
                     }
-                    // A direct gesture rather than a menu: it copies a
-                    // selection and lets go of it, or pastes when there is
-                    // none. Only on press, so the release does not undo it.
-                    match crate::mouse::right_click(self.window.selected.is_some()) {
-                        crate::mouse::RightClick::CopyAndClear => {
-                            self.copy_selection();
-                            self.window.selected = None;
-                            self.window.drag = None;
-                            self.window.drawn_revision = None;
-                        }
-                        crate::mouse::RightClick::Paste => self.paste_clipboard(),
+                    // A direct gesture rather than a menu, and one thing
+                    // rather than two: it pastes. Selecting already put the
+                    // text on the clipboard when the button came up, so the
+                    // press has nothing left to copy -- and a press that
+                    // copied instead was a paste that did not happen.
+                    // Only on press, so the release does not undo it.
+                    if crate::mouse::secondary_press_pastes(self.window.selected.is_some()) {
+                        self.paste_clipboard();
                     }
                     return;
                 }

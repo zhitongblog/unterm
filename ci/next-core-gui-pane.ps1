@@ -743,14 +743,16 @@ $Suites = @(
         )
     },
     @{
-        # Right-click is a gesture, not a menu.
+        # Right-click is a gesture, not a menu -- and since 0.71.6 one
+        # gesture rather than two: it pastes, whatever is selected. Copying
+        # is what selecting does, at the moment the button comes up.
         Name = "right click"
         Package = "unterm-app"
         Filter = "mouse::right_click_tests::"
         ExpectedCount = 2
         RequiredTests = @(
-            "mouse::right_click_tests::a_selection_is_copied_and_let_go_of",
-            "mouse::right_click_tests::with_nothing_selected_it_pastes"
+            "mouse::right_click_tests::a_secondary_press_pastes",
+            "mouse::right_click_tests::a_selection_does_not_turn_the_press_back_into_a_copy"
         )
     },
     @{

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.71.6 — 2026-09-10
+
+### Changed
+
+- **A right press pastes, always.** It used to copy when something was
+  selected and paste only when nothing was — two useful things in one
+  motion, and defensible until you watch somebody use it. Selecting already
+  puts the text on the clipboard the moment the button comes up, so the
+  copying half was repeating work just done; what it cost was the other
+  half, because a press aimed at pasting would land on a selection nobody
+  had cleared and copy instead. On macOS, where a right press *is* the paste
+  gesture in muscle memory, that reads as right-click paste being broken.
+  Copying is what selecting does; pasting is what the right press does.
+
 ## v0.71.5 — 2026-09-10
 
 ### Fixed
