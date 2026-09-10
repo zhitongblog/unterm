@@ -146,6 +146,12 @@
     <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/"/>
   </url>
   <url>
+    <loc>https://unterm.app/changelog</loc>
+    <lastmod>2026-09-10</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://unterm.app/docs/agent-integration</loc>
     <lastmod>2026-05-29</lastmod>
     <changefreq>monthly</changefreq>

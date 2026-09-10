@@ -327,6 +327,7 @@
   "sister.unflick": "Video player for humans and AI: GUI, CLI, and an MCP server exposing playback, transcription, and library tools. unflick.app.",
   "footer.tag": "— AI 可控制的终端",
   "footer.releases": "Releases",
+  "footer.changelog": "Changelog",
   "footer.docs": "Docs",
   "footer.license": "License",
   "footer.copy": "© 2026 Alex · MIT",

@@ -1,0 +1,80 @@
+---
+// The release notes this project actually maintains live in CHANGELOG.md at
+// the repo root. This page compiles that same file at build time instead of
+// keeping a second copy under web/ — a release only has to touch the
+// changelog and the site follows on the next build. There is no sync step to
+// forget, and no way for the site to claim something the repo doesn't.
+import Doc from "../layouts/Doc.astro";
+import * as changelog from "../../../CHANGELOG.md";
+
+const RELEASES = "https://github.com/zhitongblog/unterm/releases";
+
+// Every `## v0.71.6 — 2026-09-10` becomes one entry in the jump list. The
+// slugs come from the same renderer that puts the ids on the headings, so
+// these links cannot drift out of step with the anchors they point at.
+const versions = changelog
+  .getHeadings()
+  .filter((heading) => heading.depth === 2)
+  .map((heading) => {
+    const [version, date] = heading.text.split("—").map((part) => part.trim());
+    return { slug: heading.slug, version, date };
+  });
+
+const latest = versions[0];
+
+// The markdown file opens with its own `# Changelog`, and the layout already
+// prints a page title — keeping both would just say the word twice.
+const body = changelog
+  .compiledContent()
+  .replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>/, "");
+---
+
+<Doc
+  frontmatter={{
+    title: "Changelog",
+    subtitle:
+      "Every release of Unterm, newest first — what changed and why it changed. Compiled straight from CHANGELOG.md in the repository, so this page and the source say the same thing.",
+    kicker: "Changelog",
+    date: latest ? `Latest release ${latest.version} · ${latest.date}` : undefined,
+  }}
+>
+  <nav
+    aria-label="Releases"
+    class="not-prose mb-12 rounded-lg border border-notion-border bg-notion-surface p-5"
+  >
+    <div class="flex items-baseline justify-between gap-4 mb-4">
+      <h2 class="!m-0 !text-sm !font-medium text-notion-muted">
+        {versions.length} releases
+      </h2>
+      <a
+        href={RELEASES}
+        target="_blank"
+        rel="noopener"
+        class="text-xs !text-notion-green hover:!text-notion-teal !no-underline"
+      >
+        Downloads on GitHub ↗
+      </a>
+    </div>
+    <ul class="!m-0 !ml-0 !list-none flex flex-wrap gap-1.5">
+      {
+        versions.map((entry, index) => (
+          <li class="!m-0">
+            <a
+              href={`#${entry.slug}`}
+              title={entry.date}
+              class={`block rounded border px-2 py-1 font-mono text-xs !no-underline transition-colors ${
+                index === 0
+                  ? "border-notion-green/40 !text-notion-green hover:bg-notion-green/10"
+                  : "border-notion-border !text-notion-muted hover:border-notion-borderStrong hover:!text-notion-ink"
+              }`}
+            >
+              {entry.version}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </nav>
+
+  <Fragment set:html={body} />
+</Doc>
