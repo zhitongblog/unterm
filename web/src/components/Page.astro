@@ -6,6 +6,15 @@
 import { formatCount, type Stats } from "../lib/stats";
 import enUS from "../i18n/en-US.json";
 import { COMPETITORS } from "../data/competitors";
+import * as changelog from "../../../CHANGELOG.md";
+
+// The released version is read off the newest CHANGELOG.md heading rather
+// than typed here. A hard-coded tag has already outlived a release once on
+// this page -- the v0.17 pin survived the v0.18 ship until a user caught it
+// -- and the download headline sat at 0.23 for fifty releases. Releasing
+// means writing the changelog, so this follows on its own.
+const latestRelease = changelog.getHeadings().find((h) => h.depth === 2)?.text ?? "";
+const [releaseTag, releaseDate] = latestRelease.split("\u2014").map((part) => part.trim());
 
 interface Props {
   dict: Record<string, string>;
@@ -122,7 +131,7 @@ const principles = [
 // GitHub Releases.  `valueRaw` is rendered as-is (mixed locale fragments like
 // version + date); plain `value` is an i18n key that goes through t().
 const tldrRows = [
-  { label: "tldr.version",         valueRaw: "v0.71.6 · 2026-09-10 · MIT" },
+  { label: "tldr.version",         valueRaw: `${releaseTag} · ${releaseDate} · MIT` },
   { label: "tldr.bundled_agents",  value:    "tldr.bundled_agents.value" },
   { label: "tldr.price",        value: "tldr.price.value" },
   { label: "tldr.platforms",    value: "tldr.platforms.value" },
@@ -232,31 +241,30 @@ const cmpRows = [
 // are i18n keys. This is the "what does it actually expose" section the
 // thin 8-card Features grid only gestures at.
 const capStats = [
-  { n: "99", label: "cap.stat.methods" },
-  { n: "21", label: "cap.stat.namespaces" },
-  { n: "32", label: "cap.stat.cli" },
+  { n: "151", label: "cap.stat.methods" },
+  { n: "30", label: "cap.stat.namespaces" },
+  { n: "37", label: "cap.stat.cli" },
   { n: "4",  label: "cap.stat.surfaces" },
   { n: "22ms", label: "cap.stat.startup" },
   { n: "~12k", label: "cap.stat.kernel" },
 ];
 const capabilities = [
-  { icon: "🛩️", title: "cap.cockpit.title", body: "cap.cockpit.body", meta: "cockpit · fleet.* · review.* · 13", items: "agent.status · cockpit.inbox · fleet.launch · fleet.retry · review.verify · review.diff · review.merge · review.rollback", wide: true },
-  { icon: "🪟", title: "cap.session.title",  body: "cap.session.body",  meta: "session.* · 26", items: "create · split · focus · resize · input · destroy · history · idle · cwd" },
-  { icon: "👁️", title: "cap.screen.title",   body: "cap.screen.body",   meta: "screen.* · 7",   items: "text · scrollback_text · search · cursor · detect_errors · scroll" },
-  { icon: "▶️", title: "cap.exec.title",     body: "cap.exec.body",     meta: "exec.* · 6",     items: "run · run_wait · send · status · cancel · signal.send" },
+  { icon: "🛩️", title: "cap.cockpit.title", body: "cap.cockpit.body", meta: "cockpit · fleet.* · review.* · 11", items: "agent.status · cockpit.inbox · fleet.launch · fleet.retry · review.verify · review.diff · review.merge · review.rollback", wide: true },
+  { icon: "🪟", title: "cap.session.title",  body: "cap.session.body",  meta: "session.* · 27", items: "create · split · focus · resize · input · destroy · history · idle · cwd" },
+  { icon: "👁️", title: "cap.screen.title",   body: "cap.screen.body",   meta: "screen.* · 8",   items: "text · scrollback_text · search · cursor · detect_errors · scroll" },
+  { icon: "▶️", title: "cap.exec.title",     body: "cap.exec.body",     meta: "exec.* · 5",     items: "run · run_wait · send · status · cancel · signal.send" },
   { icon: "🤖", title: "cap.agents.title",   body: "cap.agents.body",   meta: "agent · 7 CLIs", items: "install · auth · launch · config · mcp-stdio bridge" },
   { icon: "🪪", title: "cap.identity.title", body: "cap.identity.body", meta: "profile · 7 sniffers", items: "list · current · create · switch · delete" },
-  { icon: "🛰️", title: "cap.instance.title", body: "cap.instance.body", meta: "instance.* · 4", items: "list · info · focus · set_title" },
+  { icon: "🛰️", title: "cap.instance.title", body: "cap.instance.body", meta: "instance.* · 8", items: "list · info · focus · set_title" },
   { icon: "🎬", title: "cap.rec.title",      body: "cap.rec.body",      meta: "recording · asciicast", items: "recording_start · stop · status · list · read · export_markdown" },
   { icon: "📸", title: "cap.capture.title",  body: "cap.capture.body",  meta: "capture.* · 6 + upload", items: "screen · window · select · clipboard · scrollback · window_scroll · upload.file" },
   { icon: "🌐", title: "cap.proxy.title",    body: "cap.proxy.body",    meta: "proxy.* · 12",   items: "status · switch · nodes · speedtest · configure · disable · env" },
-  { icon: "🛡️", title: "cap.gov.title",      body: "cap.gov.body",      meta: "governance · 10", items: "audit_log · policy.check/set · agent.identify · selftest.run · server.health" },
+  { icon: "🛡️", title: "cap.gov.title",      body: "cap.gov.body",      meta: "governance · 9", items: "audit_log · policy.check/set · agent.identify · selftest.run · server.health" },
   { icon: "💾", title: "cap.workspace.title",body: "cap.workspace.body",meta: "workspace.* · 3",items: "save · restore · list" },
   { icon: "📖", title: "cap.meta.title",     body: "cap.meta.body",     meta: "meta.surface", items: "reference · show-keys · settings · theme · lang" },
 ];
 
 const dlBaseUrl = "https://github.com/zhitongblog/unterm/releases";
-const releaseTag = "v0.71.6";
 
 // Download links use the version pinned for this site build, not
 // `stats.release`. The stats call can legitimately see the previous GitHub
@@ -286,6 +294,10 @@ const appimageUrl = `${dlBaseUrl}/latest/download/Unterm-${releaseTag}-x86_64.Ap
 const msiUrl      = `${dlBaseUrl}/latest/download/Unterm-${releaseSemver}-x64.msi`;
 const msiArmUrl   = `${dlBaseUrl}/latest/download/Unterm-${releaseSemver}-arm64.msi`;
 const winZipUrl   = `${dlBaseUrl}/latest/download/Unterm-windows-x64-${releaseTag}.zip`;
+// arm64 builds ship in every release but had no link anywhere on the site.
+const debArmUrl      = `${dlBaseUrl}/latest/download/unterm-${releaseTag}.arm64.deb`;
+const appimageArmUrl = `${dlBaseUrl}/latest/download/Unterm-${releaseTag}-aarch64.AppImage`;
+const winZipArmUrl   = `${dlBaseUrl}/latest/download/Unterm-windows-arm64-${releaseTag}.zip`;
 const heroDownloads = [
   {
     href: dmgUrl,
@@ -859,11 +871,19 @@ drwxr-xr-x 6 alexlee staff   192  architecture.md
         <div class="mt-3 flex flex-wrap gap-2">
           <a href={debUrl}
              class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal hover:text-notion-teal border border-notion-green/20 hover:border-notion-green/40 transition">
-            .deb →
+            .deb x64 →
+          </a>
+          <a href={debArmUrl}
+             class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal hover:text-notion-teal border border-notion-green/20 hover:border-notion-green/40 transition">
+            .deb arm64 →
           </a>
           <a href={appimageUrl}
              class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink hover:text-notion-ink border border-notion-borderStrong/50 hover:border-notion-borderStrong transition">
-            .AppImage →
+            .AppImage x64 →
+          </a>
+          <a href={appimageArmUrl}
+             class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink hover:text-notion-ink border border-notion-borderStrong/50 hover:border-notion-borderStrong transition">
+            .AppImage arm64 →
           </a>
         </div>
       </div>
@@ -887,7 +907,11 @@ drwxr-xr-x 6 alexlee staff   192  architecture.md
           </a>
           <a href={winZipUrl}
              class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink hover:text-notion-ink border border-notion-borderStrong/50 hover:border-notion-borderStrong transition">
-            portable .zip →
+            .zip x64 →
+          </a>
+          <a href={winZipArmUrl}
+             class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink hover:text-notion-ink border border-notion-borderStrong/50 hover:border-notion-borderStrong transition">
+            .zip arm64 →
           </a>
         </div>
       </div>
@@ -915,7 +939,7 @@ drwxr-xr-x 6 alexlee staff   192  architecture.md
 <!-- ============== COMPLETE CAPABILITY MAP ============== -->
 <!-- The full control surface, grouped by family. The thin Features grid
      above names the four surfaces; this section enumerates what those
-     surfaces actually expose: 99 MCP methods across 21 namespaces + 32
+     surfaces actually expose: 151 MCP methods across 30 namespaces + 37
      CLI commands. Each card is one namespace/feature family with its
      method count chip and representative call names (never translated). -->
 <section id="capabilities" class="py-20 border-t border-notion-border bg-gradient-to-b from-notion-bg via-notion-bg/10 to-notion-bg">
@@ -1004,7 +1028,7 @@ drwxr-xr-x 6 alexlee staff   192  architecture.md
 <section id="mouse" class="py-20 border-t border-notion-border">
   <div class="max-w-5xl mx-auto px-6">
     <div class="flex items-center justify-center gap-2">
-      <span class="text-xs font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60">v0.57.1</span>
+      <span class="text-xs font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60">v0.71.6</span>
       <span class="text-xs text-notion-faint font-mono uppercase tracking-widest">{t("mouse.kicker")}</span>
     </div>
     <h2 class="mt-3 text-3xl font-semibold tracking-tight text-center">{t("mouse.title")}</h2>
@@ -1185,7 +1209,7 @@ drwxr-xr-x 6 alexlee staff   192  architecture.md
 <!-- ============== DOWNLOAD ============== -->
 <section id="download" class="py-20 border-t border-notion-border bg-gradient-to-b from-notion-bg via-notion-bg/10 to-notion-bg">
   <div class="max-w-3xl mx-auto px-6 text-center">
-    <h2 class="text-3xl font-semibold tracking-tight">{t("dl.title")}</h2>
+    <h2 class="text-3xl font-semibold tracking-tight">{t("dl.title")} {releaseTag}</h2>
     <p class="mt-3 text-notion-muted">{t("dl.subtitle")}</p>
     <!-- One central download CTA. We use a `latest` redirect rather than
          pinning the tag in the href so this never goes stale again — the
