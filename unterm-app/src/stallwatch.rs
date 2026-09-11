@@ -9,8 +9,49 @@
 //! one impossible to mistake for "the terminal was fine".
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+/// What the GUI thread is inside right now.
+///
+/// `SlowGuard` reports on drop, and a thread that never comes back never
+/// drops anything: the twenty-minute freeze of 2026-09-11 left three
+/// thousand lines of "stalled (ongoing)" and not one word about where. The
+/// watcher thread reads this instead, so a stall that is still going names
+/// the call it is stuck in -- which is the whole difference between a log
+/// that proves a freeze happened and one that says why.
+static DOING: Mutex<&'static str> = Mutex::new("");
+
+/// Mark the GUI thread as being inside `what`, and return what it was inside
+/// before so a nested guard can put it back.
+pub fn enter(what: &'static str) -> &'static str {
+    match DOING.try_lock() {
+        Ok(mut slot) => std::mem::replace(&mut slot, what),
+        Err(_) => "",
+    }
+}
+
+/// Put back what `enter` displaced.
+pub fn leave(previous: &'static str) {
+    if let Ok(mut slot) = DOING.try_lock() {
+        *slot = previous;
+    }
+}
+
+/// Read by the watcher, never by the GUI thread. `try_lock` rather than
+/// `lock`: a watchdog that can block is one more thread to hang, and the
+/// only holder is a stalled thread whose name is what we came for anyway.
+fn doing() -> &'static str {
+    DOING.try_lock().map(|slot| *slot).unwrap_or("")
+}
+
+/// `, in feed_cockpit` -- or nothing, when the stall is somewhere unnamed.
+fn whereabouts() -> String {
+    match doing() {
+        "" => String::new(),
+        what => format!(", in {what}"),
+    }
+}
 
 /// Milliseconds since `origin()`, last time the GUI thread beat.
 static BEAT_MS: AtomicU64 = AtomicU64::new(0);
@@ -55,7 +96,10 @@ pub fn start() {
                     // Still stalled. Note it now and then — a hang that never
                     // ends would otherwise never be written down at all.
                     if gap.saturating_sub(last_reported) >= ONGOING_MS {
-                        log_line(&format!("GUI thread stalled for ~{gap}ms (ongoing)"));
+                        log_line(&format!(
+                            "GUI thread stalled for ~{gap}ms (ongoing{})",
+                            whereabouts()
+                        ));
                         last_reported = gap;
                     }
                 } else {

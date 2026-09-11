@@ -58,6 +58,16 @@ extern "C" fn open_urls(_this: *mut AnyObject, _cmd: Sel, _app: *mut AnyObject, 
             let text = std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned();
             pending.push(PathBuf::from(text));
         }
+        let waiting = !pending.is_empty();
+        drop(pending);
+        // A path to open is also a request for a window to open it in. The
+        // queue is drained by a loop that only has a window some of the
+        // time: parked in the tray, or closed on a Mac, where the process
+        // outlives its last window. Without asking, the paths sat in the
+        // queue waiting for a click the user had no reason to make.
+        if waiting {
+            crate::tray::request_wake();
+        }
     }
 }
 
@@ -172,7 +182,13 @@ extern "C" fn service_tab_here(
 ) {
     let paths = unsafe { pasteboard_paths(pboard) };
     trace(&format!("service tab-here with {paths:?}"));
+    if paths.is_empty() {
+        return;
+    }
     PENDING.lock().unwrap().extend(paths);
+    // The same as a deep link: delivering a folder is asking for a window to
+    // put its tab in.
+    crate::tray::request_wake();
 }
 
 /// Services target "New Unterm Window Here": each path gets a window of its

@@ -1209,6 +1209,25 @@ enum CloseOutcome {
     KeepSessions,
 }
 
+/// Whether the process is going too, or only this window.
+///
+/// A separate question from `CloseOutcome`, which -- as its own comment says
+/// -- answers what happens to the *sessions*. For a while one value answered
+/// both: macOS keeps the process after its last window closes so the Dock
+/// icon can bring it back, and the branch that does so was keyed on
+/// `KeepSessions`. But "drain then exit", "cancel and exit" and the
+/// indicator's "quit everything" all pass `KeepSessions` too -- they leave
+/// the shells to the Core, which is exactly what that value means -- so all
+/// three stopped exiting and left an invisible process behind instead. Three
+/// commands with "exit" in their name, and none of them did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Leaving {
+    /// Only this view. On macOS the process stays, for the Dock icon.
+    WindowOnly,
+    /// The application. It ends here, whatever the platform's habit.
+    Process,
+}
+
 struct Live {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -1721,6 +1740,7 @@ impl App {
         if self.window.state.is_none() {
             return;
         }
+        let _slow = SlowGuard::new("draw");
         // An occluded window gets no drawables: every acquire blocks its
         // full timeout, and a loop of those reads as the whole terminal
         // frozen (2026-08-09, thirty-second "stalls" at 70% CPU). Nothing
@@ -5303,6 +5323,11 @@ impl App {
             return;
         }
         self.cockpit_fed_at = std::time::Instant::now();
+        // Lists every session and reads every pane: the heaviest thing the
+        // idle loop does, and the one that talks to the Core -- whose client
+        // has no read timeout, so an answer that never comes stops this
+        // thread for good rather than for a while.
+        let _slow = SlowGuard::new("feed_cockpit");
 
         let Ok(sessions) = unterm_engine::SessionEngine::list_sessions(&self.engine) else {
             return;
@@ -6571,7 +6596,7 @@ impl App {
             // prompt was shown, no indicator will appear, and a shell that
             // outlived the window nobody was asked about is exactly the
             // invisible state the prompt exists to avoid.
-            self.perform_close(CloseOutcome::EndSessions);
+            self.perform_close(CloseOutcome::EndSessions, Leaving::Process);
             return;
         }
         use unterm_services::i18n::t;
@@ -6765,7 +6790,7 @@ impl App {
         true
     }
 
-    fn perform_close(&mut self, outcome: CloseOutcome) {
+    fn perform_close(&mut self, outcome: CloseOutcome, leaving: Leaving) {
         let _slow = SlowGuard::new("perform_close");
         self.save_last_session();
         if outcome == CloseOutcome::EndSessions {
@@ -6795,7 +6820,11 @@ impl App {
         // the Dock, and clicking it there brings a window back through
         // `resumed`. Ending the process would make the icon lie. Everywhere
         // else an application is its windows, so this goes on to exit.
-        if !Self::last_window_close_ends_process() && outcome == CloseOutcome::KeepSessions {
+        if close_leaves_process_running(
+            leaving,
+            outcome,
+            Self::last_window_close_ends_process(),
+        ) {
             self.window.state = None;
             self.window.close_confirmed = false;
             return;
@@ -6918,7 +6947,14 @@ impl App {
             Err(err) => {
                 // Keep the indicator: it is the only way back, and the
                 // sessions it counts are still there to come back to.
-                crate::tray::set_dock_visible(false);
+                //
+                // Only when there is one. Coming back from a *closed* window
+                // rather than a parked one, the Dock tile is the way back,
+                // and hiding it here would leave no window, no indicator and
+                // no icon -- the very state this path exists to end.
+                if self.window.tray.is_some() {
+                    crate::tray::set_dock_visible(false);
+                }
                 log::error!("could not reopen the window from the tray: {err:#}");
             }
         }
@@ -8204,7 +8240,7 @@ impl App {
             }
             crate::palette::Command::ConfirmCloseWindow => {
                 self.window.close_confirmed = true;
-                self.perform_close(CloseOutcome::EndSessions);
+                self.perform_close(CloseOutcome::EndSessions, Leaving::Process);
             }
             // The window goes; the Core, the shells and the agents in
             // them stay -- and an indicator goes up saying so, because a
@@ -8217,7 +8253,10 @@ impl App {
                     // but this window is not going to sit there invisibly
                     // pretending an icon exists.
                     log::warn!("no tray indicator available; closing instead of parking");
-                    self.perform_close(CloseOutcome::KeepSessions);
+                    // The one case the macOS keep-the-process branch was
+                    // written for: the view goes, the shells stay with the
+                    // Core, and the Dock icon is what brings a window back.
+                    self.perform_close(CloseOutcome::KeepSessions, Leaving::WindowOnly);
                 }
             }
             crate::palette::Command::DrainThenExit => {
@@ -8235,7 +8274,10 @@ impl App {
                 self.window.close_confirmed = true;
                 // Destroying the sessions here would be the opposite of
                 // draining: the Core is being asked to let them finish.
-                self.perform_close(CloseOutcome::KeepSessions);
+                // `Leaving::Process` because the command says exit, and the
+                // sessions surviving is not the same thing as the window
+                // that asked to leave staying.
+                self.perform_close(CloseOutcome::KeepSessions, Leaving::Process);
             }
             crate::palette::Command::CancelAndExit => {
                 if let crate::engine_backend::AppEngine::Core { client, .. } = &self.engine {
@@ -8250,7 +8292,7 @@ impl App {
                 // `core.shutdown` ends everything it holds, which is more
                 // thorough than destroying the sessions one at a time from
                 // here -- and racing it would only make the log confusing.
-                self.perform_close(CloseOutcome::KeepSessions);
+                self.perform_close(CloseOutcome::KeepSessions, Leaving::Process);
             }
             crate::palette::Command::OpenTabRename { index } => self.open_tab_rename(index),
             crate::palette::Command::SelectCaptureRegion => self.start_system_capture(false),
@@ -10018,6 +10060,7 @@ impl App {
     /// cockpit reads every pane's screen. Running those as fast as the loop
     /// spins is most of what an idle window used to cost.
     fn tick(&mut self) {
+        let _slow = SlowGuard::new("tick");
         self.finish_startup_session();
         if !self.window.startup_terminal_content_marked {
             if let Some(live) = self.window.state.as_ref().filter(|live| live.session_id != 0) {
@@ -10240,11 +10283,13 @@ impl ApplicationHandler for App {
         // would put the terminal back on screen without anyone asking, which
         // is the opposite of what "keep running in the background" means.
         //
-        // On macOS this is also the path back from "no windows, still in the
-        // Dock": clicking the icon resumes the app, and an app that quit its
-        // process when its last window closed would never get here. D3 of the
-        // multi-window design keeps the process alive there; the window it
-        // needs is made below, from the GPU this process already has.
+        // Not the path back from "no windows, still in the Dock", though it
+        // was written believing it was: winit reports `resumed` once, at
+        // launch, and AppKit does not repeat it for an app it already
+        // considers running. Reopening lands in
+        // `applicationShouldHandleReopen:` instead, and `about_to_wait` is
+        // where that request is answered. D3 of the multi-window design
+        // keeps the process alive; the window it needs is made there.
         if self.window.state.is_some() || self.window.tray.is_some() {
             return;
         }
@@ -11392,7 +11437,11 @@ impl ApplicationHandler for App {
                     }
                     self.window.tray = None;
                     self.window.close_confirmed = true;
-                    self.perform_close(CloseOutcome::KeepSessions);
+                    // It stopped the Core and then kept the process, with no
+                    // window and no longer an indicator either: the one row
+                    // whose whole purpose is to end everything was the surest
+                    // way to be left with something that could not be ended.
+                    self.perform_close(CloseOutcome::KeepSessions, Leaving::Process);
                     return;
                 }
                 None => {}
@@ -11415,6 +11464,28 @@ impl ApplicationHandler for App {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                 std::time::Instant::now() + std::time::Duration::from_millis(200),
             ));
+            return;
+        }
+        // Neither a window nor an indicator. macOS is the only platform that
+        // reaches this today: it keeps the process after the last window
+        // closes so the Dock icon can bring one back, where the others end
+        // the process and never have a windowless moment to be stuck in.
+        //
+        // `resumed` was meant to be that way back, and it is not one. AppKit
+        // does not re-send it to an app it already considers running; a
+        // reopen arrives as `applicationShouldHandleReopen:`, which only sets
+        // the wake latch. The latch's one reader lived in the parked branch
+        // above, and nothing enters that branch without a tray -- so with the
+        // window closed rather than parked, the Dock icon, Spotlight and
+        // Finder's "New Unterm Tab Here" were all wired to nothing, and the
+        // only way back was Force Quit. This is the missing reader.
+        //
+        // Not spelled `#[cfg(macos)]`, though only macOS gets here: a loop
+        // that finds itself with no window and someone asking for one should
+        // build it on any platform, and the alternative is a reader that is
+        // dead code on two of the three.
+        if self.window.state.is_none() && crate::tray::take_wake() {
+            self.leave_background(event_loop);
             return;
         }
         // The machine may have been asleep since the last tick. Nothing here
@@ -11444,25 +11515,34 @@ impl ApplicationHandler for App {
         }
         // What macOS asked us to open -- Finder's right-click, a folder on
         // the Dock icon -- becomes a tab, the same way it would anywhere.
+        //
+        // Only with a window to open into. `open_tab_with` needs one and
+        // returns without a word when there is none, so draining while
+        // closed read the request, wrote "opening" in the log, and threw the
+        // path away -- which is what "I pressed New Unterm Tab Here and
+        // nothing happened" was. Left in the queue it survives until the
+        // wake above has built the window, and opens then.
         #[cfg(target_os = "macos")]
-        for path in crate::macos_open::drain() {
-            let dir = if path.is_dir() {
-                Some(path.clone())
-            } else {
-                path.parent().map(std::path::Path::to_path_buf)
-            };
-            // Written down, not just acted on: "it opened the wrong folder"
-            // is undebuggable without knowing what macOS actually handed us.
-            crate::macos_open::trace(&format!(
-                "received {:?} -> opening {:?}",
-                path,
-                dir.as_deref()
-            ));
-            if let Some(dir) = dir {
-                self.new_tab_in(&dir.to_string_lossy());
-            }
-            if let Some(live) = self.window.state.as_ref() {
-                live.window.focus_window();
+        if self.window.state.is_some() {
+            for path in crate::macos_open::drain() {
+                let dir = if path.is_dir() {
+                    Some(path.clone())
+                } else {
+                    path.parent().map(std::path::Path::to_path_buf)
+                };
+                // Written down, not just acted on: "it opened the wrong folder"
+                // is undebuggable without knowing what macOS actually handed us.
+                crate::macos_open::trace(&format!(
+                    "received {:?} -> opening {:?}",
+                    path,
+                    dir.as_deref()
+                ));
+                if let Some(dir) = dir {
+                    self.new_tab_in(&dir.to_string_lossy());
+                }
+                if let Some(live) = self.window.state.as_ref() {
+                    live.window.focus_window();
+                }
             }
         }
         self.collect_clipboard_results();
@@ -11541,17 +11621,45 @@ fn strip_spacer_marks(text: String) -> String {
 }
 
 /// Times a close-path suspect and reports it if it held the GUI thread.
+/// Whether closing now leaves the process running with no window of its own.
+///
+/// Lifted out of `perform_close` so it can be asserted. The bug it stands
+/// against was one value answering two questions, and that shape is invisible
+/// until the combinations are written down beside each other.
+fn close_leaves_process_running(
+    leaving: Leaving,
+    outcome: CloseOutcome,
+    last_window_close_ends_process: bool,
+) -> bool {
+    leaving == Leaving::WindowOnly
+        && !last_window_close_ends_process
+        && outcome == CloseOutcome::KeepSessions
+}
+
 struct SlowGuard {
     what: &'static str,
     since: std::time::Instant,
+    /// What the thread was inside when this guard was made, so a nested one
+    /// does not erase its caller on the way out.
+    previous: &'static str,
 }
 impl SlowGuard {
     fn new(what: &'static str) -> Self {
-        Self { what, since: std::time::Instant::now() }
+        Self {
+            what,
+            since: std::time::Instant::now(),
+            // Registered on the way in as well as reported on the way out.
+            // The report needs the drop to run, and a GUI thread wedged in a
+            // Core call that never answers never drops anything -- which is
+            // why the freeze that ended in a reboot could only ever be
+            // described by its length.
+            previous: crate::stallwatch::enter(what),
+        }
     }
 }
 impl Drop for SlowGuard {
     fn drop(&mut self) {
+        crate::stallwatch::leave(self.previous);
         crate::stallwatch::note_if_slow(self.what, self.since, 300);
     }
 }
@@ -11867,6 +11975,45 @@ fn encode(logical: &winit::keyboard::Key, held: crate::mouse::Held) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_that_says_exit_always_exits() {
+        // The regression: `CloseOutcome::KeepSessions` answers what becomes
+        // of the *sessions*, and the macOS keep-the-process-for-the-Dock
+        // branch read it as the answer to whether the process should live.
+        // "Drain then exit", "cancel and exit" and the indicator's "quit
+        // everything" all pass it -- they really do leave the shells to the
+        // Core -- so all three stopped exiting and left behind a process
+        // with no window and no indicator, which nothing could reach and
+        // only Force Quit could end.
+        for outcome in [CloseOutcome::EndSessions, CloseOutcome::KeepSessions] {
+            for ends in [true, false] {
+                assert!(
+                    !close_leaves_process_running(Leaving::Process, outcome, ends),
+                    "Leaving::Process must end the process ({outcome:?}, ends={ends})"
+                );
+            }
+        }
+        // The one case the branch was written for: a lone view going away on
+        // a platform whose application outlives its last window, with shells
+        // the Core is still holding and a Dock tile to come back from.
+        assert!(close_leaves_process_running(
+            Leaving::WindowOnly,
+            CloseOutcome::KeepSessions,
+            false
+        ));
+        // Nothing left to come back to, and nowhere to come back from.
+        assert!(!close_leaves_process_running(
+            Leaving::WindowOnly,
+            CloseOutcome::EndSessions,
+            false
+        ));
+        assert!(!close_leaves_process_running(
+            Leaving::WindowOnly,
+            CloseOutcome::KeepSessions,
+            true
+        ));
+    }
 
     /// Every way of bringing a tab forward has to tell its panes how big this
     /// window is.

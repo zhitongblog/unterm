@@ -62,6 +62,18 @@ pub fn clear_wake() {
     let _ = wake_requested();
 }
 
+/// Take a wake request, for a loop that has no indicator to poll.
+///
+/// `poll` folds this latch together with the indicator's own menu events,
+/// and `poll` only runs while there *is* an indicator. macOS keeps the
+/// process after its last window closes without parking it in the tray, and
+/// in that state the latch had no reader at all: the Dock icon, Spotlight
+/// and Finder all set it, and nothing ever looked. This is the reader for
+/// the windowless-but-not-parked case.
+pub fn take_wake() -> bool {
+    wake_requested()
+}
+
 /// Read the indicator's events, whichever thread its icon happens to be on.
 ///
 /// The last action wins: a burst of clicks ending in "quit" means quit, and
@@ -497,6 +509,25 @@ mod tests {
         // and it is the row sitting directly above "open window".
         assert_eq!(action_for(HEADER), None);
         assert_eq!(action_for("unterm.tray.something.else"), None);
+    }
+
+    #[test]
+    fn a_wake_request_survives_having_no_indicator_to_poll() {
+        // The regression this guards: `request_wake` had exactly one reader,
+        // inside `poll`, and `poll` only runs while an indicator exists.
+        // macOS keeps the process alive after its last window closes without
+        // parking it in the tray, and in that state the Dock icon, Spotlight
+        // and Finder's "New Unterm Tab Here" all set this latch and nothing
+        // ever looked -- the app sat there, alive and invisible, with no way
+        // back short of Force Quit.
+        clear_wake();
+        assert!(!take_wake(), "nothing has asked yet");
+        request_wake();
+        assert!(
+            take_wake(),
+            "a request made with no tray to poll must still be readable"
+        );
+        assert!(!take_wake(), "reading clears it: one ask is one window");
     }
 
     #[test]
