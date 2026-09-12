@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.71.7 — 2026-09-12
+
+### Fixed
+
+- **Three commands with "exit" in their name did not exit, on macOS.**
+  `CloseOutcome` says what becomes of the *sessions* behind a window, and
+  the branch that keeps the process alive for the Dock icon read it as the
+  answer to whether the process itself should live. "Drain then exit",
+  "cancel and exit" and the indicator's "quit everything" all pass
+  `KeepSessions` — they really do leave the shells to the Core, which is
+  what that value means — so all three stopped exiting and left behind a
+  process with no window and no indicator, which nothing could reach and
+  only Force Quit could end. The indicator's row was the worst of them: the
+  one control whose whole purpose is to end everything stopped the Core and
+  then kept the process. What happens to the window and what happens to the
+  application are two questions now, and every caller answers both.
+
+- **With the window closed, the Dock icon, Spotlight and Finder were all
+  pressing a button wired to nothing.** Asking a running application for a
+  window arrives as `applicationShouldHandleReopen:`, which leaves its
+  request in a latch — and that latch had exactly one reader, inside the
+  code that runs only while an indicator sits in the tray. Closed rather
+  than parked, there was no indicator, so nothing ever looked. `resumed`
+  was believed to be the way back and is not one: winit reports it once, at
+  launch, and AppKit does not repeat it for an application it already
+  considers running.
+
+- **"New Unterm Tab Here" on a folder was read, written down, and thrown
+  away.** What macOS delivers is drained on the next tick, and opening a
+  tab needs a window; with none, the open returned without a word — after
+  the path had already been taken off the queue. The log recorded the
+  folder arriving and nothing after it, which is what pressing the item and
+  watching nothing happen looked like from the inside. A delivery now asks
+  for a window, and the path waits in the queue until there is one to open
+  it in.
+
+- **A freeze that never ended could not say where it was.** The stall log
+  records how long the interface has been unreachable but never what it is
+  inside, because the one thing that names a slow call reports when that
+  call finishes — which a thread that never comes back never does. A
+  twenty-minute freeze on 2026-09-11 left three thousand lines of "still
+  stalled" and not one word about the cause. The watchdog now reads what
+  the interface thread is currently inside, so a stall that is still going
+  names the call it is stuck in, and the three pieces of work every idle
+  tick does are named.
+
 ## v0.71.6 — 2026-09-10
 
 ### Changed

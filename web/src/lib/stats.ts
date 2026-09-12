@@ -41,7 +41,7 @@ export interface Stats {
 // `releases/latest/download/Unterm-macos-${stats.release}.dmg`; if this
 // fallback drifts from the published asset names, users hit a 404 when the
 // GitHub API fetch fails at build time.
-const FALLBACK: Stats = { stars: null, downloads: null, release: "v0.71.6" };
+const FALLBACK: Stats = { stars: null, downloads: null, release: "v0.71.7" };
 
 let cache: Promise<Stats> | null = null;
 
