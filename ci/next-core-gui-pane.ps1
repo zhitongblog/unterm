@@ -311,10 +311,14 @@ $Suites = @(
         # active tab alone, so a pane behind another is never told about a
         # window that changed size — and four of the five ways of bringing
         # one forward forgot to tell it.
+        # 25 since 0.71.7 split "what happens to the sessions" from "what
+        # happens to the process": three commands with "exit" in their name
+        # passed `KeepSessions`, which the macOS keep-the-process-in-the-Dock
+        # branch read as "stay", so none of them exited.
         # This number is meant to be edited by whoever adds a test here — that
         # is the whole mechanism, and it is why a test quietly disappearing is
         # caught.
-        ExpectedCount = 24
+        ExpectedCount = 25
         RequiredTests = @(
             @(
                 # Every way of bringing a tab forward must tell its panes how
@@ -344,7 +348,12 @@ $Suites = @(
                 # A window reporting no size at all is not a window one cell
                 # wide: clamping 0 to 1 is what shrank a pane to a single
                 # column and threw its lines and scrollback away.
-                "window::tests::a_window_with_no_size_is_not_a_window_one_cell_wide"
+                "window::tests::a_window_with_no_size_is_not_a_window_one_cell_wide",
+                # A command that says exit has to exit. The close outcome
+                # answers what becomes of the sessions, and reading it as the
+                # answer to whether the process lives left an invisible one
+                # behind that only Force Quit could end.
+                "window::tests::a_command_that_says_exit_always_exits"
             # A config naming no shell resolves differently by design: Windows
             # keeps its legacy PowerShell default, everywhere else the engine
             # chooses -- each platform carries its own cfg-gated test.
