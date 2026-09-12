@@ -8,13 +8,19 @@ import enUS from "../i18n/en-US.json";
 import { COMPETITORS } from "../data/competitors";
 import * as changelog from "../../../CHANGELOG.md";
 
-// The released version is read off the newest CHANGELOG.md heading rather
-// than typed here. A hard-coded tag has already outlived a release once on
-// this page -- the v0.17 pin survived the v0.18 ship until a user caught it
-// -- and the download headline sat at 0.23 for fifty releases. Releasing
-// means writing the changelog, so this follows on its own.
-const latestRelease = changelog.getHeadings().find((h) => h.depth === 2)?.text ?? "";
-const [releaseTag, releaseDate] = latestRelease.split("\u2014").map((part) => part.trim());
+// Versions are read off CHANGELOG.md headings rather than typed here. A
+// hard-coded tag has already outlived a release once on this page -- the
+// v0.17 pin survived the v0.18 ship until a user caught it -- and the
+// download headline sat at 0.23 for fifty releases.
+//
+// `## v0.71.6 \u2014 2026-09-10` becomes { tag, date }, newest first.
+const changelogEntries = changelog
+  .getHeadings()
+  .filter((h) => h.depth === 2)
+  .map((h) => {
+    const [tag, date] = h.text.split("\u2014").map((part) => part.trim());
+    return { tag, date };
+  });
 
 interface Props {
   dict: Record<string, string>;
@@ -24,6 +30,27 @@ interface Props {
 
 const { dict, pathPrefix, stats } = Astro.props as Props;
 const t = (k: string) => dict[k] ?? enUS[k] ?? k;
+
+// Which version this page says you can have.
+//
+// The newest changelog heading is written when the version is bumped, and
+// that is *before* the release exists. Every download link names the
+// version inside the asset filename, so following the heading blindly
+// points nine links at files GitHub has not got -- which is exactly what a
+// bump without a release did on 2026-09-12: the site rebuilt within the
+// minute and every download 404'd until the tag was cut.
+//
+// So ask instead of assume. `stats` already lists every published release,
+// at no extra request. The newest changelog entry is used the moment its
+// release is out, and the newest one that *is* out until then. A failed
+// stats fetch leaves `tags` empty, which lands on the same safe side.
+const publishedTags = new Set(stats.tags);
+const shippedEntry =
+  changelogEntries.find((entry) => publishedTags.has(entry.tag)) ??
+  changelogEntries.find((entry) => entry.tag === stats.release) ??
+  changelogEntries[0] ?? { tag: stats.release, date: "" };
+const releaseTag = shippedEntry.tag;
+const releaseDate = shippedEntry.date;
 
 // FAQ entries — shape matches the keys inside the locale JSON.
 const faq = [
@@ -266,10 +293,13 @@ const capabilities = [
 
 const dlBaseUrl = "https://github.com/zhitongblog/unterm/releases";
 
-// Download links use the version pinned for this site build, not
-// `stats.release`. The stats call can legitimately see the previous GitHub
-// latest release if Cloudflare builds immediately after a version-bump push
-// but before the release assets finish uploading.
+// Built from `releaseTag`, which is a version GitHub has actually
+// published -- see where it is chosen above. This used to follow the newest
+// changelog heading on the reasoning that stats "can legitimately see the
+// previous release" during a bump-then-release window. That window is real
+// and the reasoning picked the wrong side of it: during it, the previous
+// release is the one whose assets exist, and the heading is the one that
+// 404s.
 //
 // MSI and Windows-zip naming has historical quirks:
 //   - DMG, deb, AppImage, win.zip: use the tag verbatim

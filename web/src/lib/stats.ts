@@ -29,6 +29,12 @@ export interface Stats {
   /** Latest tag, e.g. "v0.17". Used for download links so we don't have
    *  to update the hero CTA every time we cut a release. */
   release: string;
+  /** Every published release tag. The download links name a version inside
+   *  the asset filename, so before using one they have to know it exists:
+   *  the changelog heading they used to follow is written at version-bump
+   *  time, which is before the release. Empty means "the fetch failed and
+   *  we know nothing" -- not "nothing is published". */
+  tags: string[];
 }
 
 // Fallback used when the build-time fetch fails entirely. We give the
@@ -41,7 +47,12 @@ export interface Stats {
 // `releases/latest/download/Unterm-macos-${stats.release}.dmg`; if this
 // fallback drifts from the published asset names, users hit a 404 when the
 // GitHub API fetch fails at build time.
-const FALLBACK: Stats = { stars: null, downloads: null, release: "v0.71.7" };
+const FALLBACK: Stats = {
+  stars: null,
+  downloads: null,
+  release: "v0.71.6",
+  tags: [],
+};
 
 let cache: Promise<Stats> | null = null;
 
@@ -87,6 +98,9 @@ async function doFetch(): Promise<Stats> {
       stars: repoJson.stargazers_count ?? 0,
       downloads,
       release: releasesJson?.[0]?.tag_name ?? FALLBACK.release,
+      tags: Array.isArray(releasesJson)
+        ? releasesJson.map((r) => r.tag_name).filter(Boolean)
+        : [],
     };
   } catch (err) {
     console.warn("[stats] failed to fetch GitHub stats:", err);
