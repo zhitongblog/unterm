@@ -18,7 +18,7 @@ pub enum ExecSubCommand {
     /// Send a command and return immediately.
     Run {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Shell command to run. Use `--` before commands with flags.
         // No allow_hyphen_values: a mistyped flag (`--sesion 0 ...`)
@@ -33,7 +33,7 @@ pub enum ExecSubCommand {
     /// Send a command and wait for Unterm's sentinel to appear.
     Wait {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Timeout in milliseconds.
         #[arg(long, default_value_t = 30000)]
@@ -51,19 +51,19 @@ pub enum ExecSubCommand {
     /// Print whether the pane appears idle or running.
     Status {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Send Ctrl+C to the pane.
     Cancel {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Send a terminal control signal to the pane.
     Signal {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Signal/control code: SIGINT, INT, SIGTSTP, TSTP, SIGQUIT, QUIT, or EOF.
         signal: String,

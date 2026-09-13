@@ -220,7 +220,7 @@ enum SubCommand {
         #[arg(long = "scrollback")]
         scrollback: bool,
         /// Pane id for --scrollback (default: the active pane).
-        #[arg(long = "pane", alias = "id")]
+        #[arg(long = "pane-id", aliases = ["id", "pane"])]
         pane: Option<u64>,
         /// Row cap for --scrollback; keeps the most recent rows (default 10000).
         #[arg(long = "max-rows")]
@@ -686,6 +686,49 @@ mod command_line_tests {
         assert_eq!(cwd, Some(std::path::PathBuf::from("D:\\work")));
         assert_eq!(profile.as_deref(), Some("work"));
         assert_eq!(command, ["python", "-V"]);
+    }
+
+    /// One spelling for "which pane", everywhere, forever.
+    ///
+    /// Three used to coexist: `exec` and `session` took `--id`, `scrollback`
+    /// took `--pane-id`, `screenshot` took `--pane`. Only `--id` worked on
+    /// all of them, so an agent reaching for the clearer `--pane-id` on
+    /// `exec` got "unexpected argument" instead of a pane -- a surface whose
+    /// whole audience is agents guessing at it.
+    ///
+    /// Walked rather than enumerated: a list of subcommands is a list to
+    /// forget to add to, and the next pane-taking command would drift the
+    /// same way this one did.
+    #[test]
+    fn every_pane_argument_is_spelled_the_same_way() {
+        fn walk(cmd: &clap::Command, trail: &str, bad: &mut Vec<String>) {
+            let here = if trail.is_empty() {
+                cmd.get_name().to_string()
+            } else {
+                format!("{trail} {}", cmd.get_name())
+            };
+            for arg in cmd.get_arguments() {
+                let Some(long) = arg.get_long() else { continue };
+                if long == "id" || long == "pane" {
+                    bad.push(format!("`{here} --{long}` should be `--pane-id`"));
+                }
+                if long == "pane-id" {
+                    let aliases = arg.get_all_aliases().unwrap_or_default();
+                    if !aliases.contains(&"id") {
+                        bad.push(format!(
+                            "`{here} --pane-id` dropped the `id` alias that keeps \
+                             older invocations working"
+                        ));
+                    }
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, &here, bad);
+            }
+        }
+        let mut bad = Vec::new();
+        walk(&Opt::command(), "", &mut bad);
+        assert!(bad.is_empty(), "{bad:#?}");
     }
 
     #[test]

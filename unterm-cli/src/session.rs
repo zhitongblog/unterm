@@ -36,7 +36,7 @@ pub enum SessionSubCommand {
     /// Split an existing pane and spawn a shell in the new split.
     Split {
         /// Source pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Split direction: right, left, down, or up.
         #[arg(long, default_value = "right")]
@@ -51,13 +51,13 @@ pub enum SessionSubCommand {
     /// Focus a pane and its containing tab.
     Focus {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Resize a pane's PTY.
     Resize {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         #[arg(long)]
         cols: u64,
@@ -67,7 +67,7 @@ pub enum SessionSubCommand {
     /// Close a pane. Requires an explicit pane id.
     Destroy {
         /// Target pane id.
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: u64,
     },
     /// Manage block recording for a pane.
@@ -75,7 +75,7 @@ pub enum SessionSubCommand {
     /// Export a pane's block log as Markdown.
     Export {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Optional output file. If omitted, the Unterm-side path is printed.
         #[arg(short = 'o', long = "output")]
@@ -84,7 +84,7 @@ pub enum SessionSubCommand {
     /// Write text into a pane via MCP `session.input`.
     Input {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Read additional input from stdin.
         #[arg(long)]
@@ -101,31 +101,31 @@ pub enum SessionSubCommand {
     /// Read the visible pane viewport as plain text.
     Text {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Print the pane's current working directory.
     Cwd {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Print whether the pane appears idle or running.
     Status {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Scan the visible viewport for common error patterns.
     Errors {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Print recent non-empty scrollback lines.
     History {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Number of trailing rows to inspect.
         #[arg(long, default_value_t = 100)]
@@ -134,7 +134,7 @@ pub enum SessionSubCommand {
     /// Print recent audited MCP/CLI write actions.
     AuditLog {
         /// Filter to one pane id.
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Maximum number of entries to print.
         #[arg(long, default_value_t = 50)]
@@ -143,7 +143,7 @@ pub enum SessionSubCommand {
     /// Search pane scrollback for a substring.
     Search {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Maximum number of matches to return.
         #[arg(long, default_value_t = 50)]
@@ -174,17 +174,17 @@ pub enum RecordSubCommand {
     /// Start recording on the target pane.
     Start {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Stop recording on the target pane.
     Stop {
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
     /// Show recording status for the target pane.
     Status {
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
 }
@@ -200,7 +200,7 @@ pub enum SuggestSubCommand {
     /// Queue a suggestion for the user to accept or dismiss.
     Post {
         /// Target pane id (defaults to the active pane).
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
         /// Optional reason shown to consumers of the suggestion payload.
         #[arg(long)]
@@ -227,7 +227,7 @@ pub enum SuggestSubCommand {
     /// List pending suggestions.
     List {
         /// Filter to one pane id.
-        #[arg(long)]
+        #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
 }

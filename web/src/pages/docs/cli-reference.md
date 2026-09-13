@@ -212,34 +212,41 @@ When you flip proxies in Unterm's GUI, you don't have to restart shells — open
 
 ## session
 
+> **Which pane: `--pane-id`.** Every command that takes a pane takes it under
+> this one name — `session`, `exec`, `scrollback`, `screenshot`, `agent`. It
+> used to differ per command (`--id` here, `--pane-id` there, `--pane`
+> elsewhere), so the only spelling that worked everywhere was the least
+> descriptive one. The older spellings are still accepted as aliases, so
+> scripts written against them keep working.
+
 Operates on a single live pane. "Session" here means one terminal tab/pane in the running GUI. The CLI wraps the MCP methods `session.list`, `session.create`, `session.input`, `screen.text`, `session.cwd`, `exec.status`, `screen.detect_errors`, `session.history`, `screen.search`, `session.suggest*`, `session.recording_start/stop/status`, and `session.export_markdown`.
 
 ```text
 unterm-cli session list
 unterm-cli session create [--cwd DIR] [--profile NAME] [-- COMMAND]
-unterm-cli session split  [--id <ID>] [--direction right|left|down|up] [--size-percent N] [--cwd DIR]
-unterm-cli session focus  [--id <ID>]
-unterm-cli session resize [--id <ID>] --cols N --rows N
-unterm-cli session destroy --id <ID>
-unterm-cli session record start [--id <ID>]
-unterm-cli session record stop  [--id <ID>]
-unterm-cli session record status [--id <ID>]
-unterm-cli session export       [--id <ID>] [-o FILE]
-unterm-cli session input        [--id <ID>] [--stdin] [--enter] <TEXT...>
-unterm-cli session text         [--id <ID>]
-unterm-cli session cwd          [--id <ID>]
-unterm-cli session status       [--id <ID>]
-unterm-cli session errors       [--id <ID>]
-unterm-cli session history      [--id <ID>] [--limit N]
-unterm-cli session audit-log    [--id <ID>] [--limit N]
-unterm-cli session search       [--id <ID>] [--max-results N] [--goto|--goto-match N] <PATTERN...>
-unterm-cli session suggest post [--id <ID>] [--rationale TEXT] [--ttl-ms N] <TEXT...>
+unterm-cli session split  [--pane-id <ID>] [--direction right|left|down|up] [--size-percent N] [--cwd DIR]
+unterm-cli session focus  [--pane-id <ID>]
+unterm-cli session resize [--pane-id <ID>] --cols N --rows N
+unterm-cli session destroy --pane-id <ID>
+unterm-cli session record start [--pane-id <ID>]
+unterm-cli session record stop  [--pane-id <ID>]
+unterm-cli session record status [--pane-id <ID>]
+unterm-cli session export       [--pane-id <ID>] [-o FILE]
+unterm-cli session input        [--pane-id <ID>] [--stdin] [--enter] <TEXT...>
+unterm-cli session text         [--pane-id <ID>]
+unterm-cli session cwd          [--pane-id <ID>]
+unterm-cli session status       [--pane-id <ID>]
+unterm-cli session errors       [--pane-id <ID>]
+unterm-cli session history      [--pane-id <ID>] [--limit N]
+unterm-cli session audit-log    [--pane-id <ID>] [--limit N]
+unterm-cli session search       [--pane-id <ID>] [--max-results N] [--goto|--goto-match N] <PATTERN...>
+unterm-cli session suggest post [--pane-id <ID>] [--rationale TEXT] [--ttl-ms N] <TEXT...>
 unterm-cli session suggest status <SUGGESTION_ID>
 unterm-cli session suggest cancel <SUGGESTION_ID>
-unterm-cli session suggest list [--id <ID>]
+unterm-cli session suggest list [--pane-id <ID>]
 ```
 
-When `--id` is omitted on any pane-scoped subcommand, the CLI auto-resolves it to the first pane returned by `session.list`. Convenient if you only have one tab open; brittle if you have several. Pass `--id` explicitly in scripts.
+When `--pane-id` is omitted on any pane-scoped subcommand, the CLI auto-resolves it to the first pane returned by `session.list`. Convenient if you only have one tab open; brittle if you have several. Pass `--pane-id` explicitly in scripts.
 
 ### `session list`
 
@@ -299,26 +306,26 @@ $ unterm-cli --instance bravo --json session create --profile work -- 'gh auth s
 Pane lifecycle helpers over MCP `session.split`, `session.focus`, `session.resize`, and `session.destroy`.
 
 ```sh
-$ unterm-cli session split --id 0 --direction right --size-percent 40 --cwd /tmp
+$ unterm-cli session split --pane-id 0 --direction right --size-percent 40 --cwd /tmp
 Pane:      13
 Title:     zsh
 Direction: right
 ```
 
 ```sh
-$ unterm-cli session focus --id 13
+$ unterm-cli session focus --pane-id 13
 true
 ```
 
 ```sh
-$ unterm-cli session resize --id 13 --cols 120 --rows 40
+$ unterm-cli session resize --pane-id 13 --cols 120 --rows 40
 ok
 ```
 
 `destroy` requires an explicit id so a script cannot accidentally close the first pane by omission:
 
 ```sh
-$ unterm-cli session destroy --id 13
+$ unterm-cli session destroy --pane-id 13
 true
 ```
 
@@ -327,7 +334,7 @@ true
 Begins a redacted markdown recording of a pane. Returns a UUID (`session_id`) and the on-disk paths the recording will land at.
 
 ```sh
-$ unterm-cli session record start --id 0
+$ unterm-cli session record start --pane-id 0
 Session id: 8dee59d3-0e21-4ebf-a8cf-a2c356b53b70
 Log path: /Users/alexlee/.unterm/sessions/_orphan/2026-05-03/tab-0-221510.log
 Markdown (on stop): /Users/alexlee/.unterm/sessions/_orphan/2026-05-03/tab-0-221510.md
@@ -340,7 +347,7 @@ If the pane has a project cwd, recordings land under `<cwd>/.unterm/sessions/<da
 `stop` finalises the markdown (no further blocks captured), prints summary stats, and is idempotent — calling it on a non-recording pane prints a benign "not recording" message rather than failing.
 
 ```sh
-$ unterm-cli session record stop --id 0
+$ unterm-cli session record stop --pane-id 0
 Session id: 8dee59d3-0e21-4ebf-a8cf-a2c356b53b70
 Block count: 0
 Markdown: /Users/alexlee/.unterm/sessions/_orphan/2026-05-03/tab-0-221510.md
@@ -350,7 +357,7 @@ Exit reason: recording_stopped
 `status` is read-only and useful for "was I already recording?" guards in scripts:
 
 ```sh
-$ unterm-cli --json session record status --id 0
+$ unterm-cli --json session record status --pane-id 0
 { "enabled": false }
 ```
 
@@ -362,7 +369,7 @@ Snapshots a pane's accumulated block log to markdown without stopping recording 
 - `-o FILE`: the CLI passes the path through to MCP, and additionally copies the file to `FILE` on the local filesystem if MCP wrote elsewhere. End state: `FILE` always exists at the path you asked for.
 
 ```sh
-$ unterm-cli session export --id 0 -o /tmp/snapshot.md
+$ unterm-cli session export --pane-id 0 -o /tmp/snapshot.md
 /tmp/snapshot.md
 ```
 
@@ -372,7 +379,7 @@ $ unterm-cli session export --id 0 -o /tmp/snapshot.md
 # .git/hooks/pre-push
 PANE_ID=$(unterm-cli --json session list | jq '.sessions[] | select(.title|test("build|ci")) | .id' | head -1)
 [ -z "$PANE_ID" ] && exit 0
-unterm-cli session export --id "$PANE_ID" -o ".git/last-build.md"
+unterm-cli session export --pane-id "$PANE_ID" -o ".git/last-build.md"
 ```
 
 ### `session input` / `session text`
@@ -380,21 +387,21 @@ unterm-cli session export --id "$PANE_ID" -o ".git/last-build.md"
 `session input` writes text through MCP `session.input`. It does not append a newline unless you pass `--enter`, which appends carriage return to match a real Enter keypress.
 
 ```sh
-$ unterm-cli session input --id 0 --enter 'cargo test -p unterm-cli'
+$ unterm-cli session input --pane-id 0 --enter 'cargo test -p unterm-cli'
 ok
 ```
 
 Use `--stdin` when piping generated input:
 
 ```sh
-$ printf 'echo from stdin' | unterm-cli session input --id 0 --stdin --enter
+$ printf 'echo from stdin' | unterm-cli session input --pane-id 0 --stdin --enter
 ok
 ```
 
 `session text` reads the visible viewport through MCP `screen.text`:
 
 ```sh
-$ unterm-cli session text --id 0
+$ unterm-cli session text --pane-id 0
 ```
 
 ### `session cwd` / `status` / `errors` / `history` / `audit-log` / `search`
@@ -402,24 +409,24 @@ $ unterm-cli session text --id 0
 These are read-only probes for scripts and outer agents.
 
 ```sh
-$ unterm-cli session cwd --id 0
+$ unterm-cli session cwd --pane-id 0
 /Volumes/Dev/code/unterm
 ```
 
 ```sh
-$ unterm-cli session status --id 0
+$ unterm-cli session status --pane-id 0
 Status:     idle
 Foreground: /bin/zsh
 ```
 
 ```sh
-$ unterm-cli session errors --id 0
+$ unterm-cli session errors --pane-id 0
 ROW      PATTERN            TEXT
 18291    error:             error: could not compile `unterm-cli`
 ```
 
 ```sh
-$ unterm-cli session history --id 0 --limit 50
+$ unterm-cli session history --pane-id 0 --limit 50
 cargo test -p unterm-cli
 test result: ok. 4 passed; 0 failed
 ```
@@ -432,10 +439,10 @@ TIME                      METHOD                 PANE     AGENT      DETAIL
 2026-06-19T09:50:00+08:00 exec.run               7        codex      cargo test
 ```
 
-`audit-log` reads recent mutating MCP/CLI actions from `session.audit_log`; pass `--id` to filter to one pane.
+`audit-log` reads recent mutating MCP/CLI actions from `session.audit_log`; pass `--pane-id` to filter to one pane.
 
 ```sh
-$ unterm-cli session search --id 0 --max-results 5 error:
+$ unterm-cli session search --pane-id 0 --max-results 5 error:
 ROW      COL    TEXT
 18291    0      error: could not compile `unterm-cli`
 ```
@@ -449,13 +456,13 @@ Use `--json` for the raw MCP payloads when you need stable fields such as `cwd`,
 Queues non-PTY suggestions through MCP `session.suggest`. The CLI does not type the text into the shell; the user accepts or dismisses it in the terminal UI.
 
 ```sh
-$ unterm-cli session suggest post --id 0 --rationale "next diagnostic step" -- cargo test -p unterm-cli
+$ unterm-cli session suggest post --pane-id 0 --rationale "next diagnostic step" -- cargo test -p unterm-cli
 Suggestion: sg_1781805012345_1
 Status:     queued
 ```
 
 ```sh
-$ unterm-cli session suggest list --id 0
+$ unterm-cli session suggest list --pane-id 0
 SUGGESTION               PANE     AGENT      TEXT
 sg_1781805012345_1       0        codex      cargo test -p unterm-cli
 ```
@@ -467,41 +474,41 @@ Use `status` to inspect a suggestion payload and `cancel` to withdraw a pending 
 Run commands in a live pane through the MCP `exec.*` methods. This is the command-oriented layer above `session input`.
 
 ```text
-unterm-cli exec run    [--id <ID>] -- <COMMAND...>
-unterm-cli exec wait   [--id <ID>] [--timeout-ms N] -- <COMMAND...>
-unterm-cli exec status [--id <ID>]
-unterm-cli exec cancel [--id <ID>]
-unterm-cli exec signal [--id <ID>] SIGINT|SIGTSTP|SIGQUIT|EOF
+unterm-cli exec run    [--pane-id <ID>] -- <COMMAND...>
+unterm-cli exec wait   [--pane-id <ID>] [--timeout-ms N] -- <COMMAND...>
+unterm-cli exec status [--pane-id <ID>]
+unterm-cli exec cancel [--pane-id <ID>]
+unterm-cli exec signal [--pane-id <ID>] SIGINT|SIGTSTP|SIGQUIT|EOF
 ```
 
 `run` sends the command and returns immediately:
 
 ```sh
-$ unterm-cli exec run --id 0 -- cargo test -p unterm-cli
+$ unterm-cli exec run --pane-id 0 -- cargo test -p unterm-cli
 true
 ```
 
 `wait` wraps the command with Unterm's shell-specific sentinel and prints the captured output when the sentinel appears:
 
 ```sh
-$ unterm-cli exec wait --id 0 --timeout-ms 60000 -- cargo test -p unterm-cli
+$ unterm-cli exec wait --pane-id 0 --timeout-ms 60000 -- cargo test -p unterm-cli
 ```
 
 `status` and `cancel` are pane-scoped probes/actions:
 
 ```sh
-$ unterm-cli exec status --id 0
+$ unterm-cli exec status --pane-id 0
 Status:     running
 Foreground: cargo
 
-$ unterm-cli exec cancel --id 0
+$ unterm-cli exec cancel --pane-id 0
 true
 ```
 
 `signal` exposes MCP `signal.send` directly for the other terminal control characters:
 
 ```sh
-$ unterm-cli exec signal --id 0 SIGTSTP
+$ unterm-cli exec signal --pane-id 0 SIGTSTP
 true
 ```
 
@@ -631,9 +638,9 @@ Install, authenticate, configure, launch, or run AI coding-agent CLIs through Un
 
 ```text
 unterm-cli agent run <codex-cli|claude-code|gemini-cli|opencode> [--profile <id>] [--cwd <path>] [--stdin] [--dry-run] <prompt...>
-unterm-cli agent status [--pane <ID>]
+unterm-cli agent status [--pane-id <ID>]
 unterm-cli agent inbox
-unterm-cli agent signal --event <working|waiting|done|idle> [--agent <name>] [--pane <ID>]
+unterm-cli agent signal --event <working|waiting|done|idle> [--agent <name>] [--pane-id <ID>]
 unterm-cli agent enable-hooks [--dry-run] [--remove]
 unterm-cli agent whoami
 unterm-cli agent trusted
@@ -726,7 +733,7 @@ $ unterm-cli --json agent status
 }
 ```
 
-`--pane <ID>` narrows `status` to one pane. `last_signal` tells you which detection layer produced the verdict — `hook` means exact reporting from `enable-hooks`; without hooks the engine falls back to OSC and process-poll heuristics. The JSON form of `inbox` adds `pane_title`, `tab_id`, and `window_id` per item. MCP methods: `agent.status` and `cockpit.inbox`.
+`--pane-id <ID>` narrows `status` to one pane. `last_signal` tells you which detection layer produced the verdict — `hook` means exact reporting from `enable-hooks`; without hooks the engine falls back to OSC and process-poll heuristics. The JSON form of `inbox` adds `pane_title`, `tab_id`, and `window_id` per item. MCP methods: `agent.status` and `cockpit.inbox`.
 
 ### `agent signal`
 
@@ -740,7 +747,7 @@ $ unterm-cli agent signal --agent claude --event done
 |---|---|
 | `--event <e>` | Required. One of `working`, `waiting`, `done`, `idle`. |
 | `--agent <name>` | Agent name (`claude`, `codex`, `gemini`, `aider`, …). |
-| `--pane <ID>` | Pane to attribute the event to. Defaults to `$WEZTERM_PANE`, which hook processes inherit from the shell Unterm spawned — so a hook running inside a pane attributes itself correctly with no flags. |
+| `--pane-id <ID>` | Pane to attribute the event to. Defaults to `$WEZTERM_PANE`, which hook processes inherit from the shell Unterm spawned — so a hook running inside a pane attributes itself correctly with no flags. |
 
 When no Unterm is running, `signal` exits quietly instead of failing — a hook must never break the agent it reports on. That makes it the one deliberate exception to the "all failures exit 1" rule at the bottom of this page.
 
@@ -961,7 +968,7 @@ Capture the screen and save the PNG. Backed by the `capture.*` MCP methods.
 
 ```text
 unterm-cli screenshot [--include-window] [--base64] [-o FILE]
-unterm-cli screenshot --scrollback [--pane N] [--max-rows N] [--dpi N] [-o FILE]
+unterm-cli screenshot --scrollback [--pane-id N] [--max-rows N] [--dpi N] [-o FILE]
 unterm-cli screenshot --scroll-app APP [--scroll-title TEXT] [--scroll-pid PID] [--max-frames N] [-o FILE]
 ```
 
@@ -971,7 +978,7 @@ unterm-cli screenshot --scroll-app APP [--scroll-title TEXT] [--scroll-pid PID] 
 | `--self` | Capture Unterm's own window instead of the whole screen. |
 | `--base64` | Include `image.base64` in `--json` output for normal screen capture and `--self`. Long screenshot modes still return file paths. |
 | `--scrollback` | Render the active pane's entire scrollback plus viewport into one tall PNG. This is headless re-rendering, not pixel stitching, so it works even when the window is occluded. |
-| `--pane <N>` | Pane id for `--scrollback`; defaults to the active pane. |
+| `--pane-id <N>` | Pane id for `--scrollback`; defaults to the active pane. |
 | `--max-rows <N>` | Row cap for `--scrollback`; keeps the most recent rows. |
 | `--dpi <N>` | Raster DPI for `--scrollback`, clamped to 48-288. |
 | `--scroll-app <APP>` | macOS external long screenshot: find another app's window by app-name substring, scroll it, and stitch the frames. |
@@ -1324,7 +1331,7 @@ done
 sleep 30
 mkdir -p /tmp/lint-report
 for id in $(echo "$PANES" | jq '.[]'); do
-  unterm-cli session export --id "$id" -o "/tmp/lint-report/pane-$id.md"
+  unterm-cli session export --pane-id "$id" -o "/tmp/lint-report/pane-$id.md"
 done
 ```
 
@@ -1401,7 +1408,7 @@ When Unterm isn't running the CLI exits non-zero with no stdout, so the guard ma
 PANE=$(unterm-cli --json session list | jq -r '.sessions[0].id')
 DIR=".unterm/per-commit"
 mkdir -p "$DIR"
-unterm-cli session export --id "$PANE" -o "$DIR/$(git rev-parse --short HEAD).md"
+unterm-cli session export --pane-id "$PANE" -o "$DIR/$(git rev-parse --short HEAD).md"
 git add "$DIR" 2>/dev/null
 ```
 
@@ -1432,7 +1439,7 @@ ERROR  unterm_cli > MCP proxy.switch failed [-32603]: Proxy node 'nonexistent-no
 $ echo $?
 1
 
-$ unterm-cli session record start --id 99999
+$ unterm-cli session record start --pane-id 99999
 ERROR  unterm_cli > MCP session.recording_start failed [-32603]: Session 99999 not found; terminating
 $ echo $?
 1

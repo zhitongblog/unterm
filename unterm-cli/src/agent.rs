@@ -152,7 +152,7 @@ pub enum AgentSubCommand {
     /// Cockpit: per-pane agent state (working/waiting/idle/done).
     Status {
         /// Only report this pane.
-        #[arg(long)]
+        #[arg(long = "pane-id", aliases = ["id", "pane"])]
         pane: Option<String>,
     },
     /// Cockpit: report an agent lifecycle event from an official hook
@@ -168,7 +168,7 @@ pub enum AgentSubCommand {
         #[arg(long)]
         agent: Option<String>,
         /// Pane id; defaults to $WEZTERM_PANE.
-        #[arg(long)]
+        #[arg(long = "pane-id", aliases = ["id", "pane"])]
         pane: Option<String>,
     },
     /// Cockpit: agents that want attention, waiting-first, with locations.

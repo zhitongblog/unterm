@@ -279,7 +279,7 @@ Everything an MCP client can do, `unterm-cli` can do too — it's a thin JSON-RP
 
 ```sh
 unterm-cli session list --json | jq '.[] | select(.cwd | endswith("unflick"))'
-unterm-cli session record start --id 0
+unterm-cli session record start --pane-id 0
 unterm-cli proxy status
 unterm-cli screenshot --include-window --output /tmp/cap.png
 ```
