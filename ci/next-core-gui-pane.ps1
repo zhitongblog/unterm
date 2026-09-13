@@ -504,8 +504,18 @@ $Suites = @(
         Name = "left tab strip"
         Package = "unterm-app"
         Filter = "sidebar::tests::"
-        ExpectedCount = 23
+        # 25 since the grouping was fixed to bucket a project's tabs before
+        # emitting any row. It used to walk the tab order and emit a header
+        # the first time a project appeared, so the same project's later tabs
+        # stood under whoever's header came before them -- and the drag target
+        # was counted in tab order, which folding and grouping both move.
+        ExpectedCount = 25
         RequiredTests = @(
+            # The header's count and the rows beneath it are now the same
+            # list, and a row past the ninth leads to its own tab rather than
+            # to the last one.
+            "sidebar::tests::a_project_gathers_every_one_of_its_tabs",
+            "sidebar::tests::a_row_past_the_ninth_leads_to_its_own_tab",
             "sidebar::tests::a_single_project_gets_no_group_headers",
             "sidebar::tests::same_named_projects_are_told_apart_by_the_shortest_parent",
             "sidebar::tests::a_path_that_is_a_suffix_of_another_still_gets_a_hint",
