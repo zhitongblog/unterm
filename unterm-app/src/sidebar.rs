@@ -255,56 +255,72 @@ pub fn rows(tabs: &[TabInfo], collapsed: &std::collections::HashSet<String>) -> 
     // One project needs no headers: a header above every tab is a header that
     // says nothing.
     let grouped = projects.len() > 1;
-    let mut done: Vec<String> = Vec::new();
 
+    if !grouped {
+        rows.extend(rest.iter().map(|tab| row_for(tab, grouped)));
+        return rows;
+    }
+
+    // Tabs are opened over time, so a project's are seldom a run: alpha, then
+    // beta, then alpha again. Emitting each header where its project first
+    // appeared and nowhere else left the later runs under whichever header
+    // came before them -- eleven tabs named by a header with six of them
+    // beneath it, and the five elsewhere reading as another project's. The
+    // buckets keep the order the projects first appeared in, and the tabs
+    // inside one keep theirs, so nothing moves except the tabs that were
+    // under the wrong name.
+    let mut buckets: Vec<(Option<String>, Vec<&TabInfo>)> = Vec::new();
     for tab in &rest {
         let key = tab.cwd.as_deref().map(project_key);
-        if grouped {
-            if let Some(key) = &key {
-                if !done.contains(key) {
-                    done.push(key.clone());
-                    rows.push(Row::Group {
-                        label: leaf(key),
-                        hint: hints.get(key).cloned(),
-                        count: rest
-                            .iter()
-                            .filter(|other| {
-                                other.cwd.as_deref().map(project_key).as_ref() == Some(key)
-                            })
-                            .count(),
-                        collapsed: collapsed.contains(key),
-                        active: rest.iter().any(|other| {
-                            other.active
-                                && other.cwd.as_deref().map(project_key).as_ref() == Some(key)
-                        }),
-                        key: key.clone(),
-                    });
-                }
-            }
+        match buckets.iter_mut().find(|(existing, _)| *existing == key) {
+            Some((_, members)) => members.push(tab),
+            None => buckets.push((key, vec![tab])),
+        }
+    }
+
+    for (key, members) in &buckets {
+        // Tabs with no directory have no project to be filed under, and get
+        // no header of their own -- a header reading "no project" names
+        // nothing.
+        if let Some(key) = key {
+            rows.push(Row::Group {
+                label: leaf(key),
+                hint: hints.get(key).cloned(),
+                count: members.len(),
+                collapsed: collapsed.contains(key),
+                active: members.iter().any(|tab| tab.active),
+                key: key.clone(),
+            });
         }
         // A collapsed project shows its header and nothing under it -- except
         // the tab in front, which must never disappear: a window with no
         // visible selection reads as a window that lost track of itself.
-        let folded = grouped
-            && key
-                .as_ref()
-                .map(|key| collapsed.contains(key))
-                .unwrap_or(false);
-        if folded && !tab.active {
-            continue;
+        let folded = key
+            .as_ref()
+            .map(|key| collapsed.contains(key))
+            .unwrap_or(false);
+        for tab in members {
+            if folded && !tab.active {
+                continue;
+            }
+            rows.push(row_for(tab, grouped));
         }
-        rows.push(Row::Tab {
-            index: tab.index,
-            label: label_for(tab),
-            detail: tab.foreground.clone(),
-            active: tab.active,
-            icon: shell_icon(tab.agent.as_deref().unwrap_or(&tab.title)),
-            grouped,
-            badge: tab.badge,
-            indicators: tab.indicators,
-        });
     }
     rows
+}
+
+/// One tab's line.
+fn row_for(tab: &TabInfo, grouped: bool) -> Row {
+    Row::Tab {
+        index: tab.index,
+        label: label_for(tab),
+        detail: tab.foreground.clone(),
+        active: tab.active,
+        icon: shell_icon(tab.agent.as_deref().unwrap_or(&tab.title)),
+        grouped,
+        badge: tab.badge,
+        indicators: tab.indicators,
+    }
 }
 
 /// The four-phase spinner a working agent's row turns. Quantised like
@@ -604,6 +620,100 @@ mod tests {
         }
     }
 
+
+    /// A project's tabs are all of them, wherever they were opened.
+    ///
+    /// Tabs are opened over time, so a project's are seldom a run in the
+    /// strip: alpha, then beta, then alpha again. The header was emitted at
+    /// the project's first tab and never again, so the second run of alpha
+    /// tabs came out under beta's header -- a header naming two tabs with
+    /// four rows beneath it, none of the last three its own.
+    #[test]
+    fn a_project_gathers_every_one_of_its_tabs() {
+        let tabs = vec![
+            tab(0, "one", Some("/work/alpha")),
+            tab(1, "two", Some("/work/beta")),
+            tab(2, "three", Some("/work/alpha")),
+        ];
+        let rows = rows_of(&tabs);
+        // Every header owns the rows between it and the next header, and
+        // says how many there are.
+        let mut header: Option<(String, usize)> = None;
+        let mut under = 0usize;
+        let mut seen = Vec::new();
+        for row in &rows {
+            match row {
+                Row::Group { key, count, .. } => {
+                    if let Some((key, count)) = header.take() {
+                        assert_eq!(count, under, "project {key} counts rows it has not got");
+                    }
+                    header = Some((key.clone(), *count));
+                    under = 0;
+                }
+                Row::Tab { index, .. } => {
+                    let owner = &header.as_ref().expect("a tab with no project above it").0;
+                    assert_eq!(
+                        project_key(tabs[*index].cwd.as_deref().unwrap()),
+                        *owner,
+                        "tab {index} sits under {owner}",
+                    );
+                    seen.push(*index);
+                    under += 1;
+                }
+            }
+        }
+        if let Some((key, count)) = header {
+            assert_eq!(count, under, "project {key} counts rows it has not got");
+        }
+        seen.sort();
+        assert_eq!(seen, vec![0, 1, 2], "every tab is somewhere in the strip");
+    }
+
+    /// The ninth row is the ninth tab, and so is the twentieth.
+    ///
+    /// This is the shape the strip is actually used in -- twenty-two tabs
+    /// over seven projects -- and what went wrong in it: a row's position was
+    /// handed to `select_tab`, which reads a number *key*, and nine and above
+    /// mean "the last one" there. Every press past the eighth landed on the
+    /// last tab, so a dozen rows all showed the one pane.
+    #[test]
+    fn a_row_past_the_ninth_leads_to_its_own_tab() {
+        let projects = [
+            "/work/unflick",
+            "/work/story",
+            "/work/xianxia",
+            "/work/bypass",
+            "/work/xmarket",
+            "/work/song",
+            "/work/liqingzhao",
+        ];
+        let tabs: Vec<TabInfo> = (0..22)
+            .map(|index| tab(index, "powershell", Some(projects[index % projects.len()])))
+            .collect();
+        let rows = rows_of(&tabs);
+        for (at, row) in rows.iter().enumerate() {
+            if let Row::Tab { index, .. } = row {
+                assert_eq!(
+                    tab_at_or_after(&rows, at),
+                    Some(*index),
+                    "row {at} of the strip",
+                );
+            }
+        }
+        // No two rows lead to the same tab: that is the symptom itself.
+        let mut led_to: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Tab { index, .. } => Some(*index),
+                Row::Group { .. } => None,
+            })
+            .collect();
+        let count = led_to.len();
+        led_to.sort();
+        led_to.dedup();
+        assert_eq!(led_to.len(), count, "two rows of the strip lead to one tab");
+        assert_eq!(count, 22, "every tab has a row");
+    }
 
     /// A press on a project row is asking for the project, and a project is
     /// reached through the tab under it.

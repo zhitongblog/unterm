@@ -10803,14 +10803,15 @@ impl ApplicationHandler for App {
                     }
                     if let Some(at) = self.sidebar_row_at(self.window.pointer.0, self.window.pointer.1) {
                         let rows = self.sidebar_rows();
-                        // Which tab position this row corresponds to: count
-                        // the tab rows at or above it.
-                        let target = rows
-                            .iter()
-                            .take(at + 1)
-                            .filter(|row| matches!(row, crate::sidebar::Row::Tab { .. }))
-                            .count()
-                            .saturating_sub(1);
+                        // Which tab this row is: the row says so. Counting the
+                        // tab rows at or above it instead read the strip as if
+                        // it were the tab order, which it is not -- a folded
+                        // project hides rows and a project gathers its own, so
+                        // the count fell short of the position by however many
+                        // tabs were out of sight or filed further up.
+                        let Some(target) = crate::sidebar::tab_at_or_after(&rows, at) else {
+                            return;
+                        };
                         let ids = self.window.tabs.tab_ids();
                         if let Some(current) = ids.iter().position(|id| *id == tab_id) {
                             let delta = target as isize - current as isize;
