@@ -516,7 +516,18 @@ mod segment_tests {
     fn a_real_repository_reads_as_one() {
         let here = std::env::current_dir().expect("a working directory");
         match read_cached(&here) {
-            Panel::Status(status) => assert!(!status.branch.is_empty()),
+            // Whether it names a branch is not what this asks. A pull
+            // request is checked out as a detached merge commit, and
+            // `parse_branch` empties the name there on purpose -- so
+            // requiring one made every pull-request build red on all three
+            // platforms whatever the change was, which is how PR #31 came
+            // back red for a defect it did not have. A repository still
+            // describes itself when its head is detached; that is the thing
+            // being tested, and `summary` is where it says so.
+            Panel::Status(status) => assert!(
+                !status.summary().is_empty(),
+                "a repository describes itself, detached or not"
+            ),
             // A machine with no git on PATH cannot be asked to have one.
             Panel::NoGit => {}
             Panel::NotARepository => panic!("this crate is inside a repository"),
