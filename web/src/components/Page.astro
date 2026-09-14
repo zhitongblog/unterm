@@ -33,20 +33,36 @@ const t = (k: string) => dict[k] ?? enUS[k] ?? k;
 
 // Which version this page says you can have.
 //
-// The newest changelog heading is written when the version is bumped, and
-// that is *before* the release exists. Every download link names the
-// version inside the asset filename, so following the heading blindly
-// points nine links at files GitHub has not got -- which is exactly what a
-// bump without a release did on 2026-09-12: the site rebuilt within the
-// minute and every download 404'd until the tag was cut.
+// Two ways to be wrong, in opposite directions, and both have shipped:
 //
-// So ask instead of assume. `stats` already lists every published release,
-// at no extra request. The newest changelog entry is used the moment its
-// release is out, and the newest one that *is* out until then. A failed
-// stats fetch leaves `tags` empty, which lands on the same safe side.
-const publishedTags = new Set(stats.tags);
+//   - Follow the newest changelog heading blindly, and a version bump alone
+//     points nine download links at files GitHub has not got. That was
+//     2026-09-12: the site rebuilt within the minute and every download
+//     404'd until the tag was cut.
+//   - Require GitHub to confirm the release, and a build that cannot reach
+//     GitHub advertises the *previous* version forever. That was
+//     2026-09-14: Cloudflare's builders share an egress IP, the unauth
+//     limit is 60/hr per IP, every request came back 403, and the site sat
+//     on 0.71.6 for a day while 0.71.7 was published and downloadable.
+//
+// The fix for the first must not cause the second, so the question has
+// three answers rather than two. `stats.tags` is `null` when GitHub did not
+// answer, and a list when it did:
+//
+//   list, contains it   -> published; use it
+//   list, lacks it      -> bumped but not released yet; use the newest that
+//                          is in the list
+//   null (no answer)    -> unknown; trust the changelog
+//
+// Trusting the changelog when nothing is known is the right way to be
+// wrong: writing the changelog entry is part of cutting the release, so it
+// is stale for minutes, against a wrong-version banner that lasts until
+// someone notices.
+const publishedTags = stats.tags === null ? null : new Set(stats.tags);
 const shippedEntry =
-  changelogEntries.find((entry) => publishedTags.has(entry.tag)) ??
+  (publishedTags === null
+    ? changelogEntries[0]
+    : changelogEntries.find((entry) => publishedTags.has(entry.tag))) ??
   changelogEntries.find((entry) => entry.tag === stats.release) ??
   changelogEntries[0] ?? { tag: stats.release, date: "" };
 const releaseTag = shippedEntry.tag;

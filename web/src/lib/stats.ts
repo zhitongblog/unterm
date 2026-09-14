@@ -12,9 +12,13 @@ const REPO = "zhitongblog/unterm";
 const HEADERS: Record<string, string> = {
   "User-Agent": "unterm-site-build",
   Accept: "application/vnd.github+json",
-  // Optional: drop in a token via env to lift the unauth rate limit. The
-  // public unauth limit (60/hr/IP) is plenty for Pages builds, but local
-  // `pnpm build` loops can hit it.
+  // Optional: drop in a token via env to lift the unauth rate limit.
+  //
+  // "Plenty for Pages builds" is what this said, and it was wrong: the
+  // limit is 60/hr per *IP*, and Cloudflare's builders share their egress
+  // with everyone else building there. Observed 2026-09-14 — every request
+  // 403, `remaining: 0`, from an IP that had made none of them. So nothing
+  // load-bearing may depend on this call succeeding; see how `tags` is used.
   ...(process.env.GITHUB_TOKEN
     ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
     : {}),
@@ -29,12 +33,14 @@ export interface Stats {
   /** Latest tag, e.g. "v0.17". Used for download links so we don't have
    *  to update the hero CTA every time we cut a release. */
   release: string;
-  /** Every published release tag. The download links name a version inside
-   *  the asset filename, so before using one they have to know it exists:
-   *  the changelog heading they used to follow is written at version-bump
-   *  time, which is before the release. Empty means "the fetch failed and
-   *  we know nothing" -- not "nothing is published". */
-  tags: string[];
+  /** Every published release tag, or `null` when the fetch failed.
+   *
+   *  The distinction is the whole point and an empty array could not carry
+   *  it: "GitHub says nothing is published" and "GitHub did not answer" want
+   *  opposite behaviour, and conflating them is what pinned the site to the
+   *  previous release for a day. `null` means unknown — trust the changelog.
+   *  A list means known — believe it. */
+  tags: string[] | null;
 }
 
 // Fallback used when the build-time fetch fails entirely. We give the
@@ -51,7 +57,9 @@ const FALLBACK: Stats = {
   stars: null,
   downloads: null,
   release: "v0.71.6",
-  tags: [],
+  // Not `[]`: an empty list is a claim that nothing is published, and this
+  // is the value used precisely when we failed to find out.
+  tags: null,
 };
 
 let cache: Promise<Stats> | null = null;
@@ -100,7 +108,7 @@ async function doFetch(): Promise<Stats> {
       release: releasesJson?.[0]?.tag_name ?? FALLBACK.release,
       tags: Array.isArray(releasesJson)
         ? releasesJson.map((r) => r.tag_name).filter(Boolean)
-        : [],
+        : null,
     };
   } catch (err) {
     console.warn("[stats] failed to fetch GitHub stats:", err);
