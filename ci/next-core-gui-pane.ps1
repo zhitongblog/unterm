@@ -315,10 +315,14 @@ $Suites = @(
         # happens to the process": three commands with "exit" in their name
         # passed `KeepSessions`, which the macOS keep-the-process-in-the-Dock
         # branch read as "stay", so none of them exited.
+        # 26 since a pane resized over MCP stopped being invisible to the
+        # window that draws it.
+        # 27 since the painted close cross stopped ending the application
+        # when it meant to close one view.
         # This number is meant to be edited by whoever adds a test here — that
         # is the whole mechanism, and it is why a test quietly disappearing is
         # caught.
-        ExpectedCount = 25
+        ExpectedCount = 27
         RequiredTests = @(
             @(
                 # Every way of bringing a tab forward must tell its panes how

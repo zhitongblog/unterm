@@ -4247,7 +4247,7 @@ impl App {
             crate::topbar::Item::Maximise => {
                 self.toggle_maximize();
             }
-            crate::topbar::Item::Close => self.request_close(),
+            crate::topbar::Item::Close => self.close_pressed(),
         }
         self.window.drawn_revision = None;
         true
@@ -6587,6 +6587,31 @@ impl App {
     }
 
     /// Settings live in a browser, not in a cell grid.
+    /// Somebody asked for this window to go.
+    ///
+    /// Every way of asking, in one function, because the two that existed
+    /// disagreed. The cross this window paints called `request_close`
+    /// directly; the system's own close, Cmd-W and Alt-F4 went through
+    /// `close_this_view` first and only fell through to `request_close` when
+    /// this was the last window. With a second window open that difference
+    /// was the whole outcome: `close_needs_confirmation` says no with another
+    /// window behind -- there is nothing to decide, a view is going away --
+    /// so the painted cross went straight on to end every session this window
+    /// held and take the process with it. One window closed, the whole of
+    /// Unterm gone.
+    ///
+    /// The comment on the system path had claimed the two were routed through
+    /// the same function "so the two cannot disagree about whether the shells
+    /// survive". They were not, and they did. Now they are.
+    fn close_pressed(&mut self) {
+        // Another window behind this one means this is a view going away,
+        // not the front end. Nothing to ask, and nothing to end.
+        if !self.window.close_confirmed && self.close_this_view() {
+            return;
+        }
+        self.request_close();
+    }
+
     /// Close once it is safe or once it is confirmed. Nothing running and a
     /// single tab close immediately; anything else opens one confirmation on
     /// the palette line, and Enter there closes for real.
@@ -10393,12 +10418,7 @@ impl ApplicationHandler for App {
                 // running program earns one confirmation either way, because
                 // a stray click killing an agent mid-task is no smaller an
                 // accident on this path than on the other.
-                // Another window behind this one means this is a view
-                // going away, not the front end. Nothing to ask.
-                if !self.window.close_confirmed && self.close_this_view() {
-                    return;
-                }
-                self.request_close();
+                self.close_pressed();
                 if let Some(live) = self.window.state.as_ref() {
                     live.window.request_redraw();
                 }
@@ -11734,6 +11754,18 @@ fn split_lineage_root(
     current
 }
 
+/// Whether what this window remembers about a pane's size has been overtaken
+/// by what the pane actually is.
+///
+/// `None` is not staleness: a pane nothing was ever sent has nothing to be
+/// wrong about, and `resize_panes` gives it a size on its next pass anyway.
+/// Equal is not staleness either, and saying so would be expensive rather
+/// than merely useless -- it runs every housekeeping tick, and a resize that
+/// changes nothing still makes the console reflow on Windows.
+fn pane_size_went_stale(remembered: Option<(usize, usize)>, actual: (usize, usize)) -> bool {
+    remembered.is_some_and(|size| size != actual)
+}
+
 /// Whether one window should take a session into its tabs.
 ///
 /// The whole of who-owns-what, in one place because every part of it was
@@ -11810,6 +11842,36 @@ fn adopt_sessions_into(
         state.tabs.close_pane(pane);
         state.pane_sizes.remove(&pane);
         changed = true;
+    }
+
+    // Sizes may be changed through MCP as well as through this window --
+    // the same sentence as the one above it, and the half that was missing.
+    //
+    // `resize_panes` skips a pane it believes is already the right size, and
+    // what it believes is the last size *this window* sent. That is only the
+    // pane's real size while nothing else touches it, and `session.resize`
+    // does: an agent that resizes a pane leaves this window skipping it from
+    // then on, so the pane keeps the size the agent gave it and the window
+    // never argues. Resizing the window is what breaks the tie, because then
+    // the layout wants a size that differs from the remembered one -- which
+    // is why the pane looked squeezed until it was maximised.
+    //
+    // A terminal built for agents to drive cannot treat its own memory as
+    // the authority on what the agent did. The engine reports what each pane
+    // actually is; believe that, and let `resize_panes` (which `sync_tabs`
+    // runs when this returns true) put the layout's size back.
+    //
+    // No loop: the engine adopts a resize verbatim or refuses it outright --
+    // it never quietly clamps -- so once the layout's size is in force the
+    // two agree and this stops firing.
+    for session in sessions {
+        let remembered = state.pane_sizes.get(&session.id).copied();
+        if pane_size_went_stale(remembered, (session.cols, session.rows)) {
+            state
+                .pane_sizes
+                .insert(session.id, (session.cols, session.rows));
+            changed = true;
+        }
     }
 
     for session in sessions {
@@ -12064,6 +12126,55 @@ mod tests {
     }
 
 
+    /// Every way of asking this window to close goes through one door.
+    ///
+    /// Two did not. The cross this window paints called `request_close`
+    /// directly while the system's close, Cmd-W and Alt-F4 asked
+    /// `close_this_view` first -- and with a second window open that is the
+    /// difference between closing a view and ending the application, because
+    /// nothing is confirmed when another window is behind. Pressing the
+    /// painted cross took the whole of Unterm down and every session in that
+    /// window with it.
+    ///
+    /// Checked against the source because there is no seam: both are one line
+    /// in a match arm, and a third way to close would be one more line that
+    /// looks exactly as reasonable as the one that was wrong.
+    #[test]
+    fn every_close_goes_through_the_same_door() {
+        let source = include_str!("window.rs");
+        let mut stray = Vec::new();
+        for (index, line) in source.lines().enumerate() {
+            // Skip lines holding a string: this test names the call it is
+            // looking for, and a scan that reads itself reports itself. Not
+            // done by cutting the file at the first `cfg(test)` -- the first
+            // one here sits a few hundred lines in, which would leave the
+            // closing code unscanned and the test unable to fail at all.
+            if line.contains('"') {
+                continue;
+            }
+            if !line.contains("self.request_close()") {
+                continue;
+            }
+            let enclosing = source
+                .lines()
+                .take(index + 1)
+                .filter(|candidate| candidate.trim_start().starts_with("fn "))
+                .last()
+                .map(str::trim)
+                .unwrap_or("");
+            if enclosing.starts_with("fn close_pressed") {
+                continue;
+            }
+            stray.push(format!("line {}: {enclosing}", index + 1));
+        }
+        assert!(
+            stray.is_empty(),
+            "a close that skips `close_pressed` ends the application \
+             where it meant to close a view:\n  {}",
+            stray.join("\n  ")
+        );
+    }
+
     /// A row's position in the strip is not a number key.
     ///
     /// `select_tab` maps a *key*, and nine and above mean "the last tab"
@@ -12233,6 +12344,35 @@ mod tests {
             window_should_adopt(4, Some(9), false, &elsewhere(&[1, 2])),
             "a split whose source no window holds either is still an orphan"
         );
+    }
+
+    /// An agent resizing a pane must not leave the window arguing with it
+    /// forever.
+    ///
+    /// `resize_panes` skips a pane whose size it believes is already right,
+    /// and what it believes is the last size this window sent -- true only
+    /// while nothing else touches the pane. `session.resize` over MCP does,
+    /// and this terminal exists to be driven that way. Without this check the
+    /// window kept skipping the pane, so it held the agent's size until the
+    /// window itself was resized: squeezed until you maximise it, and only
+    /// sometimes, because it takes an agent having resized something.
+    #[test]
+    fn a_pane_resized_behind_this_window_is_noticed() {
+        // What the engine reports differs from what we sent: somebody else
+        // moved it, and the layout has to be put back.
+        assert!(pane_size_went_stale(Some((120, 30)), (80, 24)));
+
+        // Agreement is the common case and must stay silent: this runs every
+        // housekeeping tick, and a resize that changes nothing is not free --
+        // on Windows it makes the console reflow, which is the flicker the
+        // remembered size exists to avoid.
+        assert!(!pane_size_went_stale(Some((80, 24)), (80, 24)));
+
+        // Nothing remembered is not a disagreement. A pane this window has
+        // not sent a size to gets one from `resize_panes` on its next pass;
+        // calling that stale would resize every pane on the first tick after
+        // a window opens.
+        assert!(!pane_size_went_stale(None, (80, 24)));
     }
 
     #[test]

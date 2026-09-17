@@ -107,12 +107,16 @@ try {{
   $pngStream = New-Object System.IO.MemoryStream
   $pngStream.Write($pngBytes, 0, $pngBytes.Length)
   $pngStream.Position = 0
-  $fileDrop = New-Object System.Collections.Specialized.StringCollection
-  [void]$fileDrop.Add('{path}')
+  # The image, and only the image. A file list and the path as text used to
+  # go on beside it, and a chat window reads the clipboard by asking for the
+  # flavours it wants in order -- a dropped file or a line of text long before
+  # a bitmap, because that is what most pastes are. So the screenshot arrived
+  # as an attachment or as a line of path, never as the picture. CF_BITMAP
+  # plus the two PNG flavours is what a picture is here; the terminal's own
+  # right-click paste needs nothing on the clipboard, because it answers an
+  # image-only clipboard by writing the file itself.
   $data = New-Object System.Windows.Forms.DataObject
   $data.SetImage($clipboardImage)
-  $data.SetFileDropList($fileDrop)
-  $data.SetText('{path}')
   $data.SetData('PNG', $false, $pngStream)
   $data.SetData('image/png', $false, $pngStream)
   try {{
@@ -207,25 +211,35 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
         );
     }
 
-    // Both flavours on one pasteboard: the PNG for image apps, the file's
-    // path as text for everything else. The AppleScript this replaces wrote
-    // the image ALONE, which left the text flavour empty — and a right-click
-    // paste in the terminal, which reads text, went from working to silently
-    // doing nothing the moment a screenshot was taken.
-    if let Err(err) = clipboard_image_and_path(&output_path) {
+    // The image, and only the image.
+    //
+    // The path used to go on as text too, so that a right-click paste in the
+    // terminal -- which reads text -- had something to find. It does not need
+    // it: the paste path already answers a clipboard holding an image alone
+    // by writing it into the captures folder and pasting that path, which is
+    // the same result by a route that does not touch the clipboard. The two
+    // were written without knowing about each other.
+    //
+    // And the text was not free. Plenty of readers ask for the flavours they
+    // want in order, text first, because most pastes are text -- that is what
+    // a chat window does. Measured rather than assumed: with the text there,
+    // asking for `[NSString, NSImage]` hands back the path string; with only
+    // the image, the same call hands back the image. So a screenshot pasted
+    // into a chat arrived as a line of gibberish path, which is what "the
+    // screenshot will not paste into WeChat" was.
+    if let Err(err) = clipboard_image(&output_path) {
         log::warn!("could not put the capture on the clipboard: {err:#}");
     }
 
     Ok(output_path)
 }
 
-/// PNG data and its path, together, via NSPasteboard.
+/// The PNG, via NSPasteboard. Nothing else -- see the caller.
 #[cfg(target_os = "macos")]
-fn clipboard_image_and_path(path: &std::path::Path) -> anyhow::Result<()> {
+fn clipboard_image(path: &std::path::Path) -> anyhow::Result<()> {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     let bytes = std::fs::read(path)?;
-    let text = path.display().to_string();
     // SAFETY: AppKit classes, main-thread-safe pasteboard calls, and every
     // object handed over is retained by the pasteboard before we return.
     unsafe {
@@ -236,13 +250,12 @@ fn clipboard_image_and_path(path: &std::path::Path) -> anyhow::Result<()> {
             dataWithBytes: bytes.as_ptr() as *const std::ffi::c_void,
             length: bytes.len()
         ];
+        // `public.tiff` comes free: the pasteboard derives it from the PNG,
+        // so a reader that only knows the older flavour still finds a picture.
         let png_type = ns_string("public.png")?;
-        let string_type = ns_string("public.utf8-plain-text")?;
         let ok_image: bool = msg_send![pasteboard, setData: data, forType: png_type];
-        let ns_text = ns_string(&text)?;
-        let ok_text: bool = msg_send![pasteboard, setString: ns_text, forType: string_type];
-        if !ok_image || !ok_text {
-            anyhow::bail!("pasteboard refused the capture (image {ok_image}, text {ok_text})");
+        if !ok_image {
+            anyhow::bail!("pasteboard refused the capture");
         }
     }
     Ok(())
@@ -421,5 +434,61 @@ mod tests {
         assert!(stamp
             .chars()
             .all(|c| c.is_ascii_digit() || c == '_'));
+    }
+}
+
+/// The clipboard rule, on every platform.
+///
+/// Its own module because the one above is `cfg(not(windows))`, and the
+/// Windows half of what this checks is exactly the half that would go
+/// unchecked there.
+#[cfg(test)]
+mod clipboard_tests {
+    /// A capture goes on the clipboard as a picture and nothing else.
+    ///
+    /// The path used to ride along as text -- on Windows as a dropped file
+    /// too -- so that a right-click paste in the terminal had something to
+    /// find. It costs more than it gives: a reader asks for the flavours it
+    /// wants in order, and text comes before pictures in almost every chat
+    /// window, because almost every paste is text. Measured on macOS: with
+    /// the text present, asking for `[NSString, NSImage]` returns the path
+    /// string; with the picture alone, the same call returns the picture. So
+    /// a screenshot pasted into a chat arrived as a line of path.
+    ///
+    /// Nothing is lost by dropping it. The paste path answers a clipboard
+    /// holding a picture alone by writing it into the captures folder and
+    /// pasting *that* path -- the same end, reached without spending the
+    /// clipboard on it.
+    ///
+    /// Checked against the source: the call is one line on each platform,
+    /// and putting the text back would look like a kindness.
+    #[test]
+    fn a_capture_puts_a_picture_on_the_clipboard_and_nothing_else() {
+        let source = include_str!("system_capture.rs");
+        let offenders: Vec<&str> = source
+            .lines()
+            .map(str::trim)
+            // Comments describe the rule and this test names what it forbids;
+            // a scan that reads itself reports itself. Lines carrying a
+            // string are skipped for that reason, which is also why the file
+            // is not simply cut at its first `cfg(test)`: that boundary is a
+            // thing to get wrong, and getting it wrong leaves a test that
+            // cannot fail.
+            .filter(|line| {
+                !line.starts_with("//") && !line.starts_with("#") && !line.contains('"')
+            })
+            .filter(|line| {
+                // macOS: a second flavour beside the PNG.
+                line.contains("setString:")
+                    // Windows: the path as text, or as a file to drop.
+                    || line.contains("$data.SetText(")
+                    || line.contains("$data.SetFileDropList(")
+            })
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "a capture must reach a chat window as a picture, not as its path:\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }
