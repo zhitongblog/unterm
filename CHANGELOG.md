@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.71.8 — 2026-09-18
+
+### Fixed
+
+- **Closing one window closed the whole of Unterm.** This window paints its
+  own title bar, and the cross it paints took a different route out than the
+  system's close, Ctrl+W and Alt+F4 do. Those ask first whether another
+  window is behind — if one is, this is a view going away and nothing needs
+  deciding. The painted cross skipped that question, and with nothing to
+  decide it went straight on to end every session the window held and take
+  the application with it. The comment on the other route had said the two
+  went through one function so they could not disagree about whether the
+  shells survive. They did not, and they disagreed.
+
+- **A screenshot pasted into a chat window arrived as a line of path.** The
+  capture went onto the clipboard with its path beside it as text, and on
+  Windows as a file to drop as well. But a program reads the clipboard by
+  asking for the flavours it wants in order, and text comes before pictures
+  almost everywhere, because almost every paste is text. So the chat window
+  took the path. The text was not needed in the first place: a right-click
+  paste in the terminal answers a clipboard holding a picture alone by
+  writing the picture into the captures folder and pasting that path — the
+  same end, reached without spending the clipboard on it.
+
+- **A pane an agent had resized stayed the size the agent gave it.** The
+  window skips telling a pane a size it believes it already has, which is
+  what keeps a resize from costing a console reflow for nothing. What it
+  believed was the last size it had sent itself — true only while nothing
+  else touches the pane, and `session.resize` does. So a pane resized from
+  the outside was skipped from then on and kept the agent's size, until
+  resizing the window itself finally asked for something different. Switching
+  themes made it visible rather than caused it: the redraw simply showed a
+  size that had been wrong for a while.
+
 ## v0.71.7 — 2026-09-12
 
 ### Fixed
