@@ -35,7 +35,11 @@ $RequiredTests = @(
     "handler::engine_neutral_handler_tests::review_diff_does_not_require_wezterm_mux_in_next_core_mode",
     "handler::engine_neutral_handler_tests::review_rollback_requires_explicit_confirmation_at_the_mcp_boundary",
     "handler::engine_neutral_handler_tests::review_verify_and_merge_work_for_next_core_fleet_member",
-    "handler::engine_neutral_handler_tests::fleet_lifecycle_uses_next_core_session_engine"
+    "handler::engine_neutral_handler_tests::fleet_lifecycle_uses_next_core_session_engine",
+    # A call that names no pane means the caller's own, not whichever one the
+    # user is looking at. Pinned by name as well as by count: the count alone
+    # would go on being satisfied by any other test taking its place.
+    "handler::engine_neutral_handler_tests::an_unnamed_pane_means_the_one_the_caller_speaks_from"
 )
 
 Push-Location $RepoRoot
@@ -64,8 +68,8 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "next-core MCP contract tests failed:`n$($run -join "`n")"
     }
-    if (-not @($run | Where-Object { $_ -match "test result: ok\..*49 passed" })) {
-        throw "next-core MCP contract test run did not report 49 passed tests"
+    if (-not @($run | Where-Object { $_ -match "test result: ok\..*50 passed" })) {
+        throw "next-core MCP contract test run did not report 50 passed tests"
     }
 
     # The other half of capture.scrollback: the surface refuses without a
@@ -84,7 +88,7 @@ try {
         throw "MCP host test run did not report 4 passed tests"
     }
 
-    Write-Host "next-core MCP contract tests ok: required=$($RequiredTests.Count) module_tests=49 host_tests=4"
+    Write-Host "next-core MCP contract tests ok: required=$($RequiredTests.Count) module_tests=50 host_tests=4"
 } finally {
     Pop-Location
 }
