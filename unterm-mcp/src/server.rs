@@ -331,6 +331,12 @@ fn handle_client(stream: TcpStream, auth_token: &str, handler: &McpHandler) -> R
                     {
                         handler.register_client(conn_id, client);
                     }
+                    // Where this connection is speaking from, when it says
+                    // so. A call that names no pane then means this one
+                    // rather than whichever the user is looking at.
+                    if let Some(pane) = params.get("pane_id").and_then(|v| v.as_u64()) {
+                        handler.register_caller_pane(conn_id, pane as usize);
+                    }
                     let resp = make_success_response(id, serde_json::json!({"status": "ok"}));
                     write_response(&mut writer, &resp)?;
                 } else {

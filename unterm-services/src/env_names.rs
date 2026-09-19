@@ -76,6 +76,27 @@ mod tests {
         remove_var("TEST_FALLBACK");
     }
 
+    /// The engine spells these two names itself, and must keep spelling the
+    /// same two.
+    ///
+    /// It sits below this crate, so it cannot call `both`. That is fine right
+    /// up until one side is renamed: the shell would carry a name nothing
+    /// reads, the MCP bridge would find no pane, and every agent would go
+    /// back to driving whichever pane the user was looking at -- silently,
+    /// because a missing variable looks exactly like a pane that did not
+    /// want to say.
+    #[test]
+    fn the_engine_spells_the_pane_variable_the_same_way() {
+        let source = include_str!("../../unterm-engine/src/next_core/session_runtime.rs");
+        for name in both("PANE") {
+            assert!(
+                source.contains(&format!("command.env(\"{name}\"")),
+                "the engine no longer sets {name}; \
+                 `agent signal` and the MCP bridge both read it"
+            );
+        }
+    }
+
     #[test]
     fn a_spawned_command_carries_both_names() {
         // What a shell started by the terminal actually receives. The old name

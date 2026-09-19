@@ -47,7 +47,18 @@ Use these tools to operate it:
   • policy.check / agent.list_trusted — inspect write policy and trusted AI agents
 Call meta.surface for the full method catalog, or run `unterm-cli reference`
 in any shell. Multiple Unterm windows may be open at once; tools act on the
-active window unless you target one — use instance.list to see them all.";
+active window unless you target one — use instance.list to see them all.
+
+You are running inside one of these panes. `agent.whoami` reports which one
+as `pane_id`, and $UNTERM_PANE holds the same number in your shell. Knowing
+it matters mostly so you can stay out of it: that pane is where you are
+being read, and typing into it means typing into your own session.
+
+Anything that writes to a pane — exec.*, session.input — asks which pane,
+and asks on purpose. Name one you were given or one you made with
+session.create. Do not fall back on whichever pane is active: that is the
+one the user is looking at, it is almost never the one you mean, and its
+screen belongs to work you cannot see.";
 
 /// Injected into agents' global context files for agents that may NOT have the
 /// MCP server loaded. Markdown, self-contained, points at how to connect.
@@ -65,7 +76,14 @@ and trusted-agent inspection surfaces for AI workflows.
   `unterm-core --headless`, then reconnect.
 - Full tool + CLI surface from any shell: `unterm-cli reference`.
 - Multiple Unterm windows may be open (named alpha, bravo, …); tools target the
-  active one unless you pass an instance. List them with the `instance.list` tool.";
+  active one unless you pass an instance. List them with the `instance.list` tool.
+- You are running inside one of its panes. `agent.whoami` reports which one as
+  `pane_id`, and `$UNTERM_PANE` holds the same number in your shell. That pane
+  is where you are being read, so it is the one to stay out of — typing into it
+  means typing into your own session.
+- Anything that writes to a pane asks which pane, and asks on purpose. Name one
+  you were given or one you made. The active pane is the one the user is looking
+  at; its screen belongs to work you cannot see.";
 
 const BLOCK_BEGIN: &str = "<!-- BEGIN UNTERM (managed by `unterm-cli setup-ai`) -->";
 const BLOCK_END: &str = "<!-- END UNTERM -->";

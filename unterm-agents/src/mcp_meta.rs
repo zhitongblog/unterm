@@ -551,7 +551,7 @@ pub const MCP_METHODS: &[McpMethod] = &[
     McpMethod { name: "server.capabilities", namespace: "governance", summary: "Method namespace map (back-compat — prefer meta.surface).", params: NO_PARAMS },
     McpMethod { name: "selftest.run", namespace: "governance", summary: "Run the built-in MCP self-test suite.", params: NO_PARAMS },
     McpMethod { name: "agent.identify", namespace: "governance", summary: "Self-tag the calling agent for audit grouping.", params: &[Param { name: "name", kind: "string", required: true, summary: "" }] },
-    McpMethod { name: "agent.whoami", namespace: "governance", summary: "Read the calling agent's self-tag.", params: NO_PARAMS },
+    McpMethod { name: "agent.whoami", namespace: "governance", summary: "Read the calling agent's self-tag and the pane it is speaking from.", params: NO_PARAMS },
     McpMethod { name: "agent.list_trusted", namespace: "governance", summary: "List runtime, configured, and persisted trusted agent names.", params: NO_PARAMS },
     McpMethod { name: "agent.trust", namespace: "governance", summary: "Trust an agent name so future PTY writes skip confirmation.", params: &[Param { name: "agent", kind: "string", required: true, summary: "Agent name to trust." }] },
     McpMethod { name: "agent.untrust", namespace: "governance", summary: "Remove an agent name from the persistent trust list.", params: &[Param { name: "agent", kind: "string", required: true, summary: "Agent name to revoke." }] },

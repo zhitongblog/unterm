@@ -4228,6 +4228,97 @@ mod engine_neutral_handler_tests {
         let _ = next_core().destroy_session(pane_id);
     }
 
+    /// A call that names no pane means the caller's pane, not the user's.
+    ///
+    /// An agent lives in a pane and the bridge it drives is started there,
+    /// so an omitted target means "here". It used to mean the *active* pane
+    /// -- whichever the user last clicked -- so an agent working in a
+    /// background pane ran its commands in the foreground one and read that
+    /// screen back as its own. Output from one project landed in another,
+    /// and a password printed by one agent showed up in a window where
+    /// nobody expected it.
+    #[test]
+    fn an_unnamed_pane_means_the_one_the_caller_speaks_from() {
+        let _guard = env_lock().lock();
+        unterm_engine::install_next_core_provider();
+        let previous_engine = std::env::var("UNTERM_ENGINE").ok();
+        std::env::set_var("UNTERM_ENGINE", "next-core");
+
+        let result: Result<(String, usize, usize)> = (|| {
+            let engine = next_core();
+            let make = || {
+                engine.create_session(CreateSessionRequest {
+                    cols: 80,
+                    rows: 4,
+                    command_dir: None,
+                    command: None,
+                    env: Vec::new(),
+                    launch_policy: Default::default(),
+                })
+            };
+            let watched = make()?;
+            let caller = make()?;
+            engine.write_input(watched.id, "echo WATCHED_PANE_MARK\r")?;
+            engine.write_input(caller.id, "echo CALLER_PANE_MARK\r")?;
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            // The active pane must be the *other* one, or this proves
+            // nothing: creating the caller's pane last would leave it active
+            // too, and then both the old behaviour and the new one answer
+            // with the same pane. Verified by breaking it -- the first
+            // version of this test passed with the fix removed.
+            use unterm_engine::WindowEngine as _;
+            // Whatever was active before this test, put it back afterwards.
+            // Focus is process-wide state, and a test that walks off leaving
+            // it pointing at a pane it then destroyed hands the next test a
+            // terminal with no active pane -- which is how this one, run in
+            // the middle of the suite, made `screen.clear` fail somewhere
+            // else entirely. Verified against a baseline run: that test is
+            // green without this one.
+            let restore_active = engine.active_pane_id()?;
+            engine.focus_session(watched.id)?;
+            assert_eq!(
+                engine.active_pane_id()?,
+                Some(watched.id as u64),
+                "the active pane has to differ from the caller's for this to mean anything"
+            );
+
+            let handler = McpHandler::new();
+            let conn_id = 7_000_000 + u64::from(std::process::id());
+            let ctx = ConnectionContext {
+                conn_id,
+                peer_addr: "127.0.0.1:0".to_string(),
+            };
+            handler.register_caller_pane(conn_id, caller.id);
+            // A method that is allowed to resolve without being told which
+            // pane -- `screen.text` is not one, it refuses instead, and the
+            // refusal is deliberate.
+            let screen = handler.handle(&ctx, "screen.scrollback_text", &json!({}))?;
+            handler.drop_connection(conn_id);
+            let text = screen["text"].as_str().unwrap_or_default().to_string();
+            if let Some(previous) = restore_active {
+                let _ = engine.focus_session(previous as usize);
+            }
+            Ok((text, caller.id, watched.id))
+        })();
+
+        match previous_engine {
+            Some(value) => std::env::set_var("UNTERM_ENGINE", value),
+            None => std::env::remove_var("UNTERM_ENGINE"),
+        }
+        let (text, caller_id, watched_id) = result.expect("read a screen without naming a pane");
+        let _ = next_core().destroy_session(caller_id);
+        let _ = next_core().destroy_session(watched_id);
+
+        assert!(
+            text.contains("CALLER_PANE_MARK"),
+            "an unnamed call must read the caller's own pane, got:\n{text}"
+        );
+        assert!(
+            !text.contains("WATCHED_PANE_MARK"),
+            "an unnamed call must not reach another pane, got:\n{text}"
+        );
+    }
+
     #[test]
     fn screen_scrollback_text_preserves_active_fallback_for_stale_pane_param() {
         let _guard = env_lock().lock();
@@ -4586,6 +4677,15 @@ struct McpState {
     agents_by_connection: HashMap<u64, AgentIdentity>,
     /// Per-connection client process identity from `auth.login`.
     clients_by_connection: HashMap<u64, unterm_protocol::BuildHandshake>,
+    /// The pane a connection speaks from, when it said so at `auth.login`.
+    ///
+    /// An agent runs inside a pane and the bridge it drives is started
+    /// there, so "no target named" means *this* pane far more often than it
+    /// means the one the user is looking at. Absent for anything that did
+    /// not say -- a person typing `unterm-cli`, or a bridge that reached a
+    /// different instance than the one owning its pane -- and those keep
+    /// falling back to the active pane. Cleared when the connection drops.
+    panes_by_connection: HashMap<u64, usize>,
     /// First time we ever saw a given agent name (across all
     /// connections). Used by the (future, P0.3) "first-time per agent"
     /// confirmation flow to decide whether this agent is novel enough
@@ -5531,6 +5631,7 @@ fn mcp_state() -> &'static Mutex<McpState> {
             last_input_at: None,
             agents_by_connection: HashMap::new(),
             clients_by_connection: HashMap::new(),
+            panes_by_connection: HashMap::new(),
             known_agents: HashMap::new(),
             pane_agents: HashMap::new(),
             agents_with_input_history: std::collections::HashSet::new(),
@@ -5572,6 +5673,25 @@ impl McpHandler {
             .lock()
             .clients_by_connection
             .insert(conn_id, client);
+    }
+
+    /// Remember which pane a connection speaks from. See
+    /// `panes_by_connection`.
+    pub fn register_caller_pane(&self, conn_id: u64, pane_id: usize) {
+        mcp_state()
+            .lock()
+            .panes_by_connection
+            .insert(conn_id, pane_id);
+    }
+
+    /// The pane the current connection speaks from, if it named one.
+    fn caller_pane() -> Option<usize> {
+        let conn_id = CURRENT_CONN_ID.with(|cell| *cell.borrow())?;
+        mcp_state()
+            .lock()
+            .panes_by_connection
+            .get(&conn_id)
+            .copied()
     }
 
     pub fn handle(&self, ctx: &ConnectionContext, method: &str, params: &Value) -> Result<Value> {
@@ -5834,10 +5954,34 @@ impl McpHandler {
         Self::resolve_active_pane_id(engine, options)
     }
 
+    /// The pane to use when a call named none.
+    ///
+    /// The connection's own pane first, then the active one. Both are
+    /// guesses; this one is far better. A call that names no target comes
+    /// from an agent living in a pane, and it means the pane it lives in --
+    /// while "the active pane" means whichever pane the user last clicked,
+    /// which has nothing to do with the caller. An agent working in a
+    /// background pane was running its commands in the user's foreground
+    /// pane and reading that screen back as if it were its own: output
+    /// belonging to one project landed in another, and a password printed
+    /// by one agent appeared in a window where nobody expected it.
+    ///
+    /// Which calls are allowed to fall back at all is unchanged and still
+    /// decided by `PaneResolutionOptions`. A method that demands an explicit
+    /// pane -- closing one, say -- demands it exactly as before; this only
+    /// changes which pane the ones that already guessed will guess.
     fn resolve_active_pane_id(
         engine: &dyn unterm_engine::HostEngine,
         options: PaneResolutionOptions,
     ) -> Result<usize> {
+        if let Some(pane_id) = Self::caller_pane() {
+            // Only if it is still there. A bridge outlives the pane it was
+            // started in when a shell exits, and a stale number would be a
+            // worse answer than the active pane.
+            if engine.get_session(pane_id).is_ok() {
+                return Ok(pane_id);
+            }
+        }
         let pane_id = engine
             .active_pane_id()?
             .ok_or_else(|| anyhow!("no active pane available"))? as usize;
@@ -7311,18 +7455,35 @@ impl McpHandler {
             .clients_by_connection
             .get(&ctx.conn_id)
             .map(|client| client.process_role);
+        // Which pane this caller is speaking from.
+        //
+        // The question an agent most needs answered and could not ask. Every
+        // method that writes to a pane demands an explicit one -- rightly,
+        // since guessing where to type is how you type into somebody else's
+        // work -- so an agent that does not know its own number has to pick
+        // from `session.list`, and the only thing there that looks like an
+        // answer is whichever pane is active. That is the *user's* pane. It
+        // is how one project's commands, and a password one agent printed,
+        // ended up in a window belonging to another.
+        //
+        // Read from the guard already held here rather than through the
+        // shared helper: that one takes this same lock, and it is not a
+        // re-entrant one.
+        let caller_pane = state.panes_by_connection.get(&ctx.conn_id).copied();
         match state.agents_by_connection.get(&ctx.conn_id) {
             Some(identity) => {
                 let mut value = serde_json::to_value(identity)?;
                 if let Some(role) = client_role {
                     value["client_role"] = json!(role);
                 }
+                value["pane_id"] = json!(caller_pane);
                 Ok(value)
             }
             None => Ok(json!({
                 "name": "anonymous",
                 "peer_addr": ctx.peer_addr,
                 "client_role": client_role,
+                "pane_id": caller_pane,
             })),
         }
     }
@@ -7756,6 +7917,7 @@ impl McpHandler {
         let mut state = mcp_state().lock();
         state.agents_by_connection.remove(&conn_id);
         state.clients_by_connection.remove(&conn_id);
+        state.panes_by_connection.remove(&conn_id);
     }
 
     // --- Ghost text debug ---

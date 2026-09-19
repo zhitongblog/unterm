@@ -67,6 +67,23 @@ pub(super) fn spawn(
     launch_env_keys: Vec<String>,
     split_from: Option<usize>,
 ) -> Result<NextCoreSession> {
+    // Tell the shell which pane it is.
+    //
+    // Nothing did, until now. `unterm-cli agent signal` has always read this
+    // to attribute a hook to the pane that raised it, and the MCP bridge
+    // needs it to stop falling back to whichever pane the user happens to be
+    // looking at -- an agent in a background pane that omitted a target was
+    // running its commands in the foreground one. Both read it; neither
+    // could, because it was never written.
+    //
+    // Both spellings, matching `unterm_services::env_names::both("PANE")`
+    // -- spelled out here because the engine sits below that crate. A test
+    // over there holds the two in step. The old name stays because a user's
+    // prompt may read `$WEZTERM_PANE`, and those prompts have been showing
+    // nothing at all.
+    let mut command = command;
+    command.env("UNTERM_PANE", id.to_string());
+    command.env("WEZTERM_PANE", id.to_string());
     let label = launch::command_label(&command);
     let pair = native_pty_system().openpty(pty_size(cols, rows))?;
     let child = pair.slave.spawn_command(command)?;

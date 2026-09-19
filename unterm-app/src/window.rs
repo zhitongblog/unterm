@@ -11697,6 +11697,21 @@ fn prepare_shell(
 fn launch_env_for_new_pane() -> Vec<(String, String)> {
     let mut env = unterm_services::launch_env::current_profile_env();
     env.extend(unterm_services::launch_env::read_unterm_proxy_env().unwrap_or_default());
+    // Which Unterm this shell belongs to.
+    //
+    // The engine puts the pane's own number in beside this, but a number
+    // alone is not an address: pane 5 exists in every window, so a bridge
+    // that connected to a different instance and then named "pane 5" would
+    // be pointing at a stranger. With the instance named, the bridge can
+    // check it reached the right one before it claims anything -- and say
+    // nothing when it did not, which is no worse than the behaviour this
+    // replaces.
+    let instance = unterm_services::server_info::read_current().id;
+    if !instance.is_empty() {
+        for name in unterm_services::env_names::both("INSTANCE") {
+            env.push((name, instance.clone()));
+        }
+    }
     env
 }
 

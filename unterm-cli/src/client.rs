@@ -104,11 +104,28 @@ impl McpClient {
             std::process::id(),
             chrono::Utc::now().to_rfc3339(),
         );
+        // Which pane this connection is speaking from, when it is speaking
+        // from one at all.
+        //
+        // An agent runs inside a pane, and the MCP bridge it drives is
+        // started there, so both inherit the pane's own number. Without
+        // saying so, a call that names no target is resolved against the
+        // *active* pane -- the one the user is looking at -- and an agent
+        // working in a background pane quietly drove the foreground one:
+        // its commands ran there, its screen reads came back from there.
+        //
+        // Only claimed when this connection actually reached the instance
+        // that owns the pane. Pane numbers restart per instance, so a claim
+        // made after landing somewhere else would name a stranger's pane,
+        // which is worse than naming none. Unknown either way means silence,
+        // and silence is the old behaviour.
+        let caller_pane = caller_pane_id(info.port);
+        let mut login = json!({ "token": info.token, "client": caller });
+        if let Some(pane) = caller_pane {
+            login["pane_id"] = json!(pane);
+        }
         let resp = client
-            .call(
-                "auth.login",
-                json!({ "token": info.token, "client": caller }),
-            )
+            .call("auth.login", login)
             .context("MCP auth.login")?;
         if resp.get("status").and_then(|v| v.as_str()) != Some("ok") {
             return Err(anyhow!("MCP auth.login rejected: {}", resp));
@@ -614,6 +631,36 @@ pub fn target_instance() -> Option<String> {
 /// signal` to route hook events to the instance that owns the calling
 /// pane. Hooks inherit `WEZTERM_UNIX_SOCKET=…/gui-sock-<pid>` from the
 /// pane's shell, and pid is the one instance-unique key in that env.
+/// The pane this process is running in, if the connection just made reached
+/// the Unterm that owns it.
+///
+/// Two variables, put there by two layers that each know their own half: the
+/// engine writes the pane's number when it starts the shell, the front end
+/// writes which instance the shell belongs to. Both are needed. A number on
+/// its own is not an address -- every window has a pane 5 -- so a bridge
+/// that discovered a different instance and then claimed "pane 5" would be
+/// naming a stranger's pane. Comparing the instance first is what makes the
+/// claim safe; failing to match returns `None`, which is exactly the
+/// behaviour that existed before anything was claimed at all.
+fn caller_pane_id(reached_port: u16) -> Option<u64> {
+    let pane = unterm_services::env_names::var("PANE")?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    let mine = unterm_services::env_names::var("INSTANCE")?;
+    let mine = mine.trim();
+    if mine.is_empty() {
+        return None;
+    }
+    // The registry is what ties a name to a port; the port is what this
+    // connection actually reached.
+    let dir = unterm_dir().ok()?.join("instances");
+    let raw = fs::read_to_string(dir.join(format!("{mine}.json"))).ok()?;
+    let record: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let registered = record.get("mcp_port").and_then(|p| p.as_u64())? as u16;
+    (registered == reached_port).then_some(pane)
+}
+
 pub fn instance_for_pid(pid: u32) -> Option<String> {
     let dir = unterm_dir().ok()?.join("instances");
     for entry in fs::read_dir(&dir).ok()?.flatten() {
