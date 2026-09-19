@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.71.9 — 2026-09-19
+
+### Fixed
+
+- **An agent could not find out which pane it was living in, so it used the
+  one you were looking at.** `agent.whoami` reported a name, an address and a
+  role, but never a pane — and every method that types into a pane demands to
+  be told which one, rightly, since guessing where to type is how you type
+  into someone else's work. With nothing else to go on, an agent would take
+  the pane marked active from `session.list`. That is your pane. Work
+  belonging to one project landed in a window belonging to another.
+  `agent.whoami` now answers with `pane_id`, and the instructions say plainly
+  that knowing it is mostly so you can stay out of it.
+
+- **The pane number was never put into the shell at all.** `agent signal` has
+  always read `$UNTERM_PANE` to attribute a hook to the pane that raised it,
+  and a prompt carried over from WezTerm reads `$WEZTERM_PANE` for the same
+  reason. Nothing wrote either of them. Both are written now, so a prompt
+  that had been showing nothing shows the pane, and a signal lands where it
+  came from.
+
+- **Signals went to whichever Unterm was found first.** The code that routes
+  a signal to the instance owning the calling pane read a variable — a socket
+  path it could dig a process id out of — that nothing ever set. The
+  reasoning was right and the whole block did nothing. It reads the instance
+  name directly now, which the front end does write.
+
 ## v0.71.8 — 2026-09-18
 
 ### Fixed
