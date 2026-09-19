@@ -352,22 +352,22 @@ fn run_cockpit_signal(
     pane: Option<&str>,
     json_out: bool,
 ) -> Result<()> {
-    // Route to the instance that owns the calling pane. WEZTERM_PANE is
-    // only unique within one instance, so with several Unterm windows a
-    // signal sent to "the latest instance" would tag the wrong pane.
-    // gui-sock-<pid> in the inherited env is the instance-unique key.
-    if let Some(pid) = unterm_services::env_names::var("UNIX_SOCKET")
-        .ok_or(())
-        .ok()
-        .and_then(|s| {
-            s.rsplit("gui-sock-")
-                .next()
-                .and_then(|p| p.parse::<u32>().ok())
-        })
+    // Route to the instance that owns the calling pane. A pane number is
+    // only unique within one instance, so with several windows open a signal
+    // sent to "the latest instance" would tag a pane belonging to somebody
+    // else.
+    //
+    // Read from `UNTERM_INSTANCE`, which the front end writes into every
+    // shell it starts. This used to dig a pid out of `gui-sock-<pid>` in
+    // `UNIX_SOCKET` and look the instance up by it -- correct reasoning
+    // about a variable nothing ever set, so the whole block did nothing and
+    // every signal went to whichever instance was found first. The name is
+    // now put there on purpose, and it is the name this wants anyway.
+    if let Some(id) = unterm_services::env_names::var("INSTANCE")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
     {
-        if let Some(id) = super::client::instance_for_pid(pid) {
-            super::client::set_target_instance(Some(&id));
-        }
+        super::client::set_target_instance(Some(&id));
     }
     // A hook must never break the agent that invokes it: when no Unterm
     // GUI is reachable, exit 0 silently instead of erroring.

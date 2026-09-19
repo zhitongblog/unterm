@@ -661,28 +661,6 @@ fn caller_pane_id(reached_port: u16) -> Option<u64> {
     (registered == reached_port).then_some(pane)
 }
 
-pub fn instance_for_pid(pid: u32) -> Option<String> {
-    let dir = unterm_dir().ok()?.join("instances");
-    for entry in fs::read_dir(&dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().map(|e| e != "json").unwrap_or(true) {
-            continue;
-        }
-        let Ok(raw) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            continue;
-        };
-        if v.get("pid").and_then(|p| p.as_u64()) == Some(pid as u64) {
-            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                return Some(id.to_string());
-            }
-        }
-    }
-    None
-}
-
 fn requested_instance_id() -> Option<String> {
     TARGET_INSTANCE
         .get()
