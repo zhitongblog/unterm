@@ -19,7 +19,21 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 /// What this provider is called wherever it is registered.
-pub const PROVIDER_ID: &str = "unterm.terminal";
+///
+/// `contracts/v0` spells an id as `^provider_[a-z0-9]+(_[a-z0-9]+)*$`, so the
+/// dotted name this used to carry ("unterm.terminal") did not validate. The
+/// name is the provider's identity to an orchestrator, and an identity that
+/// fails the schema it is being registered against is no identity at all.
+pub const PROVIDER_ID: &str = "provider_unterm_terminal";
+
+/// Which shape this manifest is in.
+///
+/// A constant, not a number: the contract asks for the schema's own name so a
+/// reader knows which document to validate against. The number that used to
+/// be here was the *task store's* schema version, which moves for reasons
+/// that have nothing to do with the manifest's shape -- two different things
+/// wearing one field.
+pub const MANIFEST_SCHEMA_VERSION: &str = "provider_manifest.v0";
 
 /// The capability families a caller can lease from a terminal.
 ///
@@ -60,6 +74,49 @@ pub fn manifest() -> Value {
                 // silently does nothing.
                 "reversible": risk == unterm_gateway::Risk::Read,
                 "evidence": ["command", "exit_code", "output_ref", "resolved_path"],
+                // The remaining five of the contract's seven. Each is derived
+                // from something already known here rather than asserted
+                // separately: a declaration that can drift from the gateway
+                // it describes is worse than none, because it is believed.
+                //
+                // Does anything outside this machine change? Reading a screen
+                // does not. Running a command can do anything the shell can,
+                // which includes reaching the network -- so the honest answer
+                // for the higher tiers is "yes, possibly", not "no".
+                "side_effect": if risk == unterm_gateway::Risk::Read {
+                    "none"
+                } else if risk >= unterm_gateway::Risk::ExternalSideEffect {
+                    "external"
+                } else {
+                    "local"
+                },
+                // What a grant has to name. Every family here is bounded by a
+                // path; nothing in this provider is scoped by anything else,
+                // and saying so is what lets an orchestrator refuse a grant
+                // that names the wrong kind of thing.
+                "resource_scopes": ["path"],
+                // Whether an argument may carry a secret. A command line can:
+                // people type tokens into them, and the audit trail has to
+                // know to redact before it stores. A screen read cannot.
+                "sensitive_inputs": risk != unterm_gateway::Risk::Read,
+                // Who says yes. The gateway already decides this per method,
+                // and the top three tiers there refuse a standing grant --
+                // they want the user, once, for this exact call.
+                "approval_mode": if risk == unterm_gateway::Risk::Read {
+                    "none"
+                } else if risk >= unterm_gateway::Risk::CredentialAccess {
+                    "per_call"
+                } else {
+                    "grant"
+                },
+                // What must survive the call. A read leaves the evidence it
+                // returned; anything that changes the machine has to leave a
+                // record whether or not anybody asks for it.
+                "evidence_policy": if risk == unterm_gateway::Risk::Read {
+                    "on_request"
+                } else {
+                    "always"
+                },
             })
         })
         .collect();
@@ -69,7 +126,11 @@ pub fn manifest() -> Value {
         "provider_id": PROVIDER_ID,
         "product_version": unterm_protocol::PRODUCT_VERSION,
         "protocol_version": unterm_protocol::PROTOCOL_VERSION,
-        "schema_version": unterm_tasks::schema_version(),
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        // The task store's own version, kept because a caller that plans
+        // around durable task rows still needs it -- just not under the name
+        // that means "this manifest's shape".
+        "task_schema_version": unterm_tasks::schema_version(),
         "endpoint": health["endpoint"].clone(),
         "health": health["state"].clone(),
         "capabilities": capabilities,
@@ -252,13 +313,100 @@ mod tests {
         dir
     }
 
+    /// All seven of the contract's risk fields, and each one derived rather
+    /// than written down.
+    ///
+    /// The contract asks for seven; the manifest published two. The other five
+    /// are not new facts -- they follow from the gateway's tier for the family
+    /// -- so this checks the derivation rather than a table of expected
+    /// strings: a table would have to be edited whenever a method moves tier,
+    /// and an orchestrator reading a stale table plans around a risk the
+    /// gateway no longer agrees with.
+    #[test]
+    fn every_capability_declares_all_seven_risk_fields() {
+        let _dir = isolate();
+        let manifest = manifest();
+        let capabilities = manifest["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .clone();
+        assert!(!capabilities.is_empty(), "no capabilities were published");
+
+        for capability in capabilities {
+            let name = capability["name"].as_str().unwrap_or("<unnamed>");
+            for field in [
+                "risk",
+                "reversible",
+                "side_effect",
+                "resource_scopes",
+                "sensitive_inputs",
+                "approval_mode",
+                "evidence_policy",
+            ] {
+                assert!(
+                    !capability[field].is_null(),
+                    "{name} does not declare {field}"
+                );
+            }
+
+            // Read is the one tier that promises nothing changes; every other
+            // answer has to follow from that, in the same direction.
+            let reads_only = capability["risk"] == "read";
+            assert_eq!(
+                capability["side_effect"] == "none",
+                reads_only,
+                "{name}: side_effect and risk disagree about whether anything changes"
+            );
+            assert_eq!(
+                capability["sensitive_inputs"].as_bool(),
+                Some(!reads_only),
+                "{name}: a call that can change the machine can carry a secret"
+            );
+            assert_eq!(
+                capability["approval_mode"] == "none",
+                reads_only,
+                "{name}: approval_mode and risk disagree about needing a yes"
+            );
+            assert_eq!(
+                capability["evidence_policy"] == "always",
+                !reads_only,
+                "{name}: anything that changes the machine must leave a record"
+            );
+            assert_eq!(
+                capability["reversible"].as_bool(),
+                Some(reads_only),
+                "{name}: only a read is undoable by the layer above"
+            );
+        }
+    }
+
     #[test]
     fn the_manifest_publishes_risk_from_the_gateway_not_from_prose() {
         let _dir = isolate();
         let manifest = manifest();
         assert_eq!(manifest["provider_id"], PROVIDER_ID);
         assert!(manifest["product_version"].is_string());
-        assert!(manifest["schema_version"].is_number());
+        // Pinned to the contract's own spellings rather than to "is a string"
+        // / "is a number": the shapes are what an orchestrator validates
+        // against, and a type check would have kept passing through the very
+        // change that broke them.
+        assert_eq!(manifest["schema_version"], "provider_manifest.v0");
+        assert!(
+            manifest["task_schema_version"].is_number(),
+            "the task store's version moved out from under `schema_version`, \
+             not away"
+        );
+        let id = manifest["provider_id"].as_str().expect("provider_id");
+        assert!(
+            id.starts_with("provider_")
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                && !id.contains("__")
+                && !id.ends_with('_'),
+            "provider_id {id:?} does not match the contract's \
+             ^provider_[a-z0-9]+(_[a-z0-9]+)*$"
+        );
 
         let capabilities = manifest["capabilities"].as_array().unwrap();
         let by_name = |name: &str| {
