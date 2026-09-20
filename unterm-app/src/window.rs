@@ -3182,6 +3182,20 @@ impl App {
         format!("{kept}\u{2026}")
     }
 
+    /// How many rows of the strip are on screen.
+    ///
+    /// The footer's row is reserved, and the section gap above the list is
+    /// not a row. Shared so the wheel bounds itself against the same number
+    /// the painter and the hit test use -- three copies of this arithmetic
+    /// is three chances for the wheel to stop somewhere the eye does not.
+    fn sidebar_visible_rows(&self) -> Option<usize> {
+        let (_left, top, _width, height, row_height) = self.sidebar_dock()?;
+        let pt = crate::chrome_font::point(self.window.scale);
+        let first = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
+        let footer_top = top + height - row_height;
+        Some((((footer_top - first) / row_height).floor()).max(1.0) as usize)
+    }
+
     /// Which strip row a point is over.
     fn sidebar_row_at(&self, x: f32, y: f32) -> Option<usize> {
         let (left, top, width, height, row_height) = self.sidebar_dock()?;
@@ -3193,8 +3207,7 @@ impl App {
         if y < first {
             return None;
         }
-        let footer_top = top + height - row_height;
-        let visible = (((footer_top - first) / row_height).floor()).max(1.0) as usize;
+        let visible = self.sidebar_visible_rows()?;
         let offset = ((y - first) / row_height) as usize;
         if offset >= visible {
             return None;
@@ -11327,8 +11340,19 @@ impl ApplicationHandler for App {
                             && self.window.pointer.1 >= top
                             && self.window.pointer.1 < top + height;
                         if inside {
-                            self.window.sidebar_scroll =
-                                self.window.sidebar_scroll.saturating_add_signed(-(lines as isize));
+                            // Bounded on the way in. Left unbounded the
+                            // number climbed past the end while the painter
+                            // clamped what it drew, so every notch spent
+                            // down there had to be spent again before the
+                            // strip would come back up.
+                            let rows = self.sidebar_rows().len();
+                            let visible = self.sidebar_visible_rows().unwrap_or(1);
+                            self.window.sidebar_scroll = crate::sidebar::scroll_by(
+                                self.window.sidebar_scroll,
+                                -(lines as isize),
+                                rows,
+                                visible,
+                            );
                             self.window.drawn_revision = None;
                             if let Some(live) = self.window.state.as_ref() {
                                 live.window.request_redraw();

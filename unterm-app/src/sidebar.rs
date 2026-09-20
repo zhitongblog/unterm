@@ -561,6 +561,20 @@ pub fn clamp_scroll(scroll_top: usize, rows: usize, visible: usize) -> usize {
     scroll_top.min(rows.saturating_sub(visible))
 }
 
+/// Where the strip sits after a wheel of `delta` rows.
+///
+/// Bounded here rather than at the painter. The painter has always clamped
+/// what it draws, so a strip scrolled past its end looked right -- but the
+/// number itself kept climbing, and every notch spent past the end had to be
+/// spent again before the strip would move back. A dozen notches at the
+/// bottom of a short list is a strip that ignores the wheel a dozen times.
+/// The file tree beside it bounds its own scroll on the way in; this is the
+/// same rule, in the one place that lacked it.
+pub fn scroll_by(scroll_top: usize, delta: isize, rows: usize, visible: usize) -> usize {
+    let last = rows.saturating_sub(visible.max(1)) as isize;
+    (scroll_top as isize + delta).clamp(0, last.max(0)) as usize
+}
+
 /// Scroll far enough to bring `row` into view, moving as little as possible.
 pub fn scroll_to_show(scroll_top: usize, row: usize, visible: usize) -> usize {
     if visible == 0 {
@@ -1063,6 +1077,28 @@ mod tests {
             })
             .collect();
         assert_eq!(counts, vec![2, 1]);
+    }
+
+    /// The wheel cannot run the strip's position past its end.
+    ///
+    /// The painter clamps what it draws, so this stayed invisible until the
+    /// wheel turned back: the stored position had climbed past the end, and
+    /// every notch spent up there had to be spent again before the first row
+    /// moved. What that looks like is a strip that ignores the wheel.
+    #[test]
+    fn a_wheel_past_the_end_leaves_nothing_to_spend_coming_back() {
+        // 20 rows in a strip showing 10: the last page starts at row 10.
+        assert_eq!(scroll_by(0, 5, 20, 10), 5);
+        assert_eq!(scroll_by(5, 50, 20, 10), 10, "stops at the last page");
+        // One notch back from there moves, rather than paying off a debt.
+        assert_eq!(scroll_by(scroll_by(5, 50, 20, 10), -1, 20, 10), 9);
+    }
+
+    #[test]
+    fn a_wheel_cannot_scroll_above_the_first_row() {
+        assert_eq!(scroll_by(3, -10, 20, 10), 0);
+        // A strip with room for every row has nowhere to go.
+        assert_eq!(scroll_by(0, 5, 4, 10), 0);
     }
 
     /// A list that shrinks must not leave the strip scrolled past its end
