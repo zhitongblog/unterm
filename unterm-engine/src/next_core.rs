@@ -6838,7 +6838,11 @@ mod tests {
         engine.destroy_session(session.id)?;
         assert!(
             rows > 0,
-            "60 lines through a 6-row viewport left no history (scrollback_rows={rows}, non-blank visible rows={seen}, screen: {text})"
+            "60 lines through a 6-row viewport left no history \
+             (scrollback_rows={rows}, non-blank visible rows={seen}, screen: {text})",
+            rows = rows,
+            seen = seen,
+            text = text,
         );
         Ok(())
     }

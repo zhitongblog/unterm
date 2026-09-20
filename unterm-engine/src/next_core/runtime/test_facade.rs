@@ -20,7 +20,15 @@ pub(in crate::next_core) fn reset() -> RuntimeTestGuard {
 }
 
 /// Proof that this test has the runtime to itself.
-pub(in crate::next_core) struct RuntimeTestGuard(parking_lot::MutexGuard<'static, ()>);
+///
+/// The guard is never read, and must not be removed for that reason: holding
+/// it *is* the point, and dropping it at the end of the test is what lets the
+/// next one in. `-D warnings` counts an unread field as dead code, which is
+/// usually right and here would delete the exclusion this whole module exists
+/// to provide.
+pub(in crate::next_core) struct RuntimeTestGuard(
+    #[allow(dead_code)] parking_lot::MutexGuard<'static, ()>,
+);
 
 impl RuntimeTestGuard {
     /// Start over without giving up the lock.
