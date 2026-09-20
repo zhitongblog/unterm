@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.71.10 — 2026-09-20
+
+### Fixed
+
+- **A Windows machine with no usable graphics driver could not open the
+  terminal at all.** Startup tried DX12, then OpenGL, and gave up with "no
+  working GPU path" -- having never asked for WARP, the software rasteriser
+  that ships with D3D12 and needs no driver. Both hardware attempts were
+  honest failures (on Windows on ARM in a VM, DX12 finds an adapter but
+  cannot configure a surface on the virtual display, and OpenGL has no driver
+  to find), so the message read as the terminal being broken rather than the
+  machine being unusual. The chain now ends with a software pass. Slow is a
+  tradeoff you can live with; not starting is not.
+
+- **`unterm-cli start` fell back to a second process without saying so.** It
+  asks the running front end to open the window and becomes one itself only
+  if nobody answers -- but a front end that answered and *refused* looked
+  exactly like nobody being there. The usual cause is a version mismatch,
+  refused at the handshake by design. The fallback is worth knowing about:
+  a separate process pays for its own GPU adapter and font stack, and shares
+  the Core with the window already open, so closing either reaches for a Core
+  that is not only its own. It now says which happened, and what it costs.
+
+- **The sidebar's scroll wheel kept a debt it never settled.** Scrolling past
+  the end and then back up moved nothing until the overshoot had been paid
+  off, so the list appeared stuck.
+
+- **The provider manifest failed the contract it was being registered
+  against.** `provider_id` carried a dotted name the schema rejects,
+  `schema_version` held the task store's number rather than the manifest's own
+  shape, and five of the contract's seven risk fields were not published at
+  all. All five are now derived from the gateway's own tier for the family,
+  rather than written down beside it where the two could drift apart.
+
 ## v0.71.9 — 2026-09-19
 
 ### Fixed
