@@ -319,10 +319,13 @@ $Suites = @(
         # window that draws it.
         # 27 since the painted close cross stopped ending the application
         # when it meant to close one view.
+        # 28 since the GPU fallback chain learned to ask for the software
+        # rasteriser: two honest hardware failures used to end startup with
+        # "no working GPU path", on a machine where WARP was there all along.
         # This number is meant to be edited by whoever adds a test here — that
         # is the whole mechanism, and it is why a test quietly disappearing is
         # caught.
-        ExpectedCount = 27
+        ExpectedCount = 28
         RequiredTests = @(
             @(
                 # Every way of bringing a tab forward must tell its panes how
@@ -330,6 +333,9 @@ $Suites = @(
                 # position in the strip is not a number key: nine and above
                 # meant "the last tab" and sent every click past the eighth
                 # row to the end.
+                # A machine with no usable GPU driver must still open a
+                # window; the chain has to end in the software rasteriser.
+                "window::tests::the_gpu_fallback_chain_ends_in_software",
                 "window::tests::every_tab_switch_resizes_the_panes_it_brings_forward",
                 "window::tests::a_row_position_never_arrives_as_a_number_key",
                 "window::tests::a_wide_glyph_copies_without_its_spacer_cell",
