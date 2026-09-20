@@ -422,13 +422,42 @@ fn main() -> Result<()> {
 }
 
 /// Ask a running front end for another window. False if none would take it.
+/// Why a window could not be opened on a front end that is already running.
+///
+/// Distinguished from "nobody was there to ask", which is not a problem: the
+/// first `start` on a quiet machine has nothing to hand over to and goes on
+/// to become the window itself. A front end that *is* there and still could
+/// not take it is a different matter, and the difference is the whole reason
+/// this type exists -- see `run_start`.
+enum HandOver {
+    /// A window was opened on the running front end. Nothing more to do.
+    Done,
+    /// No front end is running. Becoming one is the right answer.
+    NobodyHome,
+    /// One is running and refused, or could not be reached.
+    Refused(String),
+}
+
 fn hand_over_window(
     cwd: Option<&std::path::Path>,
     profile: Option<&str>,
     command: &[String],
-) -> bool {
-    let Ok(mut client) = crate::client::McpClient::connect() else {
-        return false;
+) -> HandOver {
+    // Is anyone actually there? Asked before connecting, because a failed
+    // connection means two very different things depending on the answer.
+    let live = unterm_services::server_info::list_live_instances();
+    let mut client = match crate::client::McpClient::connect() {
+        Ok(client) => client,
+        Err(err) if live.is_empty() => {
+            let _ = err;
+            return HandOver::NobodyHome;
+        }
+        Err(err) => {
+            return HandOver::Refused(format!(
+                "{} front end(s) registered but none would talk: {err:#}",
+                live.len()
+            ))
+        }
     };
     let mut params = serde_json::Map::new();
     if let Some(cwd) = cwd {
@@ -440,9 +469,10 @@ fn hand_over_window(
     if !command.is_empty() {
         params.insert("command".into(), command.to_vec().into());
     }
-    client
-        .call("instance.new_window", serde_json::Value::Object(params))
-        .is_ok()
+    match client.call("instance.new_window", serde_json::Value::Object(params)) {
+        Ok(_) => HandOver::Done,
+        Err(err) => HandOver::Refused(format!("{err:#}")),
+    }
 }
 
 fn run_start(
@@ -460,8 +490,30 @@ fn run_start(
     // it, and a window on the wrong folder is worse than a slow one. The
     // request carries them now, so every `start` can hand over -- which also
     // stops each one leaving a Core of its own behind when it quits.
-    if hand_over_window(cwd.as_deref(), profile.as_deref(), &command) {
-        return Ok(());
+    match hand_over_window(cwd.as_deref(), profile.as_deref(), &command) {
+        HandOver::Done => return Ok(()),
+        HandOver::NobodyHome => {}
+        // Say it. A front end is running and would not take the window, so
+        // what follows is a second process -- and a second process is not
+        // the same product in a second window. It pays for its own GPU
+        // adapter and its own font stack (587 ms against 31 ms, which is
+        // what 0.68.2's single-process multi-window was for), and it shares
+        // the Core with the one already running, so closing either of them
+        // reaches for a Core that is not only its own.
+        //
+        // The usual cause is version skew: a `unterm-cli` newer than the
+        // running front end is refused at the handshake, by design. Nothing
+        // said so, so the fallback looked like ordinary behaviour, and the
+        // windows piled up as processes -- slower, and fragile in a way that
+        // only shows when one of them closes.
+        HandOver::Refused(why) => {
+            eprintln!("unterm: could not open a window on the running Unterm: {why}");
+            eprintln!(
+                "unterm: starting a separate process instead — it will be slower, and \
+                 closing any window may take the others with it. \
+                 `unterm-cli server health` says whether the versions match."
+            );
+        }
     }
     let current = std::env::current_exe().context("locating unterm-cli executable")?;
     let sibling = current.with_file_name(if cfg!(windows) {
