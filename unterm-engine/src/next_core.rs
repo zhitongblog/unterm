@@ -6787,6 +6787,66 @@ mod tests {
         Ok(())
     }
 
+    /// A real PTY writing more rows than fit must leave history behind.
+    ///
+    /// Every other scrollback test here injects output with
+    /// `set_output_for_test`, which hands bytes straight to the screen. The
+    /// live path is a pty read loop, and that is the one the terminal runs.
+    #[test]
+    fn a_live_pty_writing_past_the_viewport_leaves_scrollback() -> Result<()> {
+        let _guard = test_guard();
+        let _runtime_guard = reset_state_for_test();
+        let engine = NextCoreEngine;
+        let command = {
+            #[cfg(windows)]
+            {
+                let mut command = portable_pty::CommandBuilder::new("cmd.exe");
+                command.args([
+                    "/c",
+                    "(for /l %i in (1,1,60) do @echo line%i) & ping -n 6 127.0.0.1 >nul",
+                ]);
+                command
+            }
+            #[cfg(not(windows))]
+            {
+                let mut command = portable_pty::CommandBuilder::new("sh");
+                command.args(["-c", "i=1; while [ $i -le 60 ]; do echo line$i; i=$((i+1)); done; sleep 5"]);
+                command
+            }
+        };
+        let session = engine.create_session(CreateSessionRequest {
+            cols: 40,
+            rows: 6,
+            command_dir: None,
+            command: Some(command),
+            env: Vec::new(),
+            launch_policy: Default::default(),
+        })?;
+
+        let mut seen = 0usize;
+        let mut rows = 0usize;
+        for _ in 0..80 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let screen = engine.read_screen(session.id)?;
+            rows = screen.scrollback_rows;
+            seen = screen.lines.iter().filter(|line| !line.trim().is_empty()).count();
+            if rows > 0 {
+                break;
+            }
+        }
+        let text = engine.read_screen(session.id)?.lines.join(" | ");
+        engine.destroy_session(session.id)?;
+        assert!(
+            rows > 0,
+            "60 lines through a 6-row viewport left no history \
+             (scrollback_rows={rows}, non-blank visible rows={seen}, screen: {text})",
+            rows = rows,
+            seen = seen,
+            text = text,
+        );
+        Ok(())
+    }
+
     #[test]
     fn screen_buffer_clears_scrollback_with_display_erase_mode_3() -> Result<()> {
         let _guard = test_guard();

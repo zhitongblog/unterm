@@ -513,13 +513,20 @@ $Suites = @(
         # the first time a project appeared, so the same project's later tabs
         # stood under whoever's header came before them -- and the drag target
         # was counted in tab order, which folding and grouping both move.
-        ExpectedCount = 25
+        # 27 since the wheel started bounding the strip's own position on
+        # the way in. The painter always clamped what it drew, so a position
+        # past the end looked right and only showed itself on the way back.
+        ExpectedCount = 27
         RequiredTests = @(
             # The header's count and the rows beneath it are now the same
             # list, and a row past the ninth leads to its own tab rather than
             # to the last one.
             "sidebar::tests::a_project_gathers_every_one_of_its_tabs",
             "sidebar::tests::a_row_past_the_ninth_leads_to_its_own_tab",
+            # The wheel stops at the end instead of running the number past
+            # it and charging the notches back on the way up.
+            "sidebar::tests::a_wheel_past_the_end_leaves_nothing_to_spend_coming_back",
+            "sidebar::tests::a_wheel_cannot_scroll_above_the_first_row",
             "sidebar::tests::a_single_project_gets_no_group_headers",
             "sidebar::tests::same_named_projects_are_told_apart_by_the_shortest_parent",
             "sidebar::tests::a_path_that_is_a_suffix_of_another_still_gets_a_hint",
