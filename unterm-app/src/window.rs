@@ -140,23 +140,42 @@ struct SharedGpu {
 }
 
 fn request_graphics(window: Arc<Window>, width: u32, height: u32) -> anyhow::Result<Graphics> {
-    let mut attempts = vec![PRIMARY_GPU_BACKEND];
+    // Hardware first, then the same backends again with the software
+    // rasteriser. The last pass is what lets a machine with no usable GPU
+    // driver open a window at all.
+    //
+    // It was missing, and the failure it caused reads as the terminal being
+    // broken rather than the machine being unusual: on Windows on ARM inside
+    // a VM, DX12 finds an adapter but cannot configure a surface on the
+    // virtual display, and GL has no driver to find -- so both honest
+    // attempts fail and startup gave up with "no working GPU path", having
+    // never asked for WARP, which ships with D3D12 and needs no driver at
+    // all. Slow is a tradeoff a user can live with; not starting is not.
+    let mut attempts: Vec<(wgpu::Backends, bool)> = vec![(PRIMARY_GPU_BACKEND, false)];
     if let Some(fallback) = FALLBACK_GPU_BACKEND {
-        attempts.push(fallback);
+        attempts.push((fallback, false));
+    }
+    attempts.push((PRIMARY_GPU_BACKEND, true));
+    if let Some(fallback) = FALLBACK_GPU_BACKEND {
+        attempts.push((fallback, true));
     }
     let mut failures = Vec::new();
-    for backend in attempts {
-        match try_backend(backend, window.clone(), width, height) {
+    for (backend, force_software) in attempts {
+        match try_backend(backend, window.clone(), width, height, force_software) {
             Ok(graphics) => {
                 if !failures.is_empty() {
+                    let how = if force_software { " (software)" } else { "" };
                     log::warn!(
-                        "fell back to {backend:?} after ({})",
+                        "fell back to {backend:?}{how} after ({})",
                         failures.join("; ")
                     );
                 }
                 return Ok(graphics);
             }
-            Err(error) => failures.push(format!("{backend:?}: {error:#}")),
+            Err(error) => {
+                let how = if force_software { " software" } else { "" };
+                failures.push(format!("{backend:?}{how}: {error:#}"));
+            }
         }
     }
     anyhow::bail!("no working GPU path ({})", failures.join("; "))
@@ -227,6 +246,7 @@ fn try_backend(
     window: Arc<Window>,
     width: u32,
     height: u32,
+    force_software: bool,
 ) -> anyhow::Result<Graphics> {
     crate::startup_trace::mark("graphics.instance.start");
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -240,6 +260,10 @@ fn try_backend(
     crate::startup_trace::mark("graphics.surface.ready");
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         compatible_surface: Some(&surface),
+        // Ask for the software rasteriser only when the hardware paths have
+        // already been tried and refused. Asking for it first would hand a
+        // machine with a perfectly good GPU a slow one.
+        force_fallback_adapter: force_software,
         ..Default::default()
     }))
     .map_err(|error| anyhow::anyhow!("adapter: {error}"))?;
@@ -12077,6 +12101,42 @@ fn encode(logical: &winit::keyboard::Key, held: crate::mouse::Held) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The GPU fallback chain must end with the software rasteriser.
+    ///
+    /// A machine with no usable GPU driver has to be able to open a window.
+    /// Windows on ARM inside a VM is the case that found this: DX12 finds an
+    /// adapter but cannot configure a surface on the virtual display, GL has
+    /// no driver at all, and with only those two the terminal refused to
+    /// start -- never asking for WARP, which ships with D3D12 and needs no
+    /// driver.
+    ///
+    /// Asserted over the source because the chain is built inside
+    /// `request_graphics`, which needs a real window and a real event loop to
+    /// call. Lines holding a string literal are skipped so this test cannot
+    /// match its own prose.
+    #[test]
+    fn the_gpu_fallback_chain_ends_in_software() {
+        let source = include_str!("window.rs");
+        let mut forces_software = false;
+        for line in source.lines() {
+            if line.contains('"') {
+                continue;
+            }
+            if line.contains("attempts.push((PRIMARY_GPU_BACKEND, true))") {
+                forces_software = true;
+            }
+        }
+        assert!(
+            forces_software,
+            "request_graphics no longer retries with force_fallback_adapter; \
+             a machine with no GPU driver cannot open a window without it"
+        );
+        assert!(
+            source.contains("force_fallback_adapter: force_software"),
+            "try_backend no longer passes the software flag through to wgpu"
+        );
+    }
 
     #[test]
     fn a_command_that_says_exit_always_exits() {
