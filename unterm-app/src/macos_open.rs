@@ -365,3 +365,53 @@ pub fn trace(message: &str) {
         let _ = writeln!(file, "{stamp} {message}");
     }
 }
+
+/// Ask macOS to keep our Finder extension switched on.
+///
+/// Replacing the app bundle re-registers the extension as a new plug-in, and
+/// a newly registered one is not enabled: the "Open in Unterm" item simply
+/// stops being in the right-click menu, with nothing said about why. The user
+/// upgraded, so from their side the feature disappeared in a release.
+///
+/// `pluginkit -e use` is the same switch the Extensions pane writes, and an
+/// app may throw it for an extension it ships itself. Cheap enough to do on
+/// every launch: when the extension is already on, this changes nothing.
+///
+/// Best-effort throughout. A machine without `pluginkit`, or one where the
+/// user turned the extension off on purpose and we lose that argument, is not
+/// a reason to hold up a terminal starting -- so nothing here can fail loudly.
+pub fn keep_finder_extension_enabled() {
+    const EXTENSION_ID: &str = "ai.unzoo.unterm.finder-sync";
+    std::thread::spawn(|| {
+        let listed = std::process::Command::new("/usr/bin/pluginkit")
+            .args(["-mv", "-p", "com.apple.FinderSync"])
+            .output();
+        let Ok(listed) = listed else {
+            return;
+        };
+        let listing = String::from_utf8_lossy(&listed.stdout);
+        // The flag is the first column: '+' enabled, '-' disabled by the
+        // user, blank for a plug-in that has been registered and never
+        // answered for. Only the blank one is ours to settle -- a '-' is a
+        // decision somebody made, and turning it back on would be arguing.
+        let ours = listing
+            .lines()
+            .find(|line| line.contains(EXTENSION_ID));
+        let Some(ours) = ours else {
+            return;
+        };
+        let flag = ours.chars().next().unwrap_or(' ');
+        if flag == '+' || flag == '-' {
+            return;
+        }
+        let enabled = std::process::Command::new("/usr/bin/pluginkit")
+            .args(["-e", "use", "-i", EXTENSION_ID])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        trace(&format!(
+            "finder extension was registered but not enabled; enabling: {}",
+            if enabled { "ok" } else { "failed" }
+        ));
+    });
+}

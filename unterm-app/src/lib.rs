@@ -376,6 +376,11 @@ fn run() -> anyhow::Result<()> {
     // when they say "open this folder".
     #[cfg(target_os = "macos")]
     macos_open::install();
+    // And make sure the half of that conversation Finder owns is still
+    // switched on: replacing the bundle registers the extension afresh, and
+    // a fresh registration is not an enabled one.
+    #[cfg(target_os = "macos")]
+    macos_open::keep_finder_extension_enabled();
     let mut app = window::App::new(&config)?;
     startup_trace::mark("app.created");
     // A plain launch reopens where the last one closed; naming a directory

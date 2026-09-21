@@ -7354,6 +7354,48 @@ mod tests {
         Ok(())
     }
 
+    /// The screen learns its new size before the kernel is told.
+    ///
+    /// `master.resize` raises SIGWINCH, and a full-screen program answers by
+    /// repainting at once -- absolute cursor moves and a fresh scroll region,
+    /// in numbers that only mean the right thing at the new size. The reader
+    /// thread feeds that to the screen as it lands. Telling the kernel first
+    /// leaves a gap in which the repaint is parsed against the old geometry,
+    /// and the caret ends up wherever that puts it: at the bottom edge, while
+    /// the program types somewhere else entirely. It is a race, so it shows
+    /// up "sometimes, in some windows".
+    ///
+    /// Asserted over the source because the two calls are one statement apart
+    /// with no seam between them to observe from a test. Lines carrying a
+    /// string literal are skipped so this cannot match its own prose.
+    #[test]
+    fn the_screen_is_resized_before_the_kernel_is_told() {
+        let source = include_str!("next_core/session_runtime.rs");
+        let mut screen_at = None;
+        let mut master_at = None;
+        for (index, line) in source.lines().enumerate() {
+            if line.contains('"') {
+                continue;
+            }
+            if screen_at.is_none() && line.contains("screen.lock().resize(cols, rows)") {
+                screen_at = Some(index);
+            }
+            if master_at.is_none() && line.contains("master.lock().resize(pty_size(cols, rows))") {
+                master_at = Some(index);
+            }
+        }
+        let screen_at = screen_at.expect("the screen is never resized");
+        let master_at = master_at.expect("the kernel is never told");
+        assert!(
+            screen_at < master_at,
+            "the kernel is told at line {master} and the screen only at \
+             {screen}; a program repainting on SIGWINCH would be parsed \
+             against the old geometry",
+            master = master_at,
+            screen = screen_at,
+        );
+    }
+
     #[test]
     fn screen_buffer_handles_alternate_screen_and_line_mutations() -> Result<()> {
         let _guard = test_guard();

@@ -45,15 +45,18 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
         chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
     ));
     let path = output_path.display().to_string().replace('\'', "''");
+    // Each of these runs with however many windows were found, including
+    // none: `foreach` over an empty array is a no-op, and the focus calls are
+    // guarded. Hiding is the only one worth waiting for.
     let hide_script = if hide_window {
-        "foreach ($win in $windows) { [UntermStatusCapture]::ShowWindow($win, 0) | Out-Null }\nStart-Sleep -Milliseconds 350"
+        "foreach ($win in $windows) { [UntermStatusCapture]::ShowWindow($win, 0) | Out-Null }\nif ($windows.Count -gt 0) { Start-Sleep -Milliseconds 350 }"
     } else {
-        "[UntermStatusCapture]::SetForegroundWindow($hwnd) | Out-Null\nStart-Sleep -Milliseconds 120"
+        "if ($hwnd -ne [IntPtr]::Zero) { [UntermStatusCapture]::SetForegroundWindow($hwnd) | Out-Null; Start-Sleep -Milliseconds 120 }"
     };
     let restore_script = if hide_window {
-        "foreach ($win in $windows) { [UntermStatusCapture]::ShowWindow($win, 5) | Out-Null }\n  [UntermStatusCapture]::SetForegroundWindow($hwnd) | Out-Null"
+        "foreach ($win in $windows) { [UntermStatusCapture]::ShowWindow($win, 5) | Out-Null }\n  if ($hwnd -ne [IntPtr]::Zero) { [UntermStatusCapture]::SetForegroundWindow($hwnd) | Out-Null }"
     } else {
-        "[UntermStatusCapture]::SetForegroundWindow($hwnd) | Out-Null"
+        "if ($hwnd -ne [IntPtr]::Zero) { [UntermStatusCapture]::SetForegroundWindow($hwnd) | Out-Null }"
     };
     let script = format!(
         r#"
@@ -84,9 +87,14 @@ public class UntermStatusCapture {{
 }}
 "@
 $proc = Get-Process -Id {pid} -ErrorAction Stop
-$windows = [UntermStatusCapture]::WindowsForPid([uint32]$proc.Id)
-if ($windows.Count -eq 0) {{ throw "No visible window handle" }}
-$hwnd = $windows[0]
+$windows = @([UntermStatusCapture]::WindowsForPid([uint32]$proc.Id))
+# Our own windows are for getting out of the way and for taking focus back
+# afterwards. Neither is what the user asked for, so not finding them is not
+# a reason to refuse: this used to throw before the picker was ever shown,
+# and a capture that never starts reads as a button that does nothing.
+# A parked window, a window on another desktop, or one the shell has not
+# finished mapping all count as none.
+$hwnd = if ($windows.Count -gt 0) {{ $windows[0] }} else {{ [IntPtr]::Zero }}
 {hide_script}
 try {{
   [System.Windows.Forms.Clipboard]::Clear()
@@ -155,12 +163,31 @@ try {{
     ]);
     use std::os::windows::process::CommandExt;
     command.creation_flags(0x08000000);
-    let status = command.status()?;
-    if !status.success() {
-        anyhow::bail!("PowerShell screenshot returned {status}");
+    // `output`, not `status`: PowerShell says why it stopped, and throwing
+    // that away is how a screenshot that never appears becomes "nothing
+    // happened". The script gives up before the picker is ever shown when it
+    // cannot find a visible window of ours, and that sentence is the whole
+    // diagnosis -- it just had nowhere to go.
+    let output = command.output()?;
+    if !output.status.success() {
+        let reason = String::from_utf8_lossy(&output.stderr);
+        // PowerShell wraps a terminating error in several lines of position
+        // and category; the first non-empty one carries the message.
+        let first = reason
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("");
+        if first.is_empty() {
+            anyhow::bail!("PowerShell screenshot returned {}", output.status);
+        }
+        anyhow::bail!("{first}");
     }
     if !output_path.exists() {
-        anyhow::bail!("screenshot file was not created: {}", output_path.display());
+        anyhow::bail!(
+            "the screen capture tool closed without producing an image ({})",
+            output_path.display()
+        );
     }
     Ok(output_path)
 }

@@ -50,10 +50,24 @@ pub(super) fn resize_session(
             session.snapshot.id
         );
     }
-    session.master.lock().resize(pty_size(cols, rows))?;
+    // Our own model first, the kernel second.
+    //
+    // `master.resize` raises SIGWINCH, and a full-screen program answers it
+    // by repainting immediately: absolute cursor moves, a new scroll region,
+    // rows addressed by numbers that only make sense at the new size. The
+    // reader thread hands all of that to the screen as it arrives, on its own
+    // thread -- so telling the kernel before the screen knows its new shape
+    // leaves a window in which the repaint is parsed against the old one.
+    // The cursor lands wherever the stale geometry puts it, which is what a
+    // TUI's caret sitting at the bottom edge while the program types
+    // somewhere else actually is.
+    //
+    // Reversed, the worst case is a repaint that arrives a moment late
+    // against a screen already the right size -- which is just a repaint.
+    session.screen.lock().resize(cols, rows);
     session.snapshot.cols = cols;
     session.snapshot.rows = rows;
-    session.screen.lock().resize(cols, rows);
+    session.master.lock().resize(pty_size(cols, rows))?;
     Ok(())
 }
 
