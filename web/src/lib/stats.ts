@@ -56,7 +56,7 @@ export interface Stats {
 const FALLBACK: Stats = {
   stars: null,
   downloads: null,
-  release: "v0.71.10",
+  release: "v0.71.11",
   // Not `[]`: an empty list is a claim that nothing is published, and this
   // is the value used precisely when we failed to find out.
   tags: null,

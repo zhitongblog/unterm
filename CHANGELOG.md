@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.71.11 — 2026-09-21
+
+### Fixed
+
+- **A full-screen program's caret could end up at the bottom edge while the
+  program typed somewhere else.** Resizing told the kernel first and the
+  screen second. `master.resize` raises SIGWINCH, and a program like Claude
+  Code answers it by repainting immediately — absolute cursor moves and a
+  fresh scroll region, in numbers that only mean the right thing at the new
+  size. The reader thread hands that to the screen as it arrives, on its own
+  thread, so there was a window in which the repaint was parsed against the
+  old geometry. The screen is resized first now. Being a race, it showed up
+  as "sometimes, in some windows".
+
+- **The screenshot button could do nothing at all on Windows.** The capture
+  script looked up our own windows before showing the picker and gave up if
+  it found none — but those handles are only used to get out of the way and
+  to take focus back afterwards, neither of which is what was asked for. A
+  parked window, one on another desktop, or one the shell had not finished
+  mapping all counted as none, and the capture was refused before the picker
+  ever appeared.
+
+- **A failed screenshot said only that it failed.** PowerShell's own
+  explanation was thrown away with the process's output, leaving an exit code
+  where the reason had been. Whatever it says now reaches the notice.
+
 ## v0.71.10 — 2026-09-20
 
 ### Fixed
