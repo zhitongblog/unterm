@@ -77,7 +77,7 @@
   "features.proxy.body": "Auto-detects system settings and supports manual HTTP/SOCKS URLs, nodes, rotation, and Clash/mihomo controllers.",
   "features.engine.title": "GPU rendering",
   "features.engine.body": "Built on Unterm's native next-core terminal engine with cross-platform wgpu rendering.",
-  "whatsnew.title": "v0.61 の新機能",
+  "whatsnew.title": "v0.71 の新着",
   "whatsnew.kernel61.title": "自社製カーネル:起動 22ms でライブなコントロールサーフェス",
   "whatsnew.kernel61.body": "Unterm はもう WezTerm フォークでは動いていません。<strong>next-core</strong> はこの製品のために書かれたターミナルカーネル — パーサー、スクリーンモデル、PTY ランタイム、フォントスタック、wgpu レンダラー — で、約 12k ソース行と 10 個の直接依存という予算に収めています。<strong>起動からライブな MCP サーフェスまで 22ms</strong>(旧カーネルは 7.1s)、アイドル時は 1 コアの 6.6%(旧 80%)、20 万行スループットは同等。旧カーネルとの機能パリティは 159 項目の要件台帳に対して一つずつ閉じ、タイポグラフィはプラットフォームネイティブに:macOS の本物のトラフィックライト、pt 正確なサイズ、そして CJK がついに正しく描画されます。詳しくは<a class=\"underline\" href=\"/blog/next-core-v061/\">ブログ</a>へ。",
   "whatsnew.configfix.title": "Config resilience — unknown fields no longer crash",
@@ -255,5 +255,15 @@
   "faq.q6": "Unterm はどのAIコーディングエージェントに対応していますか？",
   "faq.a6": "ランチャーから Claude Code、Codex CLI、Gemini CLI、OpenCode、Aider をそれぞれワンクリックでインストール・接続できます。コックピットの状態検出は kimi、trae、cursor-agent も標準で認識し、標準的なターミナルシグナル（タイトル、OSC 9/777、BEL）を発するエージェントなら何でも基本的な追跡が自動で効きます。どんなツールも「unterm-cli agent signal」で統合できます。",
   "whatsnew.core63.title": "セッションはウィンドウより長生きする——そしてインストールにやっと全部入った",
-  "whatsnew.core63.body": "<strong>unterm-core</strong> がセッションを所有します。ユーザーごとのプロセスが shell・スクロールバック・分割レイアウトを保持し、MCP サーフェス全体を提供し、ウィンドウを閉じても生き続けます(v0.62)。v0.63 はインストールが当然受け取るべきだったリリース:core デーモンが 6 種すべてのパッケージに実際に同梱され、設定ページが Core モードで動き、絵文字が初めて描画され(同梱フォントは FreeType が描けない COLRv1 でした)、ポーズ後のタイピング遅延が 96ms から 8ms に、macOS は新しいマークをまとい、エクスプローラーの右クリックに「Open in Unterm tab」が加わりました。"
+  "whatsnew.core63.body": "<strong>unterm-core</strong> がセッションを所有します。ユーザーごとのプロセスが shell・スクロールバック・分割レイアウトを保持し、MCP サーフェス全体を提供し、ウィンドウを閉じても生き続けます(v0.62)。v0.63 はインストールが当然受け取るべきだったリリース:core デーモンが 6 種すべてのパッケージに実際に同梱され、設定ページが Core モードで動き、絵文字が初めて描画され(同梱フォントは FreeType が描けない COLRv1 でした)、ポーズ後のタイピング遅延が 96ms から 8ms に、macOS は新しいマークをまとい、エクスプローラーの右クリックに「Open in Unterm tab」が加わりました。",
+  "whatsnew.gpu71.title": "グラフィックスドライバのないマシンでも端末が開く",
+  "whatsnew.gpu71.body": "起動はハードウェアの二経路だけを試して、そこで諦めていました。使えるディスプレイドライバのない Windows——仮想マシン、クリーンインストール、リモートセッション——では DX12 はアダプタを見つけてもサーフェスを構成できず、OpenGL には探すべきドライバがなく、端末は「no working GPU path」と言って起動を拒みます。WARP はそのマシンにずっとありました。D3D12 に同梱され、ドライバを必要としない——ただ誰も尋ねなかっただけです。フォールバック連鎖の最後がソフトウェアラスタライザになりました。",
+  "whatsnew.window68.title": "1 プロセス、N ウィンドウ。2 枚目は 31 ミリ秒",
+  "whatsnew.window68.body": "2 枚目のウィンドウはかつて 2 つ目の Unterm でした。もう一つの GPU アダプタ、もう一本の Core 接続、587 ミリ秒の待ち時間。いまは既に動いているプロセスの中に開き、31 ミリ秒です。ウィンドウを閉じても、シェルは Core に残って別のウィンドウへ引き継がれます。",
+  "whatsnew.host68.title": "エージェントを住まわせられる端末へ",
+  "whatsnew.host68.body": "各機能はリースの向こう側に置かれました。エージェントはリースを取得し、目に見える鍵のもとで使い、取り消せば失います。承認は答えられるものになり、問いは「これから何が起きるか」を述べます。",
+  "whatsnew.park66.title": "ウィンドウを閉じても、シェルは残る",
+  "whatsnew.park66.body": "「バックグラウンドで実行し続ける」が画面に痕跡を残すようになりました。三つのプラットフォームすべてでトレイインジケータが、生きているセッション数を告げ、ひと押しで格納したウィンドウを呼び戻します。",
+  "whatsnew.cjk64.title": "CJK：コピーは文字、選択は語、入力は壊れない",
+  "whatsnew.cjk64.body": "CJK の入力はかつて `<009d>` のようなバイトの屑に砕けました。コピーした文字列はグリッドのスペーサーセルを運び、貼り付けると穴が空いていました。いま全角文字は一文字です——選択でも、クリップボードでも、入力でも。"
 }

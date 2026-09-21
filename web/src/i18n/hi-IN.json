@@ -77,7 +77,7 @@
   "features.proxy.body": "Auto-detects system settings and supports manual HTTP/SOCKS URLs, nodes, rotation, and Clash/mihomo controllers.",
   "features.engine.title": "GPU rendering",
   "features.engine.body": "Built on Unterm's native next-core terminal engine with cross-platform wgpu rendering.",
-  "whatsnew.title": "v0.61 में नया क्या है",
+  "whatsnew.title": "v0.71 में नया क्या है",
   "whatsnew.kernel61.title": "हमारा अपना कर्नेल: लाइव कंट्रोल सरफ़ेस तक 22ms",
   "whatsnew.kernel61.body": "Unterm अब WezTerm फ़ोर्क पर नहीं चलता। <strong>next-core</strong> इसी उत्पाद के लिए लिखा गया टर्मिनल कर्नेल है — पार्सर, स्क्रीन मॉडल, PTY रनटाइम, फ़ॉन्ट स्टैक और एक wgpu रेंडरर — लगभग 12k सोर्स लाइनों और 10 सीधी डिपेंडेंसियों के बजट में। <strong>लॉन्च से लाइव MCP सरफ़ेस तक 22ms</strong> (पहले 7.1s), आइडल पर एक कोर का 6.6% (पहले 80%), 200k-लाइन थ्रूपुट बराबर। पुराने कर्नेल के साथ फ़ीचर समानता 159-आवश्यकता वाले लेजर के विरुद्ध एक-एक करके बंद की गई, प्लेटफ़ॉर्म-नेटिव टाइपोग्राफ़ी के साथ: macOS पर असली ट्रैफ़िक लाइट, pt-सटीक आकार, और CJK आख़िरकार सही रेंडर। पूरी कहानी <a class=\"underline\" href=\"/blog/next-core-v061/\">ब्लॉग</a> पर पढ़ें।",
   "whatsnew.configfix.title": "Config resilience — unknown fields no longer crash",

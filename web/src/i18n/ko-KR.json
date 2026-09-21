@@ -77,7 +77,7 @@
   "features.proxy.body": "Auto-detects system settings and supports manual HTTP/SOCKS URLs, nodes, rotation, and Clash/mihomo controllers.",
   "features.engine.title": "GPU rendering",
   "features.engine.body": "Built on Unterm's native next-core terminal engine with cross-platform wgpu rendering.",
-  "whatsnew.title": "v0.61의 새로운 기능",
+  "whatsnew.title": "v0.71의 새로운 기능",
   "whatsnew.kernel61.title": "자체 커널: 실행 22ms 만에 라이브 컨트롤 표면",
   "whatsnew.kernel61.body": "Unterm은 더 이상 WezTerm 포크 위에서 동작하지 않습니다. <strong>next-core</strong>는 이 제품을 위해 새로 작성한 터미널 커널입니다 — 파서, 스크린 모델, PTY 런타임, 폰트 스택, wgpu 렌더러 — 약 12k 소스 라인과 10개의 직접 의존성이라는 예산 안에서. <strong>실행부터 라이브 MCP 표면까지 22ms</strong>(이전 7.1s), 유휴 시 코어의 6.6%(이전 80%), 20만 라인 처리량은 동일. 이전 커널과의 기능 패리티는 159개 요구사항 장부에 대해 항목별로 닫았고, 타이포그래피는 플랫폼 네이티브로: macOS의 진짜 신호등 버튼, pt 단위로 정확한 크기, 그리고 마침내 제대로 렌더링되는 CJK. 자세한 이야기는 <a class=\"underline\" href=\"/blog/next-core-v061/\">블로그</a>에서.",
   "whatsnew.configfix.title": "Config resilience — unknown fields no longer crash",

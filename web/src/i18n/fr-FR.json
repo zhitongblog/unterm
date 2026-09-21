@@ -77,7 +77,7 @@
   "features.proxy.body": "Auto-detects system settings and supports manual HTTP/SOCKS URLs, nodes, rotation, and Clash/mihomo controllers.",
   "features.engine.title": "GPU rendering",
   "features.engine.body": "Built on Unterm's native next-core terminal engine with cross-platform wgpu rendering.",
-  "whatsnew.title": "Nouveautés de la v0.61",
+  "whatsnew.title": "Nouveautés de la v0.71",
   "whatsnew.kernel61.title": "Notre propre noyau : 22 ms jusqu'à une surface de contrôle active",
   "whatsnew.kernel61.body": "Unterm ne tourne plus sur un fork de WezTerm. <strong>next-core</strong> est un noyau de terminal écrit pour ce produit — parseur, modèle d'écran, runtime PTY, pile de polices et un moteur de rendu wgpu — tenu à un budget d'environ 12k lignes de source et 10 dépendances directes. <strong>22 ms du lancement à une surface MCP active</strong> (contre 7,1 s), 6,6 % d'un cœur au repos (contre 80 %), débit identique sur 200k lignes. La parité fonctionnelle avec l'ancien noyau a été fermée point par point contre un registre de 159 exigences, avec une typographie native par plateforme : de vrais feux tricolores sur macOS, des tailles exactes au pt, et le CJK enfin rendu correctement. Lisez l'histoire sur le <a class=\"underline\" href=\"/blog/next-core-v061/\">blog</a>.",
   "whatsnew.configfix.title": "Config resilience — unknown fields no longer crash",

@@ -369,7 +369,7 @@
   "install.macos.size": "47 MB",
   "install.linux.size": "26 / 41 MB",
   "install.windows.size": "41 / 48 MB",
-  "whatsnew.title": "v0.61 新特性",
+  "whatsnew.title": "v0.71 有什么新变化",
   "whatsnew.perf54.title": "冷启动快 2.8 倍,输出洪峰不再空转 CPU",
   "whatsnew.perf54.body": "一个性能版本。<strong>冷启动 ~780ms → ~280ms。</strong>五项启动路径优化:config 键改为对预计算集合校验,不再每个键重建整个 config(Lua 求值 297ms → 8ms);跳过多余的第二次 config 加载;WSL 发行版改从注册表读取,不再启动 <code>wsl.exe</code>;1119 个内置配色并行解析;GL 上下文在命令行解析后立刻在辅助线程预热。<strong>输出洪峰不再吃满一个 CPU 核。</strong>Windows 上,被节流的 <code>WM_PAINT</code> 处理器过去没有校验更新区域,导致持续输出时消息循环空转在约 91% 的核;现在降到约 4%。<strong>洪峰中 MCP 保持响应</strong>(过去 30s 超时,现在几十毫秒应答)。另修复:终端首行不再被顶栏遮住;设置菜单预热不再因字形图集过小而失败;<code>unterm-cli</code> 不带 <code>--id</code> 时会作用到你正看着的那个 pane。",
   "whatsnew.composer53.title": "给 agent 排队发 prompt,一眼看清 Git",
@@ -512,5 +512,15 @@
   "whatsnew.autowire.title": "Agent 启动即自动接上 Unterm 的 MCP",
   "whatsnew.autowire.body": "从 Unterm 里启动 Claude Code / Codex / Gemini / OpenCode，它们开箱就连在<em>这个</em>终端的 MCP 服务上——不用手动配置。新增的 <code class=\"font-mono text-xs\">unterm-cli mcp-stdio</code> 桥接说 MCP 的 stdio 协议，把每一次调用代理给正在运行的实例的控制服务；于是启动器可以把各家 agent 自己的 MCP 配置（Claude Code 用 <code class=\"font-mono text-xs\">.mcp.json</code>、Codex 用 <code class=\"font-mono text-xs\">~/.codex/config.toml</code>、Gemini 用 <code class=\"font-mono text-xs\">~/.gemini/settings.json</code>、OpenCode 用 <code class=\"font-mono text-xs\">opencode.json</code>——各按各自的 schema 写，是合并不是覆盖）指向这座桥。agent 从第一句提示词起就能驱动它所在的终端。v0.22 同期还有：分屏焦点改用活动 pane 上的一道细强调条（不再是刺眼的整框），每个 pane 的滚动条不再溢到状态栏，Notion Light / Notion Dark 两个主题终于能在 Web Settings 里正确显示并生效。",
   "whatsnew.reflexive.title": "session.split + session.focus，外加 MCP 信任面板",
-  "whatsnew.reflexive.body": "三块拼图，把「AI 驱动终端——包括它自己所在的那个」这个闭环合上。<code class=\"font-mono text-xs\">session.split</code> 让 agent 不必模拟按键就能把 pane 向左/右/上/下分开；<code class=\"font-mono text-xs\">session.focus</code> 把新 pane 设为活动，让这次交接在用户眼里是可见的。上面那段实时演示用的就是这两个。Web Settings 新增 <strong>MCP</strong> 标签页：一份运行时信任列表（带每个 agent 的写入次数和一键撤销），外加最近 80 次被审计的写入尝试，可排序表格呈现。信任状态持久化到 <code class=\"font-mono text-xs\">~/.unterm/trusted_agents.json</code>，所以 Alt+A 能扛过重启。新增 <a href=\"/docs/agent-recipes\" class=\"underline\">/docs/agent-recipes</a> 页，收了 9 段可直接复制的 Python 片段。"
+  "whatsnew.reflexive.body": "三块拼图，把「AI 驱动终端——包括它自己所在的那个」这个闭环合上。<code class=\"font-mono text-xs\">session.split</code> 让 agent 不必模拟按键就能把 pane 向左/右/上/下分开；<code class=\"font-mono text-xs\">session.focus</code> 把新 pane 设为活动，让这次交接在用户眼里是可见的。上面那段实时演示用的就是这两个。Web Settings 新增 <strong>MCP</strong> 标签页：一份运行时信任列表（带每个 agent 的写入次数和一键撤销），外加最近 80 次被审计的写入尝试，可排序表格呈现。信任状态持久化到 <code class=\"font-mono text-xs\">~/.unterm/trusted_agents.json</code>，所以 Alt+A 能扛过重启。新增 <a href=\"/docs/agent-recipes\" class=\"underline\">/docs/agent-recipes</a> 页，收了 9 段可直接复制的 Python 片段。",
+  "whatsnew.gpu71.title": "没有显卡驱动的机器，也能把终端打开",
+  "whatsnew.gpu71.body": "启动只试硬件那两条路，试完就不试了。一台没有可用显示驱动的 Windows 机器上——虚拟机、干净装的系统、远程桌面——DX12 找得到适配器却配不出表面，OpenGL 压根没有驱动可找，于是终端以「no working GPU path」拒绝启动，而 WARP 一直在那台机器上：它随 D3D12 发货，不需要任何驱动，只是从来没人问过它。现在回退链的末端是软件光栅器。同一版里：`unterm-cli start` 交接不成而另起一个进程时会说出来——那个退路要付出一份额外的 GPU 适配器和一个共用的 Core；provider manifest 也终于能通过读它的那份契约。",
+  "whatsnew.window68.title": "一个进程，N 扇窗，第二扇 31 毫秒",
+  "whatsnew.window68.body": "第二扇窗从前是第二个 Unterm：又一个 GPU 适配器、又一条 Core 连接、587 毫秒的等待。现在它开在已经跑着的那个进程里，31 毫秒。窗口有了 id，`instance.new_window` 会回答它刚造出来的那一个，`instance.focus` 认它；一个会话只属于一扇窗，关窗关掉的是视图，shell 留在 Core 里交给剩下的窗。只有最后一扇窗才问你是不是真要退出。",
+  "whatsnew.host68.title": "能把 agent 托管进去的终端，而不是隔着玻璃喊话",
+  "whatsnew.host68.body": "能力现在住在租约后面：agent 申请一份，在一把你看得见的钥匙下使用，你撤销时它就失去——而不是每个调用方都攥着同一个没有边界的 socket。批准变得可以回答了，问题说的是「接下来要发生什么」，而不是碰巧实现它的那个方法名。fleet 改为持久存储而不是一个 JSON 文件，跑到一半崩了不再丢掉「谁在做什么」。",
+  "whatsnew.park66.title": "关掉窗口，shell 留着",
+  "whatsnew.park66.body": "「在后台继续运行」终于在屏幕上留下了东西——三个平台都有的托盘指示器，报出还活着几个会话，一次点击把驻留的窗口唤回来。agent 也能做同一件事：`instance.focus` 会唤醒一扇驻留的窗，而不是在它上面失败。两个关闭按钮不再对你的 shell 各执一词——正是那个分歧让「关闭」按哪一个意思就变一次。",
+  "whatsnew.cjk64.title": "中日韩文字：复制是字，选中是词，输入不碎",
+  "whatsnew.cjk64.body": "输入中日韩文字曾经碎成 `<009d>` 那样的字节垃圾——GUI 把一个自己从没设过的 locale 交给了 shell。复制出来的是网格里的占位格而不是文字，于是粘贴回来带着窟窿。双击选中半个词，另一半丢了。现在宽字符就是一个字符：选中时是，剪贴板上是，输入进来也是。另外重绘风暴也结束了——比较帧的方式错了，于是不管有没有东西动过都重画一遍。"
 }

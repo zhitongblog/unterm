@@ -77,7 +77,7 @@
   "features.proxy.body": "自動偵測系統代理，也支援手動 HTTP/SOCKS URL、節點、輪替與 Clash/mihomo 控制器。",
   "features.engine.title": "GPU rendering",
   "features.engine.body": "使用 Unterm 原生 next-core 終端引擎與跨平台 wgpu 渲染。",
-  "whatsnew.title": "v0.61 新功能",
+  "whatsnew.title": "v0.71 有什麼新變化",
   "whatsnew.kernel61.title": "自研核心：啟動 22ms 即有可用控制面",
   "whatsnew.kernel61.body": "Unterm 不再基於 WezTerm fork。<strong>next-core</strong> 是為本產品自研的終端核心——解析器、螢幕模型、PTY 執行時、字型堆疊、wgpu 渲染器，並以 ~12k 原始碼行 / 10 個直接相依為硬預算。<strong>啟動到 MCP 控制面就緒 22ms</strong>（舊核心 7.1s），閒置佔用 6.6% 單核（舊 80%），20 萬行輸出吞吐持平。對舊核心的功能對齊按 159 項需求清單逐項收口，排版全面原生化：macOS 真紅綠燈、pt 精確字級、CJK 渲染徹底修正。詳見<a class=\"underline\" href=\"/blog/next-core-v061/\">部落格</a>。",
   "whatsnew.configfix.title": "Config resilience — unknown fields no longer crash",
@@ -255,5 +255,15 @@
   "faq.q6": "Unterm 支援哪些 AI 編碼 agent？",
   "faq.a6": "啟動器可一鍵安裝並接好 Claude Code、Codex CLI、Gemini CLI、OpenCode 和 Aider。座艙的狀態偵測還能開箱辨識 kimi、trae 和 cursor-agent；任何會發出標準終端訊號（標題、OSC 9/777、BEL）的 agent 都能自動獲得基本追蹤。任何工具都可以透過「unterm-cli agent signal」整合。",
   "whatsnew.core63.title": "工作階段活得比視窗久——而且安裝包這次真的裝得全",
-  "whatsnew.core63.body": "<strong>unterm-core</strong> 現在持有你的工作階段:每使用者一個行程,裝著 shell、回捲與分割配置,承載整個 MCP 控制面,關掉視窗也不消失(v0.62)。v0.63 是安裝體驗該得的那一版:core 守護行程真正進了全部六種安裝包;設定頁在 Core 模式下可用;emoji 第一次畫得出來——捆綁的字型是 FreeType 畫不了的 COLRv1;停頓後打字延遲從 96ms 降到 8ms;macOS 換上新標;Windows 右鍵新增「Open in Unterm tab」。"
+  "whatsnew.core63.body": "<strong>unterm-core</strong> 現在持有你的工作階段:每使用者一個行程,裝著 shell、回捲與分割配置,承載整個 MCP 控制面,關掉視窗也不消失(v0.62)。v0.63 是安裝體驗該得的那一版:core 守護行程真正進了全部六種安裝包;設定頁在 Core 模式下可用;emoji 第一次畫得出來——捆綁的字型是 FreeType 畫不了的 COLRv1;停頓後打字延遲從 96ms 降到 8ms;macOS 換上新標;Windows 右鍵新增「Open in Unterm tab」。",
+  "whatsnew.gpu71.title": "沒有顯示卡驅動的機器，也能把終端打開",
+  "whatsnew.gpu71.body": "啟動只試硬體那兩條路，試完就不試了。一台沒有可用顯示驅動的 Windows 機器上——虛擬機、乾淨安裝的系統、遠端桌面——DX12 找得到配接器卻配不出表面，OpenGL 根本沒有驅動可找，於是終端以「no working GPU path」拒絕啟動，而 WARP 一直在那台機器上：它隨 D3D12 出貨，不需要任何驅動，只是從來沒人問過它。現在回退鏈的末端是軟體光柵器。同一版裡：`unterm-cli start` 交接不成而另起一個行程時會說出來；provider manifest 也終於能通過讀它的那份契約。",
+  "whatsnew.window68.title": "一個行程，N 扇窗，第二扇 31 毫秒",
+  "whatsnew.window68.body": "第二扇窗從前是第二個 Unterm：又一個 GPU 配接器、又一條 Core 連線、587 毫秒的等待。現在它開在已經跑著的那個行程裡，31 毫秒。視窗有了 id，一個工作階段只屬於一扇窗，關窗關掉的是檢視，shell 留在 Core 裡交給剩下的窗。只有最後一扇窗才問你是不是真要離開。",
+  "whatsnew.host68.title": "能把 agent 託管進去的終端，而不是隔著玻璃喊話",
+  "whatsnew.host68.body": "能力現在住在租約後面：agent 申請一份，在一把你看得見的鑰匙下使用，你撤銷時它就失去。批准變得可以回答了，問題說的是「接下來要發生什麼」，而不是碰巧實作它的那個方法名。fleet 改為持久儲存，跑到一半當掉不再丟掉「誰在做什麼」。",
+  "whatsnew.park66.title": "關掉視窗，shell 留著",
+  "whatsnew.park66.body": "「在背景繼續執行」終於在螢幕上留下了東西——三個平台都有的系統匣指示器，報出還活著幾個工作階段，一次點擊把駐留的視窗喚回來。agent 也能做同一件事。兩個關閉按鈕不再對你的 shell 各執一詞。",
+  "whatsnew.cjk64.title": "中日韓文字：複製是字，選取是詞，輸入不碎",
+  "whatsnew.cjk64.body": "輸入中日韓文字曾經碎成 `<009d>` 那樣的位元組垃圾。複製出來的是網格裡的佔位格而不是文字，於是貼上回來帶著窟窿。雙擊選取半個詞，另一半丟了。現在寬字元就是一個字元：選取時是，剪貼簿上是，輸入進來也是。"
 }
