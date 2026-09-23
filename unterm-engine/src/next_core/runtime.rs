@@ -11,6 +11,7 @@ mod pump;
 pub(in crate::next_core) mod queue;
 mod recording_executor;
 mod recording_facade;
+mod resize_settle;
 mod response;
 mod scheduler;
 mod scheduling;
@@ -37,6 +38,9 @@ pub(super) use session_facade::{
     clone_session_base, create_session, destroy, focus, get_session, insert_created, list_sessions,
     next_session_id, resize, set_split_ratio, split_session, with_session, with_session_optional,
 };
+pub(super) use resize_settle::resize_settled;
+#[cfg(test)]
+pub(super) use resize_settle::{shrink_pending, SHRINK_SETTLE};
 pub(super) use status_facade::{health_snapshot, output, session_activity, shell_snapshot};
 
 #[derive(Default)]

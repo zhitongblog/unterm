@@ -1367,7 +1367,20 @@ fn dispatch_inner(
                 .get("rows")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(30) as usize;
-            engine.resize_session(pane_id, cols, rows)?;
+            // A window laying itself out marks its resizes: those pass through
+            // provisional sizes on the way to the real one, and a shrink that
+            // is taken back must never reach the pane. Anyone else asked for
+            // exactly this size and gets it now.
+            let settle = request
+                .params
+                .get("settle")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if settle {
+                engine.resize_session_settled(pane_id, cols, rows)?;
+            } else {
+                engine.resize_session(pane_id, cols, rows)?;
+            }
             serde_json::to_string(&response_ok(
                 id,
                 serde_json::json!({"resized": true}),
@@ -2235,6 +2248,18 @@ impl CoreEngineClient {
     fn call_unit(&self, method: &str, params: serde_json::Value) -> Result<()> {
         let _: serde_json::Value = self.call(method, params)?;
         Ok(())
+    }
+
+    /// Mirror of `NextCoreEngine::resize_session_settled`: the resize a
+    /// window sends while laying itself out, whose shrinks wait to be sure.
+    ///
+    /// A Core too old to know the flag ignores it and resizes at once, which
+    /// is what it always did.
+    pub fn resize_session_settled(&self, pane_id: usize, cols: usize, rows: usize) -> Result<()> {
+        self.call_unit(
+            "session.resize",
+            serde_json::json!({"pane_id": pane_id, "cols": cols, "rows": rows, "settle": true}),
+        )
     }
 
     /// Mirror of `NextCoreEngine::pane_modes`, which the GUI needs per
@@ -3564,6 +3589,46 @@ mod tests {
         facade.destroy_session(pane_id).unwrap();
 
         let mut owner = CoreClient::connect(endpoint, "facade-token").unwrap();
+        let _: Response<serde_json::Value> = owner.request("core.shutdown").unwrap();
+        worker.join().unwrap();
+    }
+
+    /// A window's shrink waits and can be taken back; anyone else's applies.
+    ///
+    /// The window marks its resizes with `settle`, because it passes through
+    /// sizes it does not mean -- and a shrink it takes back a moment later
+    /// had already cut the pane's screen to pieces the program in it never
+    /// knew about. An agent asking for a size means it, and gets it at once.
+    #[test]
+    fn a_window_shrink_settles_but_an_explicit_resize_does_not() {
+        let (endpoint, worker) = start_server("settle-token");
+        let facade = CoreEngineClient::connect(endpoint, "settle-token").unwrap();
+        let pane_id = facade
+            .create_session(CreateSessionRequest {
+                cols: 120,
+                rows: 40,
+                command_dir: None,
+                command: Some(CommandBuilder::from_argv(shell_argv())),
+                env: Vec::new(),
+                launch_policy: Default::default(),
+            })
+            .unwrap()
+            .id;
+
+        facade.resize_session_settled(pane_id, 60, 20).unwrap();
+        let waiting = facade.get_session(pane_id).unwrap();
+        assert_eq!((waiting.cols, waiting.rows), (120, 40), "the shrink waits");
+        facade.resize_session_settled(pane_id, 120, 40).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let kept = facade.get_session(pane_id).unwrap();
+        assert_eq!((kept.cols, kept.rows), (120, 40), "taken back, it never happened");
+
+        facade.resize_session(pane_id, 60, 20).unwrap();
+        let explicit = facade.get_session(pane_id).unwrap();
+        assert_eq!((explicit.cols, explicit.rows), (60, 20), "an explicit size applies at once");
+
+        facade.destroy_session(pane_id).unwrap();
+        let mut owner = CoreClient::connect(endpoint, "settle-token").unwrap();
         let _: Response<serde_json::Value> = owner.request("core.shutdown").unwrap();
         worker.join().unwrap();
     }

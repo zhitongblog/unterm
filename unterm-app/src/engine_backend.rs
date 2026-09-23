@@ -418,8 +418,12 @@ impl SessionEngine for AppEngine {
         route!(self, engine => engine.activity(pane_id))
     }
 
+    /// Every resize this front end makes is a window laying itself out, so
+    /// every one of them settles: a shrink that is taken back a moment later
+    /// -- a provisional window size, a backlog of events after a stall --
+    /// never reaches the pane. See `NextCoreEngine::resize_session_settled`.
     fn resize_session(&self, pane_id: usize, cols: usize, rows: usize) -> Result<()> {
-        route!(self, engine => engine.resize_session(pane_id, cols, rows))
+        route!(self, engine => engine.resize_session_settled(pane_id, cols, rows))
     }
 
     fn destroy_session(&self, pane_id: usize) -> Result<()> {

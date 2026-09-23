@@ -1840,6 +1840,13 @@ impl App {
             let Ok(snapshot) = self.engine.read_styled_screen(placement.session_id) else {
                 continue;
             };
+            // The screen can be bigger than the space it is drawn in for a
+            // moment -- a shrink waits to be sure before it reaches the pane --
+            // and nothing below stops at the pane's edge on its own. Unclipped,
+            // those rows land on the status bar and those columns on the pane
+            // beside it.
+            let snapshot = crate::terminal::clip_to_grid(&snapshot, placement.cols, placement.rows)
+                .unwrap_or(snapshot);
             let background_start = quads.backgrounds.len();
             let glyph_start = quads.glyphs.len();
             if placement.session_id == session_id {

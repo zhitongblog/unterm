@@ -35,21 +35,27 @@ pub(super) fn resize(
     resize_session(session, cols, rows)
 }
 
+/// Refuse a size no pane should be given.
+///
+/// A limit on believing the caller, not a rendering limit: a pane keeping a
+/// size it is no longer drawn at wraps oddly until the next real resize,
+/// where a pane resized to one column has lost its output for good.
+pub(super) fn check_grid(pane_id: usize, cols: usize, rows: usize) -> Result<()> {
+    let floor = crate::MIN_SESSION_GRID;
+    if cols < floor || rows < floor {
+        anyhow::bail!(
+            "refusing to resize pane {pane_id} to {cols}x{rows}: a grid below {floor}x{floor} discards the pane's lines and scrollback rather than reflowing them"
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn resize_session(
     session: &mut NextCoreSession,
     cols: usize,
     rows: usize,
 ) -> Result<()> {
-    // A limit on believing the caller, not a rendering limit: a pane keeping
-    // a size it is no longer drawn at wraps oddly until the next real resize,
-    // where a pane resized to one column has lost its output for good.
-    let floor = crate::MIN_SESSION_GRID;
-    if cols < floor || rows < floor {
-        anyhow::bail!(
-            "refusing to resize pane {} to {cols}x{rows}: a grid below {floor}x{floor} discards the pane's lines and scrollback rather than reflowing them",
-            session.snapshot.id
-        );
-    }
+    check_grid(session.snapshot.id, cols, rows)?;
     // Our own model first, the kernel second.
     //
     // `master.resize` raises SIGWINCH, and a full-screen program answers it

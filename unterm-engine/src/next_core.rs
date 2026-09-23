@@ -1629,6 +1629,7 @@ impl NextCoreScreen {
     }
 
     fn resize(&mut self, cols: usize, rows: usize) {
+        let changed = (cols.max(1), rows.max(1)) != (self.cols, self.rows);
         self.cols = cols.max(1);
         self.rows = rows.max(1);
         self.bump_revision();
@@ -1644,6 +1645,15 @@ impl NextCoreScreen {
             alternate.tab_stops.retain(|stop| *stop < cols);
             alternate.cursor_x = alternate.cursor_x.min(cols.saturating_sub(1));
             alternate.saved_cursor_x = alternate.saved_cursor_x.min(cols.saturating_sub(1));
+            if changed {
+                // The main screen waiting behind a full-screen program gets
+                // the same treatment as the live one below: the region it
+                // saved was for a size the pane no longer has.
+                alternate.scroll_top = 0;
+                alternate.scroll_bottom = rows.max(1) - 1;
+                alternate.left_margin = 0;
+                alternate.right_margin = cols - 1;
+            }
         }
         self.tab_stops.retain(|stop| *stop < cols);
         if self.lines.len() > self.rows {
@@ -1661,17 +1671,32 @@ impl NextCoreScreen {
         self.cursor_x = self.cursor_x.min(self.cols.saturating_sub(1));
         self.saved_cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
         self.cursor_y = self.cursor_y.min(self.rows.saturating_sub(1));
-        self.scroll_top = self.scroll_top.min(self.rows.saturating_sub(1));
-        self.scroll_bottom = self.scroll_bottom.min(self.rows.saturating_sub(1));
-        if self.scroll_top >= self.scroll_bottom {
+        if changed {
+            // A new size means the whole screen scrolls again, as in xterm.
+            // Clamping the old region only ever shrank it, so a pane that grew
+            // from 20 rows to 43 went on scrolling inside the first 20. The
+            // main screen hides that -- its viewport is filled from the
+            // scrollback -- but the alternate screen has nothing behind it: a
+            // program scrolling with newlines scrolled a band at the top of
+            // the pane, and its cursor never got below it. A program that
+            // wants a region sets one again when it hears the new size.
             self.scroll_top = 0;
             self.scroll_bottom = self.rows.saturating_sub(1);
-        }
-        self.left_margin = self.left_margin.min(self.cols.saturating_sub(1));
-        self.right_margin = self.right_margin.min(self.cols.saturating_sub(1));
-        if self.left_margin >= self.right_margin {
             self.left_margin = 0;
             self.right_margin = self.cols.saturating_sub(1);
+        } else {
+            self.scroll_top = self.scroll_top.min(self.rows.saturating_sub(1));
+            self.scroll_bottom = self.scroll_bottom.min(self.rows.saturating_sub(1));
+            if self.scroll_top >= self.scroll_bottom {
+                self.scroll_top = 0;
+                self.scroll_bottom = self.rows.saturating_sub(1);
+            }
+            self.left_margin = self.left_margin.min(self.cols.saturating_sub(1));
+            self.right_margin = self.right_margin.min(self.cols.saturating_sub(1));
+            if self.left_margin >= self.right_margin {
+                self.left_margin = 0;
+                self.right_margin = self.cols.saturating_sub(1);
+            }
         }
         self.ensure_cursor_line();
     }
@@ -1966,11 +1991,45 @@ impl NextCoreScreen {
         self.saved_cursor_y = main.saved_cursor_y;
         self.saved_cursor_attr = main.saved_cursor_attr;
         if self.lines.len() > self.rows {
+            // The pane got shorter while the program was on the alternate
+            // screen. What no longer fits scrolled off the top, the same as
+            // a resize on the main screen would have done -- into the
+            // scrollback, not into nothing.
             let trim = self.lines.len() - self.rows;
-            self.lines.drain(..trim);
+            let drained = self.lines.drain(..trim).collect::<Vec<_>>();
+            let trimmed = self
+                .history
+                .extend_scrollback(drained, self.scrollback_limit);
+            self.trim_prompt_rows(trimmed);
             self.cursor_y = self.cursor_y.saturating_sub(trim);
             self.saved_cursor_y = self.saved_cursor_y.saturating_sub(trim);
         }
+        // Everything else the main screen saved was measured against the size
+        // it had when the program started. `resize` fits the live screen to a
+        // new size; nothing fitted the saved one. A scroll region still ending
+        // on row 42 of what is now a 20-row pane means a newline at the bottom
+        // no longer scrolls: the shell's output piles up on the last row and
+        // its cursor sits somewhere other than where it is typing.
+        let last_row = self.rows.saturating_sub(1);
+        let last_col = self.cols.saturating_sub(1);
+        self.cursor_x = self.cursor_x.min(last_col);
+        self.cursor_y = self.cursor_y.min(last_row);
+        self.saved_cursor_x = self.saved_cursor_x.min(last_col);
+        self.saved_cursor_y = self.saved_cursor_y.min(last_row);
+        self.scroll_top = self.scroll_top.min(last_row);
+        self.scroll_bottom = self.scroll_bottom.min(last_row);
+        if self.scroll_top >= self.scroll_bottom {
+            self.scroll_top = 0;
+            self.scroll_bottom = last_row;
+        }
+        self.left_margin = self.left_margin.min(last_col);
+        self.right_margin = self.right_margin.min(last_col);
+        if self.left_margin >= self.right_margin {
+            self.left_margin = 0;
+            self.right_margin = last_col;
+        }
+        let cols = self.cols;
+        self.tab_stops.retain(|stop| *stop < cols);
         self.ensure_cursor_line();
         self.mark_all_dirty();
     }
@@ -1992,6 +2051,17 @@ impl NextCoreEngine {
     #[doc(hidden)]
     pub fn debug_output(&self, pane_id: usize) -> Result<String> {
         runtime::output(pane_id)
+    }
+
+    /// Resize a pane to the size a window is drawing it at.
+    ///
+    /// Unlike `resize_session`, a shrink waits until the size has held for a
+    /// moment, and one taken back before then never happens -- see
+    /// `runtime::resize_settle` for why a passing shrink is not harmless.
+    /// Front ends laying out windows call this; an explicit request for a
+    /// size, such as an agent's `session.resize`, keeps `resize_session`.
+    pub fn resize_session_settled(&self, pane_id: usize, cols: usize, rows: usize) -> Result<()> {
+        runtime::resize_settled(pane_id, cols, rows)
     }
 
     pub fn scroll_viewport_to(&self, pane_id: usize, target: isize) -> Result<()> {
@@ -4125,6 +4195,160 @@ mod tests {
             "the cursor must keep its distance from the bottom, which is what \
              a full-screen program positions its interface against"
         );
+
+        engine.destroy_session(session.id)?;
+        Ok(())
+    }
+
+    /// A pane that grew scrolls across its whole new height.
+    ///
+    /// Resizing used to clamp the scroll region and never widen it, so after
+    /// growing from 5 rows to 10 a program on the alternate screen -- which
+    /// has no scrollback to paint the rest of the pane from -- scrolled a
+    /// band of 5 rows at the top, and its cursor never went below it.
+    #[test]
+    fn a_pane_that_grew_scrolls_its_whole_height() {
+        let mut screen = NextCoreScreen::new(20, 5);
+        screen.feed("\x1b[?1049h");
+        screen.resize(20, 10);
+        for n in 0..20 {
+            screen.feed(&format!("l{n}\r\n"));
+        }
+        assert_eq!((screen.scroll_top, screen.scroll_bottom), (0, 9));
+        assert_eq!(screen.cursor_y, 9, "the cursor reaches the new bottom row");
+        let text = |row: usize| NextCoreScreen::line_text(&screen.lines[row]).trim_end().to_string();
+        assert_eq!(text(8), "l19");
+        assert_eq!(text(0), "l11", "all ten rows are in use");
+    }
+
+    /// A region a program set is kept when the size does not change.
+    ///
+    /// The reset above is for a new size; a resize that repeats the current
+    /// one must not undo a region the program is scrolling inside.
+    #[test]
+    fn a_resize_to_the_same_size_keeps_the_programs_region() {
+        let mut screen = NextCoreScreen::new(20, 10);
+        screen.feed("\x1b[?1049h\x1b[3;7r");
+        screen.resize(20, 10);
+        assert_eq!((screen.scroll_top, screen.scroll_bottom), (2, 6));
+    }
+
+    /// Leaving a full-screen program after the pane shrank leaves a shell
+    /// that scrolls.
+    ///
+    /// The main screen waits behind the program with the scroll region it
+    /// had when the program started. Nothing fitted it to the pane's new
+    /// size, so after a shrink its region still ended below the last row: a
+    /// newline there moved nothing, and every line the shell printed next
+    /// was written over the one before it on the bottom row. The rows that
+    /// no longer fitted were dropped outright rather than kept as history.
+    #[test]
+    fn leaving_the_alternate_screen_after_a_shrink_leaves_a_shell_that_scrolls() {
+        let mut screen = NextCoreScreen::new(20, 10);
+        for n in 0..10 {
+            screen.feed(&format!("m{n}"));
+            if n < 9 {
+                screen.feed("\r\n");
+            }
+        }
+        let banked_before = screen.history.scrollback_rows();
+        screen.feed("\x1b[?1049h");
+        screen.resize(20, 5);
+        screen.feed("\x1b[?1049l");
+        assert!(
+            screen.history.scrollback_rows() > banked_before,
+            "the rows that no longer fit are kept as history"
+        );
+        screen.feed("\r\nx\r\ny\r\nz");
+        let text = |row: usize| NextCoreScreen::line_text(&screen.lines[row]).trim_end().to_string();
+        assert_eq!(
+            (text(2), text(3), text(4)),
+            ("x".to_string(), "y".to_string(), "z".to_string()),
+            "each line lands on its own row instead of overwriting the last"
+        );
+        assert_eq!(screen.cursor_y, 4);
+    }
+
+    /// A shrink taken back before it settles never happens.
+    ///
+    /// This is the report it comes from: a pane went 159x43 -> 69x20 ->
+    /// 159x43 faster than Claude Code read its size, so Claude Code never
+    /// repainted -- as far as it knew nothing had changed -- while the
+    /// screen had been cut to 69x20 and grown back blank. It went on writing
+    /// timer ticks into a frame that was no longer there.
+    #[test]
+    fn a_window_shrink_taken_back_never_reaches_the_pane() -> Result<()> {
+        let _guard = test_guard();
+        let _runtime_guard = reset_state_for_test();
+        let engine = NextCoreEngine;
+        let session = engine.create_session(CreateSessionRequest {
+            cols: 40,
+            rows: 6,
+            command_dir: None,
+            command: Some(quiet_wait_command_for_test()),
+            env: Vec::new(),
+            launch_policy: Default::default(),
+        })?;
+        let wide = "0123456789".repeat(4);
+        set_output_for_test(
+            session.id,
+            &format!("{wide}\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix"),
+        )?;
+        let before = engine.read_screen(session.id)?;
+
+        engine.resize_session_settled(session.id, 20, 3)?;
+        assert!(runtime::shrink_pending(session.id), "the shrink waits");
+        assert_eq!(
+            (engine.get_session(session.id)?.cols, engine.get_session(session.id)?.rows),
+            (40, 6),
+            "and the pane has not been touched yet"
+        );
+        engine.resize_session_settled(session.id, 40, 6)?;
+        assert!(!runtime::shrink_pending(session.id), "taking it back cancels it");
+
+        std::thread::sleep(runtime::SHRINK_SETTLE * 3);
+        let after = engine.read_screen(session.id)?;
+        assert_eq!((after.cols, after.rows), (40, 6));
+        assert_eq!(after.lines, before.lines, "not a cell was lost");
+
+        engine.destroy_session(session.id)?;
+        Ok(())
+    }
+
+    /// A shrink that holds is applied; a grow is applied at once.
+    #[test]
+    fn a_window_shrink_that_holds_applies_and_a_grow_does_not_wait() -> Result<()> {
+        let _guard = test_guard();
+        let _runtime_guard = reset_state_for_test();
+        let engine = NextCoreEngine;
+        let session = engine.create_session(CreateSessionRequest {
+            cols: 40,
+            rows: 6,
+            command_dir: None,
+            command: Some(quiet_wait_command_for_test()),
+            env: Vec::new(),
+            launch_policy: Default::default(),
+        })?;
+
+        engine.resize_session_settled(session.id, 20, 3)?;
+        let deadline = std::time::Instant::now() + runtime::SHRINK_SETTLE * 20;
+        while runtime::shrink_pending(session.id) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let shrunk = engine.get_session(session.id)?;
+        assert_eq!((shrunk.cols, shrunk.rows), (20, 3), "a size that holds is applied");
+
+        engine.resize_session_settled(session.id, 50, 8)?;
+        let grown = engine.get_session(session.id)?;
+        assert_eq!((grown.cols, grown.rows), (50, 8), "a grow does not wait");
+
+        // A shrink the pane will never accept is refused to the caller, not
+        // dropped silently by a timer later.
+        let err = engine
+            .resize_session_settled(session.id, 1, 3)
+            .expect_err("a one-column grid is refused up front");
+        assert!(err.to_string().contains("refusing to resize"), "{err}");
+        assert!(!runtime::shrink_pending(session.id));
 
         engine.destroy_session(session.id)?;
         Ok(())
