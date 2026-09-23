@@ -2150,7 +2150,7 @@ mod cursor_inversion_tests {
     use super::*;
     use unterm_engine::{CellStyle, CursorSnapshot, StyledCell, StyledScreenLine};
 
-    fn snapshot(rows: &[&str], cursor: (usize, isize)) -> StyledScreenSnapshot {
+    pub(super) fn snapshot(rows: &[&str], cursor: (usize, isize)) -> StyledScreenSnapshot {
         StyledScreenSnapshot {
             lines: rows
                 .iter()
@@ -2186,31 +2186,6 @@ mod cursor_inversion_tests {
             focus_reporting: false,
             clipboard_request: None,
         }
-    }
-
-    /// A screen bigger than its pane is drawn only as far as the pane goes.
-    ///
-    /// A shrink waits before it reaches the pane, so for a moment the screen
-    /// can outsize the space it is drawn in -- and drawing all of it put its
-    /// last rows on the status bar and its right-hand columns on the pane
-    /// beside it.
-    #[test]
-    fn a_screen_is_clipped_to_the_pane_it_is_drawn_in() {
-        let fits = snapshot(&["abc", "def"], (0, 0));
-        assert!(clip_to_grid(&fits, 3, 2).is_none(), "nothing to clip, nothing copied");
-
-        let big = snapshot(&["abcdef", "ghijkl", "mnopqr"], (5, 2));
-        let clipped = clip_to_grid(&big, 4, 2).expect("wider and taller than the pane");
-        let rows: Vec<String> = clipped
-            .lines
-            .iter()
-            .map(|line| line.cells.iter().map(|cell| cell.ch).collect())
-            .collect();
-        assert_eq!(rows, vec!["abcd", "ghij"]);
-        assert_eq!((clipped.cols, clipped.rows), (4, 2));
-        // The cursor is outside what is kept, and `push_cursor` measures it
-        // against the clipped size -- so it is not drawn on the pane's edge.
-        assert!(clipped.cursor.x >= clipped.cols || clipped.cursor.y as usize >= clipped.rows);
     }
 
     /// The block cursor inverts its own cell and no other.
@@ -3058,5 +3033,36 @@ mod chrome_text_tests {
             append_chrome_text(" ", &mut font, &mut atlas, [1.0; 4], (0.0, 0.0), &mut quads);
         assert!(width > 0.0, "a space took no room");
         assert!(quads.glyphs.is_empty(), "a space drew something");
+    }
+}
+
+#[cfg(test)]
+mod pane_clip_tests {
+    use super::*;
+    use super::cursor_inversion_tests::snapshot;
+
+    /// A screen bigger than its pane is drawn only as far as the pane goes.
+    ///
+    /// A shrink waits before it reaches the pane, so for a moment the screen
+    /// can outsize the space it is drawn in -- and drawing all of it put its
+    /// last rows on the status bar and its right-hand columns on the pane
+    /// beside it.
+    #[test]
+    fn a_screen_is_clipped_to_the_pane_it_is_drawn_in() {
+        let fits = snapshot(&["abc", "def"], (0, 0));
+        assert!(clip_to_grid(&fits, 3, 2).is_none(), "nothing to clip, nothing copied");
+
+        let big = snapshot(&["abcdef", "ghijkl", "mnopqr"], (5, 2));
+        let clipped = clip_to_grid(&big, 4, 2).expect("wider and taller than the pane");
+        let rows: Vec<String> = clipped
+            .lines
+            .iter()
+            .map(|line| line.cells.iter().map(|cell| cell.ch).collect())
+            .collect();
+        assert_eq!(rows, vec!["abcd", "ghij"]);
+        assert_eq!((clipped.cols, clipped.rows), (4, 2));
+        // The cursor is outside what is kept, and `push_cursor` measures it
+        // against the clipped size -- so it is not drawn on the pane's edge.
+        assert!(clipped.cursor.x >= clipped.cols || clipped.cursor.y as usize >= clipped.rows);
     }
 }

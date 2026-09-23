@@ -425,11 +425,15 @@ $Suites = @(
         # 4 since the window request began carrying where to open: losing the
         # directory on the way through the queue is what made `unterm start
         # --cwd` start a second process instead of handing the window over.
-        ExpectedCount = 4
+        # 5 since a waiting request can be seen without being taken: a front
+        # end with no window to park has to leave it queued, and taking it to
+        # look was how "New Unterm Window Here" on a parked Unterm was lost.
+        ExpectedCount = 5
         RequiredTests = @(
             "host_capture_tests::capture_reaches_the_front_end_that_owns_the_window",
             "host_capture_tests::window_ids_are_never_handed_out_twice",
             "host_capture_tests::a_window_request_carries_where_it_should_open",
+            "host_capture_tests::a_queued_window_request_is_visible_without_taking_it",
             "host_capture_tests::a_plain_window_request_carries_no_ask"
         )
     },

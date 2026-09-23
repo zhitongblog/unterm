@@ -40,7 +40,15 @@
     # were cmd.exe-only and every throughput benchmark had been passing
     # without running away from Windows. Measured 13445 core / 2700 probe;
     # recalibrated to measured plus the usual headroom.
-    [int]$MaxCoreSourceLines = 13720,
+    # 13720 -> 13960 (2026-09-23): resize stopped being able to wreck a
+    # pane. A window's shrink now waits until it has held (a new settle
+    # module), because a shrink taken back before the program read its size
+    # left a full-screen program drawing diffs onto a screen that was no
+    # longer there; a real size change resets the scroll region, as in xterm;
+    # and leaving the alternate screen fits the saved main screen to the
+    # current size. Measured 13858 after trimming the comments to their
+    # essentials; recalibrated to measured plus the usual headroom.
+    [int]$MaxCoreSourceLines = 13960,
     [int]$MaxProbeSourceLines = 2800,
     [int]$MaxDirectDependencies = 10,
     # A debug binary carries its debug info, so this tracks the toolchain and

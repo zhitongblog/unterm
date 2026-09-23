@@ -1646,9 +1646,7 @@ impl NextCoreScreen {
             alternate.cursor_x = alternate.cursor_x.min(cols.saturating_sub(1));
             alternate.saved_cursor_x = alternate.saved_cursor_x.min(cols.saturating_sub(1));
             if changed {
-                // The main screen waiting behind a full-screen program gets
-                // the same treatment as the live one below: the region it
-                // saved was for a size the pane no longer has.
+                // The saved main screen's region was for the old size too.
                 alternate.scroll_top = 0;
                 alternate.scroll_bottom = rows.max(1) - 1;
                 alternate.left_margin = 0;
@@ -1672,14 +1670,10 @@ impl NextCoreScreen {
         self.saved_cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
         self.cursor_y = self.cursor_y.min(self.rows.saturating_sub(1));
         if changed {
-            // A new size means the whole screen scrolls again, as in xterm.
-            // Clamping the old region only ever shrank it, so a pane that grew
-            // from 20 rows to 43 went on scrolling inside the first 20. The
-            // main screen hides that -- its viewport is filled from the
-            // scrollback -- but the alternate screen has nothing behind it: a
-            // program scrolling with newlines scrolled a band at the top of
-            // the pane, and its cursor never got below it. A program that
-            // wants a region sets one again when it hears the new size.
+            // A new size scrolls the whole screen again, as in xterm. Clamping
+            // only ever shrank the region: grown from 20 rows to 43, the
+            // alternate screen -- no scrollback to hide it -- kept scrolling a
+            // 20-row band. Programs set their region again on SIGWINCH.
             self.scroll_top = 0;
             self.scroll_bottom = self.rows.saturating_sub(1);
             self.left_margin = 0;
@@ -1991,10 +1985,8 @@ impl NextCoreScreen {
         self.saved_cursor_y = main.saved_cursor_y;
         self.saved_cursor_attr = main.saved_cursor_attr;
         if self.lines.len() > self.rows {
-            // The pane got shorter while the program was on the alternate
-            // screen. What no longer fits scrolled off the top, the same as
-            // a resize on the main screen would have done -- into the
-            // scrollback, not into nothing.
+            // Shrunk while a program was on the alternate screen: what no
+            // longer fits goes to the scrollback, as a live resize would.
             let trim = self.lines.len() - self.rows;
             let drained = self.lines.drain(..trim).collect::<Vec<_>>();
             let trimmed = self
@@ -2004,12 +1996,9 @@ impl NextCoreScreen {
             self.cursor_y = self.cursor_y.saturating_sub(trim);
             self.saved_cursor_y = self.saved_cursor_y.saturating_sub(trim);
         }
-        // Everything else the main screen saved was measured against the size
-        // it had when the program started. `resize` fits the live screen to a
-        // new size; nothing fitted the saved one. A scroll region still ending
-        // on row 42 of what is now a 20-row pane means a newline at the bottom
-        // no longer scrolls: the shell's output piles up on the last row and
-        // its cursor sits somewhere other than where it is typing.
+        // The rest was saved against the size the program started at. A
+        // region ending on row 42 of a 20-row pane means a newline on the
+        // last row scrolls nothing, and the shell writes over that row.
         let last_row = self.rows.saturating_sub(1);
         let last_col = self.cols.saturating_sub(1);
         self.cursor_x = self.cursor_x.min(last_col);
@@ -2053,13 +2042,9 @@ impl NextCoreEngine {
         runtime::output(pane_id)
     }
 
-    /// Resize a pane to the size a window is drawing it at.
-    ///
-    /// Unlike `resize_session`, a shrink waits until the size has held for a
-    /// moment, and one taken back before then never happens -- see
-    /// `runtime::resize_settle` for why a passing shrink is not harmless.
-    /// Front ends laying out windows call this; an explicit request for a
-    /// size, such as an agent's `session.resize`, keeps `resize_session`.
+    /// Resize a pane to the size a window is drawing it at: a shrink waits
+    /// until it has held, and one taken back never happens. See
+    /// `runtime::resize_settle`; explicit requests keep `resize_session`.
     pub fn resize_session_settled(&self, pane_id: usize, cols: usize, rows: usize) -> Result<()> {
         runtime::resize_settled(pane_id, cols, rows)
     }
