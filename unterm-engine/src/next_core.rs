@@ -4347,7 +4347,11 @@ mod tests {
         let err = engine
             .resize_session_settled(session.id, 1, 3)
             .expect_err("a one-column grid is refused up front");
-        assert!(err.to_string().contains("refusing to resize"), "{err}");
+        assert!(
+            err.to_string().contains("refusing to resize"),
+            "unexpected error: {}",
+            err
+        );
         assert!(!runtime::shrink_pending(session.id));
 
         engine.destroy_session(session.id)?;
