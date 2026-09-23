@@ -747,6 +747,10 @@ pub struct App {
     /// Notices that the machine slept, so providers are re-probed and lapsed
     /// leases are reported rather than failing later for no visible reason.
     wake_watch: unterm_services::wake_watch::WakeWatch,
+    /// The tabs last written to `last_session.json`, and when that was
+    /// last checked. See `keep_last_session_current`.
+    last_session_written: Option<crate::session_restore::LastSession>,
+    last_session_checked: std::time::Instant,
     /// Which page of the character picker is open: the group Ctrl+R turns
     /// through while the picker's palette is up. Reset each time it opens.
     charselect_group: crate::charselect::Group,
@@ -1398,6 +1402,8 @@ impl App {
         Ok(Self {
             engine: crate::engine_backend::AppEngine::from_environment(),
             wake_watch: unterm_services::wake_watch::WakeWatch::new(),
+            last_session_written: None,
+            last_session_checked: std::time::Instant::now(),
             charselect_group: Default::default(),
             start_directory: None,
             explicit_launch: false,
@@ -7070,9 +7076,44 @@ impl App {
 
     /// Write down what this window looked like, for the next plain launch.
     fn save_last_session(&mut self) {
-        let Some(live) = self.window.state.as_ref() else {
+        if let Some(state) = self.current_last_session() {
+            crate::session_restore::save(&state);
+            self.last_session_written = Some(state);
+        }
+    }
+
+    /// Keep `last_session.json` true while the window is up, not only when
+    /// it closes.
+    ///
+    /// It used to be written on the way out and nowhere else, so any exit
+    /// that skipped the close path -- a SIGTERM, a crash, Force Quit, a
+    /// logout that did not wait -- reopened the tabs of whenever the window
+    /// last closed properly. Replacing a running Unterm brought back one tab
+    /// out of three that way. Checked every few seconds and written only
+    /// when something changed, so an idle window writes nothing.
+    fn keep_last_session_current(&mut self) {
+        const EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+        if self.last_session_checked.elapsed() < EVERY {
+            return;
+        }
+        self.last_session_checked = std::time::Instant::now();
+        // Mid-restore the strip holds only the tabs reopened so far; writing
+        // that down would make a crash now forget the rest for good.
+        if self.window.restore_extra_tabs_pending {
+            return;
+        }
+        let Some(state) = self.current_last_session() else {
             return;
         };
+        if self.last_session_written.as_ref() != Some(&state) {
+            crate::session_restore::save(&state);
+            self.last_session_written = Some(state);
+        }
+    }
+
+    /// What `last_session.json` should say about the window in front.
+    fn current_last_session(&self) -> Option<crate::session_restore::LastSession> {
+        let live = self.window.state.as_ref()?;
         let size = live.window.inner_size();
         let mut cwds = Vec::new();
         let sessions =
@@ -7089,12 +7130,12 @@ impl App {
                 cwds.push(cwd);
             }
         }
-        crate::session_restore::save(&crate::session_restore::LastSession {
+        Some(crate::session_restore::LastSession {
             width: size.width,
             height: size.height,
             maximized: live.window.is_maximized() || self.window.unmaximized_rect.is_some(),
             cwds,
-        });
+        })
     }
 
     /// The chip under the pointer, when the pointer is in the bottom bar.
@@ -10173,6 +10214,7 @@ impl App {
             self.sync_tabs();
             self.feed_cockpit();
             self.update_window_title();
+            self.keep_last_session_current();
         }
         // The composer is checked every tick while it is open, because it is
         // waiting for a pane to go idle and a prompt held back for a quarter of

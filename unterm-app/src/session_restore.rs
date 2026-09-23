@@ -26,14 +26,25 @@ fn path() -> Option<std::path::PathBuf> {
 }
 
 pub fn save(state: &LastSession) {
-    let Some(path) = path() else {
-        return;
-    };
+    if let Some(path) = path() {
+        save_to(&path, state);
+    }
+}
+
+fn save_to(path: &std::path::Path, state: &LastSession) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(text) = serde_json::to_string_pretty(state) {
-        let _ = std::fs::write(path, text);
+    let Ok(text) = serde_json::to_string_pretty(state) else {
+        return;
+    };
+    // Beside the real file, then renamed over it: this is now written while
+    // the process runs, and a crash in the middle of a plain write would
+    // leave half a file -- which `load` rejects, so the next launch would
+    // reopen nothing at all.
+    let partial = path.with_extension("json.partial");
+    if std::fs::write(&partial, text).is_ok() && std::fs::rename(&partial, path).is_err() {
+        let _ = std::fs::remove_file(&partial);
     }
 }
 
@@ -60,5 +71,45 @@ mod tests {
         let text = serde_json::to_string(&state).unwrap();
         let back: LastSession = serde_json::from_str(&text).unwrap();
         assert_eq!(back, state);
+    }
+
+    /// Saving replaces the file whole and leaves nothing beside it.
+    ///
+    /// It is written every few seconds while the window is up now, so a
+    /// crash can land in the middle of a write; the rename is what keeps
+    /// that from leaving half a file for the next launch to reject.
+    #[test]
+    fn saving_replaces_the_file_whole() {
+        let dir = std::env::temp_dir().join(format!(
+            "unterm-last-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let path = dir.join("last_session.json");
+        let first = LastSession {
+            width: 1600,
+            height: 900,
+            maximized: false,
+            cwds: vec!["/a".into(), "/b".into(), "/c".into()],
+        };
+        let second = LastSession {
+            cwds: vec!["/a".into()],
+            ..first.clone()
+        };
+        save_to(&path, &first);
+        save_to(&path, &second);
+        let back: LastSession =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(back, second);
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("last_session.json")]);
     }
 }
