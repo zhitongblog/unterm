@@ -202,19 +202,35 @@ extern "C" fn service_window_here(
 ) {
     let paths = unsafe { pasteboard_paths(pboard) };
     trace(&format!("service window-here with {paths:?}"));
-    let Ok(program) = std::env::current_exe() else {
+    if paths.is_empty() {
         return;
-    };
-    for path in paths {
-        let _ = std::process::Command::new(&program)
-            .arg("start")
-            .arg("--cwd")
-            .arg(&path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
     }
+    // A window in this process, not a second Unterm. This used to spawn
+    // `unterm start --cwd <path>`, and the process that came up was a fresh
+    // front end: it adopted every session the Core was holding and never
+    // opened the folder it was asked for -- the menu item named one folder
+    // and delivered a window full of other ones. Asking the running process
+    // is also the 31 ms path rather than the 587 ms one.
+    for path in paths {
+        // A file is as selectable as a folder in the Finder menu this comes
+        // from, and a shell cannot start in one. The tab queue reads the
+        // parent for exactly this reason; a window that skipped the step
+        // would fail to start its shell and open empty.
+        let dir = if path.is_dir() {
+            Some(path.clone())
+        } else {
+            path.parent().map(std::path::Path::to_path_buf)
+        };
+        let Some(dir) = dir else {
+            trace(&format!("service window-here: nowhere to open {path:?}"));
+            continue;
+        };
+        let id = unterm_engine::request_window_on(Some(dir.clone()), None, Vec::new());
+        trace(&format!(
+            "service window-here queued window {id} on {dir:?}"
+        ));
+    }
+    crate::tray::request_wake();
 }
 
 /// Teach the running application delegate to take openURLs. Call once, on
@@ -383,6 +399,16 @@ pub fn trace(message: &str) {
 pub fn keep_finder_extension_enabled() {
     const EXTENSION_ID: &str = "ai.unzoo.unterm.finder-sync";
     std::thread::spawn(|| {
+        // The Services menu has the same problem by a different route: its
+        // registry still names the bundle that was replaced, so "New Unterm
+        // Tab Here" is listed and clicking it reaches nobody -- no trace line,
+        // no window, nothing. `pbs -update` rebuilds that registry from the
+        // bundles on disk; it is what logging out and back in would do.
+        let _ = std::process::Command::new("/System/Library/CoreServices/pbs")
+            .arg("-update")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
         let listed = std::process::Command::new("/usr/bin/pluginkit")
             .args(["-mv", "-p", "com.apple.FinderSync"])
             .output();

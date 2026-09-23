@@ -1453,6 +1453,18 @@ pub fn request_window_on(
     id
 }
 
+/// Whether anyone is still waiting for a window.
+///
+/// The front end only takes the queue when it has a window to park; with
+/// none, taking a request would drop it. Asking first lets it leave the
+/// request where it is and go build a window to serve it in.
+pub fn window_requests_pending() -> bool {
+    WINDOW_REQUESTS
+        .lock()
+        .map(|queue| !queue.is_empty())
+        .unwrap_or(false)
+}
+
 /// Every window asked for since this was last called, in the order asked.
 pub fn take_window_requests() -> Vec<WindowRequest> {
     WINDOW_REQUESTS
@@ -2720,6 +2732,11 @@ mod host_capture_tests {
         assert_eq!(WindowEngine::open_window(&engine).unwrap(), 8);
     }
 
+    /// The window queue is one process-wide list, and the tests below each
+    /// drain it and count what is left. Run side by side -- a plain
+    /// `cargo test` does -- one test's request lands in another's count.
+    static WINDOW_QUEUE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Ids are handed out once, in order, whoever asks.
     ///
     /// The reservation happens on the asking thread because a window can only
@@ -2727,6 +2744,8 @@ mod host_capture_tests {
     /// callers racing must still get two numbers.
     #[test]
     fn window_ids_are_never_handed_out_twice() {
+        let _queue = WINDOW_QUEUE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = take_window_requests();
         let first = request_window();
         let second = reserve_window_id();
         let third = request_window();
@@ -2754,6 +2773,7 @@ mod host_capture_tests {
     /// whole second process rather than open a window on the wrong folder.
     #[test]
     fn a_window_request_carries_where_it_should_open() {
+        let _queue = WINDOW_QUEUE_TEST.lock().unwrap_or_else(|p| p.into_inner());
         let _ = take_window_requests();
         let id = request_window_on(
             Some(std::path::PathBuf::from("/tmp/somewhere")),
@@ -2771,9 +2791,30 @@ mod host_capture_tests {
         assert_eq!(queued[0].command, vec!["zsh", "-l"]);
     }
 
+    /// A request nobody has taken yet must be visible as one.
+    ///
+    /// The windowless front end reads this instead of draining: it has no
+    /// window to park, so a request it took would be one it threw away --
+    /// which is what "New Unterm Window Here" on a parked Unterm did.
+    #[test]
+    fn a_queued_window_request_is_visible_without_taking_it() {
+        let _queue = WINDOW_QUEUE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = take_window_requests();
+        assert!(!window_requests_pending(), "the queue starts empty");
+        request_window();
+        assert!(window_requests_pending(), "a request is waiting");
+        assert!(
+            window_requests_pending(),
+            "asking must not consume the request"
+        );
+        assert_eq!(take_window_requests().len(), 1);
+        assert!(!window_requests_pending(), "and taking it clears the queue");
+    }
+
     /// A plain request still asks for nothing in particular.
     #[test]
     fn a_plain_window_request_carries_no_ask() {
+        let _queue = WINDOW_QUEUE_TEST.lock().unwrap_or_else(|p| p.into_inner());
         let _ = take_window_requests();
         request_window();
         let queued = take_window_requests();

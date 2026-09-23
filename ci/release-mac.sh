@@ -53,6 +53,28 @@ if [ "$WANT_VERSION" != "$HAVE_VERSION" ]; then
   exit 1
 fi
 
+# What gets built is the working tree, not the tag. A dirty tree therefore
+# ships binaries that are not in the release its file name claims -- and
+# nothing downstream can tell: the version check above passes, the DMG is
+# named from the tag, the notarization succeeds. It nearly happened while
+# 0.71.11 was being packaged and source in this same tree was being edited;
+# only the timing saved it, and the shipped binary had to be read back with
+# `strings` to prove it.
+#
+# Uncommitted work is the normal state of this tree, so this refuses rather
+# than warns. Set UNTERM_RELEASE_ALLOW_DIRTY=1 to release a tree you know is
+# dirty (a local-only change you mean to ship is the one honest case).
+DIRTY=$(git status --porcelain)
+if [ -n "$DIRTY" ] && [ "${UNTERM_RELEASE_ALLOW_DIRTY:-0}" != "1" ]; then
+  echo "ERROR: the working tree has changes that are not in $TAG:" >&2
+  echo "$DIRTY" >&2
+  echo >&2
+  echo "The build compiles this tree, so the DMG would carry code the tag" >&2
+  echo "does not. Commit or stash first, then re-tag if the commit belongs" >&2
+  echo "in the release. To release anyway: UNTERM_RELEASE_ALLOW_DIRTY=1 make release-mac" >&2
+  exit 1
+fi
+
 if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
    && [ ! -f "$HOME/.unterm/notary-credentials" ]; then
   echo "ERROR: Notary profile '$NOTARY_PROFILE' not found in Keychain." >&2

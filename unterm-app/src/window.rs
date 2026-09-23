@@ -7018,6 +7018,18 @@ impl App {
                     crate::tray::set_dock_visible(false);
                 }
                 log::error!("could not reopen the window from the tray: {err:#}");
+                // A window asked for while there was none is what woke us, and
+                // `about_to_wait` keeps waking for as long as one is queued.
+                // Left there after a failure, it would retry the build five
+                // times a second for as long as the process lives. Drop it:
+                // the ask can be made again, a spinning loop cannot be stopped.
+                let dropped = unterm_engine::take_window_requests();
+                if !dropped.is_empty() {
+                    log::error!(
+                        "dropped {} window request(s) with no window to open them from",
+                        dropped.len()
+                    );
+                }
             }
         }
     }
@@ -11469,10 +11481,23 @@ impl ApplicationHandler for App {
         // launch that handed over rather than becoming another process. Each
         // request carries the id its window was promised, and two callers
         // asking at once want two windows rather than one.
-        for request in unterm_engine::take_window_requests() {
-            crate::startup_trace::mark("window.second.start");
-            self.open_window(event_loop, request);
-            crate::startup_trace::mark("window.second.ready");
+        //
+        // Only with a window already up. `open_window` parks the one in front
+        // and puts the new one in its place, so with none to park it returns
+        // without a word -- and the request, already off the queue, is gone
+        // with it. That is the same defect the path queue below carries its
+        // own note about: "New Unterm Window Here" on a parked Unterm read
+        // the ask and dropped it. Left queued, it survives until the wake
+        // readers further down have built a window, and opens then -- so the
+        // ask below is for that window, not for this one.
+        if self.window.state.is_some() {
+            for request in unterm_engine::take_window_requests() {
+                crate::startup_trace::mark("window.second.start");
+                self.open_window(event_loop, request);
+                crate::startup_trace::mark("window.second.ready");
+            }
+        } else if unterm_engine::window_requests_pending() {
+            crate::tray::request_wake();
         }
         if self.window.closing {
             // The close button was pressed. There is no native title bar to
