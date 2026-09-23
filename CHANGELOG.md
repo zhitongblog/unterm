@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.71.12 — 2026-09-23
+
+### Fixed
+
+- **A full-screen program could be left drawing onto a screen that was no
+  longer there.** Shrinking a pane cuts every row to the new width and drops
+  the rows that no longer fit, and growing it back does not bring them back.
+  A pane that went 159x43 -> 69x20 -> 159x43 faster than Claude Code read its
+  size looked unchanged to Claude Code, so it never repainted -- it kept
+  writing its timer and tool lines into a frame that was now a cut-off
+  remnant at the top and blank below, with the caret apparently nowhere near
+  the input line. A window's shrink now waits until the size has held for a
+  moment; one taken back before then never reaches the pane, and the program
+  never hears about it. Grows, and sizes a pane really settles at, apply as
+  before; an agent's explicit `session.resize` is not delayed.
+
+- **A pane that grew kept scrolling inside its old height.** Resizing only
+  ever narrowed the scroll region, so after a pane grew, a program on the
+  alternate screen that scrolled with newlines scrolled a band at the top of
+  the pane. A real size change now resets the region to the whole screen, as
+  xterm does.
+
+- **Leaving a full-screen program after the pane shrank could leave a shell
+  that overwrote its last line.** The main screen waiting behind the program
+  kept the scroll region, margins and saved cursor of the size it started at,
+  so a newline on the bottom row scrolled nothing. It is fitted to the
+  current size now, and rows that no longer fit go to the scrollback instead
+  of being dropped.
+
+- **The GUI could sit at 100% of a core while its window was covered.** On
+  macOS a redraw request is also a run-loop wake-up, and the frame arrives
+  only when AppKit chooses to draw -- which it does not for a window it
+  considers hidden. With anything changing on screen (an agent streaming
+  output, say), every tick asked again, woke the loop at once, and never got
+  the frame. Covered windows no longer ask, and an unanswered request is
+  repeated at most ten times a second.
+
+- **Tabs were forgotten after Unterm was killed rather than closed.** The
+  restore file was written only on the way out, so a crash, Force Quit or
+  SIGTERM brought back whatever was open when the window last closed
+  properly. It is kept current while the window is up, written only when
+  something changed, and replaced atomically.
+
+- **"New Unterm Window Here" opened some other Unterm.** It started a second
+  front end, which adopted every running session and never opened the folder
+  it was asked for. It now opens a window in the running process, on the
+  folder (or the folder holding the selected file), including when Unterm is
+  parked in the background with no window.
+
+- **A pane could be drawn past its own edge** for the moment its screen was
+  bigger than the space it was given, onto the status bar and the pane
+  beside it. Panes are clipped to their area.
+
 ## v0.71.11 — 2026-09-21
 
 ### Fixed
