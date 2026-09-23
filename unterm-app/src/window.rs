@@ -957,6 +957,7 @@ impl WindowState {
             state: None,
             drawn_revision: None,
             presented_at: None,
+            redraw_requested_at: None,
             drawn_cursor_solid: None,
             drawn_blink: None,
             screen_blink: (false, false),
@@ -1041,6 +1042,8 @@ struct WindowState {
     /// refresh interval the drawable pool runs dry and `nextDrawable`
     /// turns the GUI thread into a queue behind the compositor.
     presented_at: Option<std::time::Instant>,
+    /// When `tick` last asked for a frame that has not been drawn yet.
+    redraw_requested_at: Option<std::time::Instant>,
     /// Cursor phase represented by the last submitted frame.
     ///
     /// A blinking cursor changes only twice per period. Treating "blinking is
@@ -2016,6 +2019,7 @@ impl App {
         }
         self.window.drawn_revision = Some(generation);
         self.window.presented_at = Some(std::time::Instant::now());
+        self.window.redraw_requested_at = None;
         self.window.drawn_cursor_solid = Some(solid_cursor);
         self.window.drawn_blink = Some(blink);
         self.window.screen_blink = screen_blink;
@@ -10222,8 +10226,36 @@ impl App {
         if self.window.composer.is_some() {
             self.drain_composer();
         }
-        if self.needs_redraw() {
-            self.window.quiet_since = None;
+        if self.window.occluded {
+            // Nothing is shown, so nothing is drawn: `draw` returns at once
+            // for an occluded window and never records what it was asked to
+            // show. Asking anyway was a spin. The screen still looked changed
+            // on the next tick, so it asked again -- and on macOS a redraw
+            // request wakes the run loop, which cut the tick's wait short
+            // every time. A window left behind others at the wrong moment
+            // sat at 100% of a core until it was uncovered. `Occluded(false)`
+            // asks for the frame that was missed.
+            if self.window.quiet_since.is_none() {
+                self.window.quiet_since = Some(std::time::Instant::now());
+            }
+        } else if self.needs_redraw() {
+            // A frame asked for and never drawn. On macOS a redraw request is
+            // also a run-loop wake-up, and the frame arrives only when AppKit
+            // chooses to draw the view -- which it does not for a window it
+            // considers hidden, whether or not it says so. Asking again on
+            // every tick then woke the loop the moment it went to sleep: the
+            // sampled 100%-of-a-core spin was this, `request_redraw` into
+            // `CFRunLoopWakeUp` over and over with `draw` almost never
+            // reached. So an unanswered request is repeated at most ten times
+            // a second, and a window that is not drawing is not busy.
+            const UNANSWERED: std::time::Duration = std::time::Duration::from_millis(100);
+            let waiting = self.window.redraw_requested_at.map(|at| at.elapsed());
+            let stalled = waiting.is_some_and(|waited| waited >= UNANSWERED);
+            if !stalled {
+                self.window.quiet_since = None;
+            } else if self.window.quiet_since.is_none() {
+                self.window.quiet_since = Some(std::time::Instant::now());
+            }
             // One frame per refresh interval, no matter how fast the PTY
             // writes. A skipped request costs nothing: the busy tick fires
             // within the same interval and asks again, so the trailing
@@ -10231,9 +10263,11 @@ impl App {
             let frame_due = self
                 .window.presented_at
                 .map_or(true, |at| at.elapsed() >= std::time::Duration::from_millis(8));
-            if frame_due {
+            let asked_just_now = waiting.is_some_and(|waited| waited < UNANSWERED);
+            if frame_due && !asked_just_now {
                 if let Some(live) = self.window.state.as_ref() {
                     live.window.request_redraw();
+                    self.window.redraw_requested_at = Some(std::time::Instant::now());
                 }
             }
         } else if self.window.quiet_since.is_none() {
