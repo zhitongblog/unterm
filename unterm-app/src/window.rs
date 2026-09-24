@@ -853,7 +853,7 @@ pub struct App {
     close_prompts: bool,
     /// `window.decorations = true` asks for the system frame back.
     system_decorations: bool,
-    /// Mica behind the frame on Windows 11, unless `window.backdrop = "none"`.
+    /// Mica behind the frame on Windows 11, with `window.backdrop = "mica"`.
     backdrop: bool,
     /// The cursor the config asked for, and how fast it blinks.
     cursor_style: crate::terminal::CursorStyle,
@@ -1552,13 +1552,16 @@ impl App {
                 .flatten()
                 .map(|value| !value.eq_ignore_ascii_case("neverprompt"))
                 .unwrap_or(true),
-            backdrop: !matches!(
+            // Asked for, not assumed: the composition path has only been run
+            // where Windows offers no Mica, so it stays opt-in until it has
+            // been seen on a Windows 11 desktop.
+            backdrop: matches!(
                 config
                     .str_of("window.backdrop")
                     .ok()
                     .flatten()
                     .map(|value| value.to_ascii_lowercase()),
-                Some(ref value) if value == "none" || value == "off" || value == "false"
+                Some(ref value) if value == "mica" || value == "on" || value == "true"
             ),
             system_decorations: config
                 .bool_of("window.decorations")

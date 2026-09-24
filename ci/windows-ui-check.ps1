@@ -191,6 +191,27 @@ if ($adminHwnd -eq [IntPtr]::Zero) {
     }
 }
 
+# Mica asked for where Windows has none (Server 2022 here): the window must
+# still come up, opaque, rather than fail to draw.
+Get-Process unterm, unterm-core -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep 2
+$conf = Join-Path $env:USERPROFILE ".unterm\unterm.conf"
+Add-Content $conf "`n[window]`nbackdrop = `"mica`"`n"
+$mica = Start-Process $exe -PassThru
+$micaHwnd = WaitWindow $mica
+if ($micaHwnd -eq [IntPtr]::Zero) {
+    $failures.Add("with window.backdrop = mica the window did not appear")
+} else {
+    Start-Sleep 6
+    [U]::SetWindowPos($micaHwnd, [IntPtr]::Zero, 40, 30, 900, 600, 0x0004) | Out-Null
+    [U]::SetForegroundWindow($micaHwnd) | Out-Null
+    Start-Sleep 2
+    Shot "06-mica-requested"
+    $mica.Refresh()
+    "with backdrop = mica: exited=$($mica.HasExited)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
+    if ($mica.HasExited) { $failures.Add("with window.backdrop = mica unterm exited") }
+}
+
 foreach ($log in "panic.log", "stall.log") {
     $path = Join-Path $env:USERPROFILE ".unterm\$log"
     if (Test-Path $path) { Copy-Item $path (Join-Path $OutDir $log) }
