@@ -4379,7 +4379,9 @@ impl App {
                 (Some(icon), false) => format!("{icon}  {}", piece.label),
                 (None, _) => piece.label.clone(),
             };
-            if text.trim().is_empty() {
+            // The wordmark may be the mark alone (Fluent), which has no text
+            // and is still drawn.
+            if text.trim().is_empty() && piece.item != crate::topbar::Item::Wordmark {
                 continue;
             }
             if piece.item == crate::topbar::Item::Stats {

@@ -626,7 +626,7 @@ mod tests {
         let bar = bar(1600.0);
         assert!(bar.iter().all(|piece| !matches!(
             piece.item,
-            Item::Wordmark if piece.label.chars().all(char::is_numeric)
+            Item::Wordmark if !piece.label.is_empty() && piece.label.chars().all(char::is_numeric)
         )));
         // The only things here are the wordmark, the facts, actions, the menu
         // and the window buttons.
