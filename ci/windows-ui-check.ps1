@@ -155,9 +155,15 @@ if ($hwnd -eq [IntPtr]::Zero) {
         Start-Sleep 1
     }
     # The close button, hovered: the one red fill.
-    [U]::SetCursorPos($r.R - 20, $r.T + 12) | Out-Null
+    # A real input event after the jump, so the window hears the pointer.
+    [U]::SetCursorPos($r.R - 22, $r.T + 12) | Out-Null
+    [U]::mouse_event(0x0001, 2, 0, 0, [UIntPtr]::Zero)
     Start-Sleep -Milliseconds 700
     Shot "04-hover-close"
+    [U]::SetCursorPos($r.R - 46 * 2 - 25, $r.T + 12) | Out-Null
+    [U]::mouse_event(0x0001, 2, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 700
+    Shot "04b-hover-minimise"
     [U]::SetCursorPos(400, 400) | Out-Null
 }
 $app.Refresh()
