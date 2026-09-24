@@ -125,16 +125,37 @@ if ($hwnd -eq [IntPtr]::Zero) {
         Start-Sleep -Milliseconds 120
         [U]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         Start-Sleep 2
-        $zoomed = [U]::IsZoomed($hwnd)
-        "maximised after click: $zoomed" | Tee-Object -Append (Join-Path $OutDir "report.txt")
-        if (-not $zoomed) { $failures.Add("clicking the maximise button did not maximise") }
+        # Unterm maximises by filling the work area itself, so the window's
+        # rectangle is the evidence rather than IsZoomed.
+        $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $m = New-Object U+RECT
+        [U]::GetWindowRect($hwnd, [ref]$m) | Out-Null
+        $filled = ([U]::IsZoomed($hwnd)) -or (($m.R - $m.L) -ge $work.Width - 16 -and ($m.B - $m.T) -ge $work.Height - 16)
+        "after clicking maximise: rect $($m.L),$($m.T) - $($m.R),$($m.B), work area $($work.Width)x$($work.Height), filled=$filled" |
+            Tee-Object -Append (Join-Path $OutDir "report.txt")
+        if (-not $filled) { $failures.Add("clicking the maximise button did not maximise") }
         Shot "03-maximised"
+        # The same button, now "restore", brings the old size back.
+        $codes2 = HitRow $hwnd ($m.T + 12) ($m.R - 220) ($m.R - 1)
+        $restore = @(for ($i = 0; $i -lt $codes2.Count; $i++) { if ($codes2[$i] -eq 9) { $m.R - 220 + $i } })
+        if ($restore.Count -lt 20) {
+            $failures.Add("the maximised window's restore button does not answer HTMAXBUTTON")
+        } else {
+            [U]::SetCursorPos([int](($restore[0] + $restore[-1]) / 2), $m.T + 12) | Out-Null
+            Start-Sleep -Milliseconds 400
+            [U]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 120
+            [U]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep 2
+        }
+        [U]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+        "after clicking restore: rect $($r.L),$($r.T) - $($r.R),$($r.B)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
+        if (($r.R - $r.L) -ge $work.Width - 16) { $failures.Add("clicking restore did not restore the window") }
         [U]::SetCursorPos(400, 400) | Out-Null
-        [U]::ShowWindow($hwnd, 9) | Out-Null
         Start-Sleep 1
     }
     # The close button, hovered: the one red fill.
-    [U]::SetCursorPos($r.R - 20, $y) | Out-Null
+    [U]::SetCursorPos($r.R - 20, $r.T + 12) | Out-Null
     Start-Sleep -Milliseconds 700
     Shot "04-hover-close"
     [U]::SetCursorPos(400, 400) | Out-Null
