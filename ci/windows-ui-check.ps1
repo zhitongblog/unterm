@@ -22,6 +22,26 @@ public static class U {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int hh, uint f);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
+    // The largest visible top-level window a process owns: winit also makes
+    // small hidden helper windows, which is what MainWindowHandle can name.
+    public static IntPtr Largest(uint want) {
+        IntPtr best = IntPtr.Zero; long area = 0;
+        EnumWindows((h, l) => {
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            RECT r;
+            if (pid == want && IsWindowVisible(h) && GetWindowRect(h, out r)) {
+                long a = (long)(r.R - r.L) * (r.B - r.T);
+                if (a > area) { area = a; best = h; }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
 }
 "@
 [U]::SetProcessDPIAware() | Out-Null
@@ -41,7 +61,8 @@ function WaitWindow($process, [int]$seconds = 60) {
     while ((Get-Date) -lt $deadline) {
         $process.Refresh()
         if ($process.HasExited) { return [IntPtr]::Zero }
-        if ($process.MainWindowHandle -ne [IntPtr]::Zero) { return $process.MainWindowHandle }
+        $h = [U]::Largest([uint32]$process.Id)
+        if ($h -ne [IntPtr]::Zero) { return $h }
         Start-Sleep -Milliseconds 500
     }
     return [IntPtr]::Zero
@@ -64,6 +85,8 @@ if ($hwnd -eq [IntPtr]::Zero) {
 } else {
     Start-Sleep 6
     [U]::ShowWindow($hwnd, 9) | Out-Null
+    # On screen and a known size, so every button is somewhere a pointer can go.
+    [U]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 30, 900, 600, 0x0004) | Out-Null
     [U]::SetForegroundWindow($hwnd) | Out-Null
     Start-Sleep 2
     Shot "01-window"
@@ -113,10 +136,12 @@ if ($adminHwnd -eq [IntPtr]::Zero) {
     $failures.Add("the administrator window did not appear")
 } else {
     Start-Sleep 5
+    [U]::SetWindowPos($adminHwnd, [IntPtr]::Zero, 90, 70, 900, 600, 0x0004) | Out-Null
     [U]::SetForegroundWindow($adminHwnd) | Out-Null
     Start-Sleep 1
     Shot "05-admin-window"
     $admin.Refresh()
+    Start-Sleep 1
     "admin window title: $($admin.MainWindowTitle)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
     if ($admin.MainWindowTitle -notmatch "Administrator") {
         $failures.Add("administrator window title does not say so: '$($admin.MainWindowTitle)'")
