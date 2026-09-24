@@ -622,5 +622,8 @@
   "web.update.available_post": "可用——升级一下吧。",
   "web.update.available_pre": "新版本",
   "web.update.dismiss": "知道了",
-  "web.update.view_release": "查看更新内容 →"
+  "web.update.view_release": "查看更新内容 →",
+  "admin.new_window": "新建管理员窗口",
+  "admin.title": "管理员",
+  "admin.declined": "已在 UAC 提示中取消管理员窗口。"
 }

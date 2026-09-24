@@ -319,5 +319,8 @@
   "web.toast.refresh": "Aktualisierung: {err}",
   "web.toast.session_failed": "Sitzung: {err}",
   "web.toast.theme_applied": "Theme angewendet: {id}",
-  "web.toast.theme_failed": "Theme: {err}"
+  "web.toast.theme_failed": "Theme: {err}",
+  "admin.new_window": "Neues Administratorfenster",
+  "admin.title": "Administrator",
+  "admin.declined": "Administratorfenster in der UAC-Abfrage abgebrochen."
 }

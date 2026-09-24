@@ -319,5 +319,8 @@
   "web.toast.refresh": "更新失敗:{err}",
   "web.toast.session_failed": "セッション:{err}",
   "web.toast.theme_applied": "テーマを適用しました:{id}",
-  "web.toast.theme_failed": "テーマ:{err}"
+  "web.toast.theme_failed": "テーマ:{err}",
+  "admin.new_window": "管理者として新しいウィンドウ",
+  "admin.title": "管理者",
+  "admin.declined": "UAC で管理者ウィンドウがキャンセルされました。"
 }

@@ -302,19 +302,27 @@ pub fn layout(
         // right, making the pair look off-centre even when their vertical
         // metrics agree.
         left += brand_cell * 0.3;
-        // Logo, the gap to the wordmark, and 0.7 cells of air after it --
-        // the brand block's own right margin, as 0.57.4 spaced it.
-        let wordmark = measure(WORDMARK) + brand_cell * (0.95 + 0.42 + 0.7);
-        if left + wordmark < right {
-            placed.push(Placed {
-                item: Item::Wordmark,
-                left,
-                width: wordmark,
-                icon: None,
-                label: WORDMARK.to_string(),
-                tooltip: None,
-            });
-            left += wordmark;
+        match crate::window_buttons::style() {
+            // Windows: the app's mark and then the window's title, as every
+            // Fluent title bar has them -- the icon, not the product's name
+            // spelled out beside it. The word read as a web page's header.
+            crate::window_buttons::Style::Fluent => {
+                let mark = brand_cell * (0.95 + 0.9);
+                if left + mark < right {
+                    placed.push(Placed {
+                        item: Item::Wordmark,
+                        left,
+                        width: mark,
+                        icon: None,
+                        label: String::new(),
+                        tooltip: None,
+                    });
+                    left += mark;
+                }
+            }
+            // GNOME's header bars carry no brand at all: the title, centred,
+            // and the buttons. The window list already says whose window it is.
+            crate::window_buttons::Style::Adwaita => {}
         }
     }
 
@@ -329,10 +337,19 @@ pub fn layout(
         let room_left = left + air;
         let room_right = right - air;
         let wide = measure(title);
+        // Fluent puts the title straight after the icon; macOS and GNOME
+        // centre it.
+        let left_aligned = !native_traffic_lights()
+            && crate::window_buttons::style() == crate::window_buttons::Style::Fluent;
         if wide <= (room_right - room_left).max(0.0) {
+            let at = if left_aligned {
+                left
+            } else {
+                ((width - wide) / 2.0).clamp(room_left, room_right - wide)
+            };
             placed.push(Placed {
                 item: Item::Title,
-                left: ((width - wide) / 2.0).clamp(room_left, room_right - wide),
+                left: at,
                 width: wide,
                 icon: None,
                 label: title.to_string(),
@@ -838,9 +855,11 @@ pub fn resize_cursor(direction: winit::window::ResizeDirection) -> winit::window
 
 /// How wide one window button is.
 pub fn button_width(pt: f32) -> f32 {
-    // The Windows caption width, 46px at 96dpi: a close button narrower
-    // than the system's misses the corner muscle memory aims at.
-    (34.5 * pt).round()
+    // `pt` is pixels per typographic point, 4/3 at 96dpi: the slot widths
+    // are in logical pixels, so three quarters of them are points -- 46px,
+    // the Windows caption width, is 34.5pt.
+    let logical = crate::window_buttons::slot_width(crate::window_buttons::style());
+    (logical * 0.75 * pt).round()
 }
 
 /// How far in from the right edge the window buttons reach.

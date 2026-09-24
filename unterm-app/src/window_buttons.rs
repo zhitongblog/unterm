@@ -1,15 +1,22 @@
 //! Minimise, maximise and close, drawn into the top bar.
 //!
-//! Ported from the previous front end's `window_buttons.rs`. The paths are
-//! its paths, in the same normalised coordinates: a close that is two
-//! corner-to-corner diagonals, a minimise that is a rule at six tenths of the
-//! height, a maximise whose corners are chamfered a tenth, and a restore that
-//! is one square behind another. They were drawn as vector outlines there and
-//! are stroked here, which at a title bar's size is the same picture.
+//! Two styles, because the two desktops that need us to draw them have
+//! different ideas of what the buttons are:
 //!
-//! The colours are its colours too, and the one that matters is the close
-//! button's hover: Windows turns it red, and a window whose close button does
-//! not is a window people hesitate over.
+//! - **Fluent** (Windows): full-height 46px backplates with a 10px glyph at
+//!   100% scaling -- the geometry of Segoe Fluent Icons' E921/E922/E923/E8BB,
+//!   which is what Windows Terminal and Warp draw. The fills are Fluent's own
+//!   tokens: a 6% white wash on hover, a fainter one while pressed, and the
+//!   system's close red, #C42B1C.
+//! - **Adwaita** (Linux): round 24px buttons on a neutral fill, 8px glyphs,
+//!   close no redder than the others -- GNOME's header-bar buttons. The
+//!   Windows backplates on a GNOME desktop read as a Windows app.
+//!
+//! macOS draws its own traffic lights and never comes here.
+//!
+//! Glyphs are stroked rather than typed: the codepoints of Segoe Fluent Icons
+//! collide with the Nerd Font symbols face in the private-use area, and a
+//! stroked cross is the same cross on every machine.
 
 use unterm_render::quads::Quad;
 use unterm_render::strokes;
@@ -23,236 +30,274 @@ pub enum Button {
     Close,
 }
 
-/// How big the icon is drawn inside its button, as a fraction of the button's
-/// height. The previous front end drew a 10pt glyph in a title bar; this keeps
-/// the same proportion whatever the cell size.
-// 0.57.4 drew caption glyphs at 7.5pt inside a ~22pt-tall bar: about a
-// third of the height, not the 0.42 that made every glyph read oversized
-// next to the system's own buttons.
-const ICON: f32 = 0.34;
+/// Which desktop's buttons to draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    Fluent,
+    Adwaita,
+}
 
-/// Windows' own close-button red. Not derived from the theme: it means "this
-/// closes the window" and it means it in every theme.
-pub const CLOSE_HOVER: [f32; 4] = [0.88, 0.05, 0.04, 1.0];
-
-/// The icon's colour on a bar of the given lightness.
-///
-/// Black on a light bar, white on a dark one. Following the theme's own
-/// foreground instead would leave a low-contrast icon on the one surface that
-/// must never be hard to find.
-pub fn icon_color(bar_is_light: bool) -> [f32; 4] {
-    if bar_is_light {
-        [0.0, 0.0, 0.0, 1.0]
+/// The style for this platform.
+pub fn style() -> Style {
+    if cfg!(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")) {
+        Style::Adwaita
     } else {
-        [1.0, 1.0, 1.0, 1.0]
+        Style::Fluent
     }
 }
 
-/// The fill behind a hovered button.
-pub fn hover_fill(button: Button, bar_is_light: bool) -> [f32; 4] {
-    if button == Button::Close {
-        return CLOSE_HOVER;
-    }
-    let icon = icon_color(bar_is_light);
-    [
-        icon[0],
-        icon[1],
-        icon[2],
-        if bar_is_light { 0.14 } else { 0.11 },
-    ]
-}
-
-/// The icon's colour when the button is hovered.
-///
-/// White on the close button's red, whatever the bar is: the red is dark in
-/// both themes and a black cross on it is barely there.
-pub fn hovered_icon_color(button: Button, bar_is_light: bool) -> [f32; 4] {
-    if button == Button::Close {
-        [1.0, 1.0, 1.0, 1.0]
-    } else {
-        icon_color(bar_is_light)
+/// How wide one button's slot is, in logical pixels.
+pub fn slot_width(style: Style) -> f32 {
+    match style {
+        // Windows' own caption width: a close button narrower than the
+        // system's misses the corner muscle memory aims at.
+        Style::Fluent => 46.0,
+        // A 24px circle with 5px either side, as GNOME spaces them.
+        Style::Adwaita => 34.0,
     }
 }
 
-/// Draw `button` centred in the box at `left`, `top`.
-pub fn quads(
+/// Windows' own close-button red (Fluent's `SystemFillColorCritical` on a
+/// caption). Not derived from the theme: it means "this closes the window".
+pub const CLOSE_HOVER: [f32; 4] = [0.769, 0.169, 0.110, 1.0];
+
+/// How a button looks at one instant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct State {
+    /// 0 at rest, 1 fully hovered; in between while the hover fades.
+    pub hover: f32,
+    pub pressed: bool,
+    /// The window is in front. A caption in a background window is dimmed,
+    /// as every Windows 11 title bar is.
+    pub active: bool,
+}
+
+impl State {
+    pub const REST: State = State { hover: 0.0, pressed: false, active: true };
+}
+
+/// The fill behind a button: the backplate on Windows, the circle on Linux.
+pub fn fill(style: Style, button: Button, state: State, bar_is_light: bool) -> [f32; 4] {
+    let ink = if bar_is_light { [0.0, 0.0, 0.0] } else { [1.0, 1.0, 1.0] };
+    match style {
+        Style::Fluent => {
+            if button == Button::Close {
+                let alpha = if state.pressed { 0.9 } else { state.hover };
+                return [CLOSE_HOVER[0], CLOSE_HOVER[1], CLOSE_HOVER[2], alpha];
+            }
+            // SubtleFillColorSecondary on hover, Tertiary while pressed.
+            let (hover, pressed) = if bar_is_light { (0.035, 0.024) } else { (0.059, 0.039) };
+            let alpha = if state.pressed { pressed } else { hover * state.hover };
+            [ink[0], ink[1], ink[2], alpha]
+        }
+        Style::Adwaita => {
+            let alpha = if state.pressed {
+                0.20
+            } else {
+                0.10 + 0.05 * state.hover
+            };
+            let alpha = if state.active { alpha } else { alpha * 0.6 };
+            [ink[0], ink[1], ink[2], alpha]
+        }
+    }
+}
+
+/// The glyph's colour.
+pub fn glyph_color(style: Style, button: Button, state: State, bar_is_light: bool) -> [f32; 4] {
+    if style == Style::Fluent && button == Button::Close && (state.hover > 0.5 || state.pressed) {
+        // White on the red, in both themes; a little muted while pressed.
+        return [1.0, 1.0, 1.0, if state.pressed { 0.7 } else { 1.0 }];
+    }
+    let base = if bar_is_light { [0.0, 0.0, 0.0, 0.894] } else { [1.0, 1.0, 1.0, 1.0] };
+    if !state.active {
+        // TextFillColorDisabled.
+        return [base[0], base[1], base[2], if bar_is_light { 0.361 } else { 0.365 }];
+    }
+    base
+}
+
+/// Draw `button`'s glyph centred in the slot at `left`, `top`. `scale` is the
+/// window's DPI scale, so the glyph is 10px at 100% and 15px at 150%.
+pub fn glyph(
+    style: Style,
     button: Button,
     left: f32,
     top: f32,
     width: f32,
     height: f32,
+    scale: f32,
     color: [f32; 4],
 ) -> Vec<Quad> {
-    let size = (height * ICON).max(4.0).floor();
-    let origin = (left + (width - size) / 2.0, top + (height - size) / 2.0);
+    let nominal = match style {
+        Style::Fluent => 10.0,
+        Style::Adwaita => 8.0,
+    };
+    let size = (nominal * scale).round().clamp(4.0, height.max(4.0));
+    let weight = match style {
+        Style::Fluent => scale.round().max(1.0),
+        // Adwaita's symbolic icons are drawn a little heavier.
+        Style::Adwaita => (1.4 * scale).round().max(1.0),
+    };
+    let origin = ((left + (width - size) / 2.0).round(), (top + (height - size) / 2.0).round());
     let at = |x: f32, y: f32| (origin.0 + size * x, origin.1 + size * y);
-    let weight = (size / 10.0).round().max(1.0);
 
     match button {
-        // Corner to corner, both ways.
         Button::Close => {
             let mut quads = strokes::line(at(0.0, 0.0), at(1.0, 1.0), weight, color);
             quads.extend(strokes::line(at(1.0, 0.0), at(0.0, 1.0), weight, color));
             quads
         }
-        // A rule low in the box rather than through its middle, so it reads as
-        // "down to the taskbar" rather than as a minus sign.
-        Button::Minimise => strokes::line(at(0.0, 0.6), at(1.0, 0.6), weight, color),
-        // Windows draws a square outline here. Chamfering every corner made
-        // the caption read as a rounded app button rather than Maximise,
-        // especially after DPI scaling softened the four short diagonals.
-        Button::Maximise => strokes::rectangle(
-            origin.0 + size * 0.15,
-            origin.1 + size * 0.15,
-            size * 0.7,
-            size * 0.7,
-            weight,
-            color,
-        ),
-        // One square behind another: the front one is where the window will
-        // go back to, the back one is where it is now.
+        // Fluent's rule sits on the glyph's middle; GNOME's low, like the
+        // dash of a minimised window.
+        Button::Minimise => {
+            let y = match style {
+                Style::Fluent => 0.5,
+                Style::Adwaita => 0.8,
+            };
+            strokes::line(at(0.0, y), at(1.0, y), weight, color)
+        }
+        Button::Maximise => strokes::rectangle(origin.0, origin.1, size, size, weight, color),
+        // The front square is where the window goes back to; the corner
+        // behind it is where it is now.
         Button::Restore => {
-            let mut quads =
-                strokes::polyline(&[at(0.25, 0.1), at(0.9, 0.1), at(0.9, 0.75)], weight, color);
-            quads.extend(strokes::rectangle(
-                origin.0 + size * 0.05,
-                origin.1 + size * 0.3,
-                size * 0.65,
-                size * 0.65,
+            let offset = (size * 0.2).round().max(2.0);
+            let front = size - offset;
+            let mut quads = strokes::polyline(
+                &[
+                    (origin.0 + offset, origin.1),
+                    (origin.0 + size, origin.1),
+                    (origin.0 + size, origin.1 + front),
+                ],
                 weight,
                 color,
-            ));
+            );
+            quads.extend(strokes::rectangle(origin.0, origin.1 + offset, front, front, weight, color));
             quads
         }
     }
+}
+
+/// Where the round Adwaita button sits inside its slot.
+pub fn adwaita_circle(left: f32, top: f32, width: f32, height: f32, scale: f32) -> (f32, f32, f32) {
+    let diameter = (24.0 * scale).round().min(height).min(width);
+    (
+        (left + (width - diameter) / 2.0).round(),
+        (top + (height - diameter) / 2.0).round(),
+        diameter,
+    )
+}
+
+/// How far into a hover fade `elapsed` is, with Fluent's decelerate curve.
+/// 150ms for the backplate, as Windows Terminal times it.
+pub fn fade(elapsed: std::time::Duration) -> f32 {
+    if crate::ui_tokens::reduce_motion() {
+        return 1.0;
+    }
+    let t = (elapsed.as_secs_f32() / 0.150).clamp(0.0, 1.0);
+    // cubic-bezier(0, 0, 0, 1), close enough: ease-out cubic.
+    1.0 - (1.0 - t).powi(3)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn drawn(button: Button) -> Vec<Quad> {
-        quads(button, 0.0, 0.0, 30.0, 30.0, [1.0; 4])
+    fn drawn(style: Style, button: Button) -> Vec<Quad> {
+        glyph(style, button, 0.0, 0.0, 46.0, 32.0, 1.0, [1.0; 4])
     }
 
     fn bounds(quads: &[Quad]) -> (f32, f32, f32, f32) {
         let left = quads.iter().map(|q| q.left).fold(f32::MAX, f32::min);
         let top = quads.iter().map(|q| q.top).fold(f32::MAX, f32::min);
-        let right = quads
-            .iter()
-            .map(|q| q.left + q.width)
-            .fold(f32::MIN, f32::max);
-        let bottom = quads
-            .iter()
-            .map(|q| q.top + q.height)
-            .fold(f32::MIN, f32::max);
+        let right = quads.iter().map(|q| q.left + q.width).fold(f32::MIN, f32::max);
+        let bottom = quads.iter().map(|q| q.top + q.height).fold(f32::MIN, f32::max);
         (left, top, right, bottom)
     }
 
-    #[test]
-    fn every_button_draws_something() {
-        for button in [
-            Button::Minimise,
-            Button::Maximise,
-            Button::Restore,
-            Button::Close,
-        ] {
-            assert!(!drawn(button).is_empty(), "{button:?} drew nothing");
-        }
-    }
+    const ALL: [Button; 4] = [Button::Minimise, Button::Maximise, Button::Restore, Button::Close];
 
-    /// Centred across its box. An icon that hugs one edge is the first thing
-    /// that looks wrong about a hand-drawn title bar.
     #[test]
-    fn an_icon_is_centred_across_its_button() {
-        for button in [
-            Button::Minimise,
-            Button::Maximise,
-            Button::Restore,
-            Button::Close,
-        ] {
-            // A stroke adds its own weight past the end of the path, so the
-            // drawn bounds are never exactly symmetric.
-            let (left, _, right, _) = bounds(&drawn(button));
-            let off = (left - (30.0 - right)).abs();
-            assert!(off <= 1.5, "{button:?} sits off-centre by {off}");
-        }
-    }
-
-    /// Vertically too, for the symmetric ones. Minimise is deliberately low --
-    /// see below -- so it is not one of them.
-    #[test]
-    fn a_symmetric_icon_is_centred_down_its_button() {
-        for button in [Button::Maximise, Button::Close] {
-            let (_, top, _, bottom) = bounds(&drawn(button));
-            let off = (top - (30.0 - bottom)).abs();
-            assert!(off <= 1.5, "{button:?} sits off-centre by {off}");
-        }
-    }
-
-    /// And stays inside it, or it draws over the button beside it.
-    #[test]
-    fn an_icon_stays_inside_its_button() {
-        for button in [
-            Button::Minimise,
-            Button::Maximise,
-            Button::Restore,
-            Button::Close,
-        ] {
-            for quad in drawn(button) {
-                assert!(quad.left >= 0.0, "{button:?}: {quad:?}");
-                assert!(quad.top >= 0.0, "{button:?}: {quad:?}");
-                assert!(quad.left + quad.width <= 30.0, "{button:?}: {quad:?}");
-                assert!(quad.top + quad.height <= 30.0, "{button:?}: {quad:?}");
+    fn every_button_draws_something_in_both_styles() {
+        for style in [Style::Fluent, Style::Adwaita] {
+            for button in ALL {
+                assert!(!drawn(style, button).is_empty(), "{style:?} {button:?} drew nothing");
             }
         }
     }
 
-    /// The minimise rule sits low, not through the middle: high enough and it
-    /// reads as a minus sign.
+    /// The Fluent glyph is Segoe Fluent Icons' size: 10px at 100%, 15 at 150%.
     #[test]
-    fn the_minimise_rule_sits_below_the_middle() {
-        let (_, top, _, bottom) = bounds(&drawn(Button::Minimise));
+    fn a_fluent_glyph_is_ten_pixels_at_one_hundred_percent() {
+        for (scale, want) in [(1.0, 10.0), (1.5, 15.0), (2.0, 20.0)] {
+            let quads = glyph(Style::Fluent, Button::Maximise, 0.0, 0.0, 69.0, 48.0, scale, [1.0; 4]);
+            let (left, top, right, bottom) = bounds(&quads);
+            assert!((right - left - want).abs() <= scale.round() + 0.5, "{scale}: {}", right - left);
+            assert!((bottom - top - want).abs() <= scale.round() + 0.5, "{scale}: {}", bottom - top);
+        }
+    }
+
+    /// Centred in the slot, and inside it.
+    #[test]
+    fn a_glyph_is_centred_and_stays_in_its_slot() {
+        for style in [Style::Fluent, Style::Adwaita] {
+            for button in ALL {
+                let quads = drawn(style, button);
+                let (left, top, right, bottom) = bounds(&quads);
+                assert!((left - (46.0 - right)).abs() <= 1.5, "{style:?} {button:?} off-centre across");
+                assert!(left >= 0.0 && right <= 46.0 && top >= 0.0 && bottom <= 32.0, "{style:?} {button:?} escapes");
+            }
+        }
+    }
+
+    /// Windows 11's minimise dash is on the middle of the glyph, not low.
+    #[test]
+    fn the_fluent_minimise_rule_is_on_the_middle() {
+        let (_, top, _, bottom) = bounds(&drawn(Style::Fluent, Button::Minimise));
         let middle = (top + bottom) / 2.0;
-        assert!(middle > 15.0, "the rule is at {middle}, not below centre");
+        assert!((middle - 16.0).abs() <= 1.0, "the rule is at {middle}");
     }
 
-    /// Windows turns the close button red, and a window whose close button
-    /// does not is a window people hesitate over.
+    /// Only Windows' close turns red, and its cross goes white on it.
     #[test]
-    fn only_the_close_button_turns_red() {
-        assert_eq!(hover_fill(Button::Close, false), CLOSE_HOVER);
-        for button in [Button::Minimise, Button::Maximise, Button::Restore] {
-            let fill = hover_fill(button, false);
-            assert_ne!(fill, CLOSE_HOVER, "{button:?} should not go red");
-            assert!(fill[3] < 0.2, "{button:?} should be a tint: {fill:?}");
+    fn only_the_fluent_close_turns_red() {
+        let hovered = State { hover: 1.0, pressed: false, active: true };
+        assert_eq!(fill(Style::Fluent, Button::Close, hovered, false)[..3], CLOSE_HOVER[..3]);
+        assert_eq!(glyph_color(Style::Fluent, Button::Close, hovered, true), [1.0, 1.0, 1.0, 1.0]);
+        for button in [Button::Minimise, Button::Maximise] {
+            let f = fill(Style::Fluent, button, hovered, false);
+            assert!(f[3] < 0.1, "{button:?} should be a faint wash: {f:?}");
+        }
+        let gnome = fill(Style::Adwaita, Button::Close, hovered, false);
+        assert_eq!(gnome[..3], [1.0, 1.0, 1.0], "GNOME's close is not red");
+    }
+
+    /// A button at rest has no backplate on Windows; a fade runs 0 -> 1.
+    #[test]
+    fn a_fluent_button_at_rest_has_no_backplate_and_the_fade_runs_to_full() {
+        assert_eq!(fill(Style::Fluent, Button::Minimise, State::REST, false)[3], 0.0);
+        assert_eq!(fill(Style::Fluent, Button::Close, State::REST, false)[3], 0.0);
+        assert_eq!(fade(std::time::Duration::from_millis(400)), 1.0);
+        // With the system's reduce-motion on, every fade is already over.
+        if !crate::ui_tokens::reduce_motion() {
+            assert_eq!(fade(std::time::Duration::ZERO), 0.0);
+            assert!(fade(std::time::Duration::from_millis(75)) > 0.5);
         }
     }
 
-    /// And its cross goes white, because the red is dark in both themes.
+    /// A background window's caption is dimmed.
     #[test]
-    fn the_close_cross_is_white_on_its_red() {
-        for light in [true, false] {
-            assert_eq!(
-                hovered_icon_color(Button::Close, light),
-                [1.0, 1.0, 1.0, 1.0]
-            );
-        }
+    fn an_inactive_window_dims_its_glyphs() {
+        let inactive = State { hover: 0.0, pressed: false, active: false };
+        assert!(glyph_color(Style::Fluent, Button::Minimise, inactive, false)[3] < 0.4);
+        assert_eq!(glyph_color(Style::Fluent, Button::Minimise, State::REST, false)[3], 1.0);
     }
 
     #[test]
-    fn the_icon_follows_the_bars_lightness_rather_than_the_theme() {
-        assert_eq!(icon_color(true), [0.0, 0.0, 0.0, 1.0]);
-        assert_eq!(icon_color(false), [1.0, 1.0, 1.0, 1.0]);
-    }
-
-    /// A tiny bar still gets a visible icon rather than nothing.
-    #[test]
-    fn a_small_button_still_draws() {
-        let quads = quads(Button::Close, 0.0, 0.0, 8.0, 8.0, [1.0; 4]);
-        assert!(!quads.is_empty());
-        for quad in quads {
-            assert!(quad.width >= 1.0 && quad.height >= 1.0);
-        }
+    fn the_adwaita_circle_is_centred_and_fits() {
+        let (x, y, d) = adwaita_circle(10.0, 0.0, 34.0, 32.0, 1.0);
+        assert_eq!(d, 24.0);
+        assert_eq!((x, y), (15.0, 4.0));
+        let (_, _, small) = adwaita_circle(0.0, 0.0, 34.0, 20.0, 1.0);
+        assert_eq!(small, 20.0, "never taller than the bar");
     }
 }

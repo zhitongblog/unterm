@@ -58,6 +58,7 @@ pub const SETTINGS: &[&str] = &[
     "shell",
     "path_append",
     "window.background_opacity",
+    "window.backdrop",
     "window.decorations",
     "window.initial_cols",
     "window.initial_rows",

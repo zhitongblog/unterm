@@ -319,5 +319,8 @@
   "web.toast.refresh": "새로 고침: {err}",
   "web.toast.session_failed": "세션: {err}",
   "web.toast.theme_applied": "테마 적용: {id}",
-  "web.toast.theme_failed": "테마: {err}"
+  "web.toast.theme_failed": "테마: {err}",
+  "admin.new_window": "새 관리자 창",
+  "admin.title": "관리자",
+  "admin.declined": "UAC에서 관리자 창이 취소되었습니다."
 }

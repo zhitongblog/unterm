@@ -69,6 +69,8 @@ pub enum Action {
     LeftTabBar,
     DirJump,
     NewWindow,
+    /// A window whose shells run as administrator, through UAC. Windows only.
+    NewAdminWindow,
     ClosePane,
     ZoomPane,
     /// Open the settings page in a browser.
@@ -127,6 +129,7 @@ impl Action {
             Action::LeftTabBar => "LeftTabBar",
             Action::DirJump => "DirJump",
             Action::NewWindow => "NewWindow",
+            Action::NewAdminWindow => "NewAdminWindow",
             Action::ClosePane => "ClosePane",
             Action::ZoomPane => "ZoomPane",
             Action::Settings => "Settings",
@@ -196,6 +199,7 @@ impl Action {
             Action::LeftTabBar => "Left Tab Bar",
             Action::DirJump => "Go to Directory",
             Action::NewWindow => "New Window",
+            Action::NewAdminWindow => "New Administrator Window",
             Action::ClosePane => "Close Pane",
             Action::ZoomPane => "Zoom Pane",
             Action::Settings => "Settings",
@@ -730,6 +734,7 @@ const NAMED_ACTIONS: &[(&str, Action)] = &[
     ("LeftTabBar", Action::LeftTabBar),
     ("DirJump", Action::DirJump),
     ("NewWindow", Action::NewWindow),
+    ("NewAdminWindow", Action::NewAdminWindow),
     ("ClosePane", Action::ClosePane),
     ("ZoomPane", Action::ZoomPane),
     ("Settings", Action::Settings),
@@ -950,6 +955,15 @@ pub fn chord_hint(action: Action) -> Option<String> {
 /// Every distinct command the palette offers. Families whose members differ
 /// by direction are all present; numbered tab selection is one row because
 /// its label and purpose are shared.
+/// Whether this platform can do `action` at all. The palette leaves out
+/// what would only answer "not here".
+pub fn available(action: Action) -> bool {
+    match action {
+        Action::NewAdminWindow => crate::admin::available(),
+        _ => true,
+    }
+}
+
 pub const PALETTE_ACTIONS: &[Action] = &[
     Action::Copy,
     Action::Paste,
@@ -976,6 +990,7 @@ pub const PALETTE_ACTIONS: &[Action] = &[
     Action::LeftTabBar,
     Action::DirJump,
     Action::NewWindow,
+    Action::NewAdminWindow,
     Action::ClosePane,
     Action::ZoomPane,
     Action::Settings,

@@ -23,6 +23,9 @@ pub struct Args {
     pub profile: Option<String>,
     /// Explicit program and arguments for the first pane.
     pub command: Vec<String>,
+    /// Be the administrator window: elevated, alone, and unreachable. See
+    /// `admin`.
+    pub admin: bool,
     /// Arguments that meant nothing here, kept so they can be reported.
     pub unrecognised: Vec<String>,
 }
@@ -43,6 +46,7 @@ pub fn parse<I: IntoIterator<Item = String>>(arguments: I) -> Args {
             // program does, so it means "and nothing else".
             "start" => {}
             "--tab" => args.tab = true,
+            "--admin" => args.admin = true,
             "--config" | "-c" => args.config = rest.next().map(PathBuf::from),
             "--cwd" => args.cwd = rest.next().map(PathBuf::from),
             "--profile" => args.profile = rest.next(),

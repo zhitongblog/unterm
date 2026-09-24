@@ -28,8 +28,9 @@ pub const HEADER_FONT_SIZE: f64 = 18.0;
 /// Line-height ratio for chrome text. A touch loose (vs 1.2) so sidebar/tab
 /// rows breathe instead of reading cramped.
 pub const UI_LINE_HEIGHT: f64 = 1.30;
-/// Corner radius for selectable rows and buttons.
-pub const CORNER_RADIUS: f32 = 5.0;
+/// Corner radius for selectable rows and buttons: 3pt is Fluent's 4px
+/// control radius at 96dpi.
+pub const CORNER_RADIUS: f32 = 3.0;
 /// Padding inside selectable rows. Generous so sidebar/tab rows don't read
 /// cramped, especially at the slightly larger UI font size.
 pub const ROW_PADDING: f32 = 8.0;
@@ -58,6 +59,56 @@ pub const CHROME_TEXT_BASELINE_NUDGE: f32 = -2.0;
 /// Measured against the lights' ink at 1x — lights centre ~15.5 in a 28px
 /// bar; the general chrome nudge put our text at ~11.
 pub const TOPBAR_TEXT_NUDGE: f32 = 2.0;
+/// Motion, in milliseconds: Fluent's fast, normal and slow durations.
+pub const MOTION_FAST_MS: u64 = 83;
+pub const MOTION_NORMAL_MS: u64 = 167;
+pub const MOTION_SLOW_MS: u64 = 250;
+/// Whether the system asks for less motion.
+///
+/// Read once: it is a setting people change rarely, and asking the OS on
+/// every animated frame would cost more than the animation. Windows' "Show
+/// animations in Windows" and macOS's "Reduce motion" both answer it.
+pub fn reduce_motion() -> bool {
+    static ANSWER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ANSWER.get_or_init(system_reduces_motion)
+}
+
+#[cfg(windows)]
+fn system_reduces_motion() -> bool {
+    use winapi::um::winuser::{SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION};
+    let mut enabled: winapi::shared::minwindef::BOOL = 1;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            &mut enabled as *mut _ as *mut std::ffi::c_void,
+            0,
+        )
+    };
+    ok != 0 && enabled == 0
+}
+
+#[cfg(target_os = "macos")]
+fn system_reduces_motion() -> bool {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace.is_null() {
+            return false;
+        }
+        let reduce: bool = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        reduce
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn system_reduces_motion() -> bool {
+    false
+}
+
+/// A list row is two chrome lines tall: the title, then its context.
+pub const SIDEBAR_ROW_LINES: f32 = 1.75;
 /// Width of chrome scrollbars; rendered with a minimum physical width.
 pub const CHROME_SCROLLBAR_WIDTH: f32 = 5.0;
 /// Minimum physical scrollbar width, to keep HiDPI and low-DPI output aligned.
@@ -69,9 +120,11 @@ pub const CHROME_SCROLLBAR_TRACK_ALPHA: f32 = 0.16;
 /// Thumb opacity for theme-provided scrollbar colors.
 pub const CHROME_SCROLLBAR_THUMB_ALPHA: f32 = 0.74;
 
-/// Left tab bar geometry.
-pub const LEFT_TAB_BAR_WIDTH: f32 = 164.0;
-pub const LEFT_TAB_BAR_MIN_WIDTH: f32 = 120.0;
+/// Left tab bar geometry, in points: 186pt is 248px at 96dpi, Warp's
+/// vertical-tab width, and 150pt its 200px minimum. Room for a task on the
+/// first line and where-and-which-branch on the second.
+pub const LEFT_TAB_BAR_WIDTH: f32 = 186.0;
+pub const LEFT_TAB_BAR_MIN_WIDTH: f32 = 150.0;
 /// Max width as a fraction of the window width.
 pub const LEFT_TAB_BAR_MAX_RATIO: f32 = 0.30;
 /// Width of the resize grip on the bar's right edge.

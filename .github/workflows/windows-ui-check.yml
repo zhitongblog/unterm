@@ -1,0 +1,28 @@
+name: windows-ui-check
+
+# Builds Unterm on a Windows desktop runner and drives the window: caption
+# hit-testing (what Snap layouts rely on), hover and maximise, and the
+# administrator window. Screenshots are uploaded for review.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/windows-**"]
+
+jobs:
+  ui:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p unterm-app -p unterm-core -p unterm-cli
+      - name: Drive the window
+        shell: pwsh
+        run: .\ci\windows-ui-check.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-ui-check
+          path: ui-check

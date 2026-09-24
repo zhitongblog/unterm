@@ -203,6 +203,45 @@ pub fn read_cached(directory: &std::path::Path) -> Panel {
     panel
 }
 
+/// The branch `directory` is on, from whatever is already known -- never
+/// waiting for git.
+///
+/// For the sidebar, which draws every tab's branch on every frame and cannot
+/// afford a git run per row. An unknown or stale answer schedules one refresh
+/// in the background (one at a time per directory), so a row fills in a
+/// moment after its tab first appears and follows a checkout within seconds.
+pub fn branch_hint(directory: &std::path::Path) -> Option<String> {
+    let known = cache().lock().get(directory).map(|(at, panel)| (at.elapsed(), panel.clone()));
+    let stale = known.as_ref().map_or(true, |(age, _)| *age >= CACHE_TTL * 5);
+    if stale {
+        static REFRESHING: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashSet<std::path::PathBuf>>> =
+            std::sync::OnceLock::new();
+        let refreshing = REFRESHING.get_or_init(Default::default);
+        if refreshing.lock().insert(directory.to_path_buf()) {
+            let directory = directory.to_path_buf();
+            let spawned = std::thread::Builder::new()
+                .name("git-branch".into())
+                .spawn({
+                    let directory = directory.clone();
+                    move || {
+                        let _ = read_cached(&directory);
+                        REFRESHING.get().map(|set| set.lock().remove(&directory));
+                        // The row that asked is drawn already; draw it again
+                        // now that there is a branch to show.
+                        crate::mcp_host::request_repaint();
+                    }
+                });
+            if spawned.is_err() {
+                refreshing.lock().remove(&directory);
+            }
+        }
+    }
+    match known?.1 {
+        Panel::Status(status) if !status.branch.is_empty() => Some(shorten_branch(&status.branch)),
+        _ => None,
+    }
+}
+
 /// The longest branch name the bar will print in full.
 ///
 /// Long enough for the ones people type and the ones tools generate up to a

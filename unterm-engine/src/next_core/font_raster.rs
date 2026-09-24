@@ -133,21 +133,39 @@ impl Drop for FontFace {
 /// CoreText both blends gamma-aware and fattens antialiased edges a touch.
 /// Lifting mid coverage with a fixed power curve reproduces that weight;
 /// full and empty pixels pass through untouched, so hinted stems stay crisp.
-/// Off macOS the platform convention is the thinner rendering, and the
-/// coverage passes through unchanged.
+///
+/// Windows needs it as much as macOS. Passing coverage through unchanged
+/// there was meant to follow "the platform's thinner convention", but
+/// DirectWrite is not thin: rendered from the same Cascadia Mono file at the
+/// same size and colours, Windows Terminal put out 12% more ink than we did,
+/// all of it in the antialiased edges -- the dim, washed-out text that made
+/// the terminal read as a port. An exponent of 0.65 matched its ink to within
+/// a percent; Linux gets the same, since its text goes through the same
+/// uncorrected blend.
 fn smoothed(value: u8) -> u8 {
-    if !cfg!(target_os = "macos") || value == 0 || value == 255 {
+    if value == 0 || value == 255 {
         return value;
     }
-    // 255 * (v/255)^0.62, tabulated so the raster loop stays a lookup.
     static CURVE: std::sync::OnceLock<[u8; 256]> = std::sync::OnceLock::new();
     CURVE.get_or_init(|| {
+        let exponent = smoothing_exponent();
         let mut table = [0u8; 256];
         for (index, slot) in table.iter_mut().enumerate() {
-            *slot = ((index as f32 / 255.0).powf(0.62) * 255.0).round() as u8;
+            *slot = ((index as f32 / 255.0).powf(exponent) * 255.0).round() as u8;
         }
         table
     })[value as usize]
+}
+
+/// How hard [`smoothed`] lifts mid coverage on this platform.
+fn smoothing_exponent() -> f32 {
+    if cfg!(target_os = "macos") {
+        // Matched against CoreText.
+        0.62
+    } else {
+        // Matched against DirectWrite; see `smoothed`.
+        0.65
+    }
 }
 
 impl FontFace {

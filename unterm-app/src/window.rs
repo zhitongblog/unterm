@@ -76,41 +76,6 @@ const FALLBACK_GPU_BACKEND: Option<wgpu::Backends> = None;
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 const FALLBACK_GPU_BACKEND: Option<wgpu::Backends> = Some(wgpu::Backends::GL);
 
-/// Ask the compositor for the platform's own rounded corners.
-///
-/// A window that draws its own frame gets square ones by default,
-/// which next to every other Windows 11 window reads as a window that
-/// has not finished loading. The radius is the system's rather than
-/// one of ours: a corner that disagrees with the shadow around it
-/// looks wrong in a way nobody can point at.
-#[cfg(windows)]
-fn round_window_corners(window: &Window) {
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-    const DWMWCP_ROUND: u32 = 2;
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
-    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
-        return;
-    };
-    let preference = DWMWCP_ROUND;
-    // Windows 10 does not know this attribute and answers with an
-    // error, which is the whole response needed: square corners there
-    // are the platform's own look.
-    unsafe {
-        winapi::um::dwmapi::DwmSetWindowAttribute(
-            win32.hwnd.get() as winapi::shared::windef::HWND,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &preference as *const u32 as *const std::ffi::c_void,
-            std::mem::size_of::<u32>() as u32,
-        );
-    }
-}
-
-#[cfg(not(windows))]
-fn round_window_corners(_window: &Window) {}
-
 /// A graphics stack that has already produced one frame.
 struct Graphics {
     surface: wgpu::Surface<'static>,
@@ -139,6 +104,44 @@ struct SharedGpu {
     format: wgpu::TextureFormat,
 }
 
+/// The backends to try, in order, each as (backend, software only).
+///
+/// `UNTERM_GPU_BACKEND` names one backend and makes it the only one tried --
+/// hardware, then software. It is how a machine whose default path hangs
+/// rather than fails can be told to go straight to one that works, and how
+/// the Windows-on-ARM test VM reaches Mesa's software Vulkan past the DX12
+/// attempts that never return there.
+///
+/// Without it: the platform's own backend, its portable fallback, then the
+/// same two in software -- and on Windows, Vulkan last of all. Some machines
+/// have a working Vulkan driver and nothing else: a VM with a software
+/// Vulkan ICD, or a GPU whose D3D12 driver is broken.
+fn gpu_attempts(requested: Option<&str>) -> Vec<(wgpu::Backends, bool)> {
+    let named = requested.and_then(|name| match name.trim().to_ascii_lowercase().as_str() {
+        "dx12" | "d3d12" => Some(wgpu::Backends::DX12),
+        "vulkan" | "vk" => Some(wgpu::Backends::VULKAN),
+        "gl" | "opengl" | "gles" => Some(wgpu::Backends::GL),
+        "metal" => Some(wgpu::Backends::METAL),
+        _ => None,
+    });
+    if let Some(backend) = named {
+        return vec![(backend, false), (backend, true)];
+    }
+    let mut attempts = vec![(PRIMARY_GPU_BACKEND, false)];
+    if let Some(fallback) = FALLBACK_GPU_BACKEND {
+        attempts.push((fallback, false));
+    }
+    attempts.push((PRIMARY_GPU_BACKEND, true));
+    if let Some(fallback) = FALLBACK_GPU_BACKEND {
+        attempts.push((fallback, true));
+    }
+    if cfg!(target_os = "windows") {
+        attempts.push((wgpu::Backends::VULKAN, false));
+        attempts.push((wgpu::Backends::VULKAN, true));
+    }
+    attempts
+}
+
 fn request_graphics(window: Arc<Window>, width: u32, height: u32) -> anyhow::Result<Graphics> {
     // Hardware first, then the same backends again with the software
     // rasteriser. The last pass is what lets a machine with no usable GPU
@@ -151,14 +154,7 @@ fn request_graphics(window: Arc<Window>, width: u32, height: u32) -> anyhow::Res
     // attempts fail and startup gave up with "no working GPU path", having
     // never asked for WARP, which ships with D3D12 and needs no driver at
     // all. Slow is a tradeoff a user can live with; not starting is not.
-    let mut attempts: Vec<(wgpu::Backends, bool)> = vec![(PRIMARY_GPU_BACKEND, false)];
-    if let Some(fallback) = FALLBACK_GPU_BACKEND {
-        attempts.push((fallback, false));
-    }
-    attempts.push((PRIMARY_GPU_BACKEND, true));
-    if let Some(fallback) = FALLBACK_GPU_BACKEND {
-        attempts.push((fallback, true));
-    }
+    let attempts = gpu_attempts(std::env::var("UNTERM_GPU_BACKEND").ok().as_deref());
     let mut failures = Vec::new();
     for (backend, force_software) in attempts {
         match try_backend(backend, window.clone(), width, height, force_software) {
@@ -231,6 +227,77 @@ fn surface_on(
         shared,
     })
 }
+
+/// Put Mica behind the window's frame, or leave the window exactly as it was.
+///
+/// Only on a hardware DX12 adapter, and only once every step has worked: DWM
+/// takes the backdrop (22H2 and later), a DirectComposition tree comes up, a
+/// surface on its visual offers premultiplied alpha and configures cleanly,
+/// and the tree commits. Then that surface replaces the window's own. Any
+/// failure keeps the window's own surface -- opaque, as before, never a black
+/// window -- because the frame's transparency lives only in the new one.
+#[cfg(windows)]
+fn attach_backdrop(live: &mut Live, shared: &SharedGpu, format: wgpu::TextureFormat) {
+    let info = shared.adapter.get_info();
+    if info.backend != wgpu::Backend::Dx12 || info.device_type == wgpu::DeviceType::Cpu {
+        return;
+    }
+    if !crate::win_chrome::enable_mica_alt(&live.window) {
+        return;
+    }
+    let Some(composition) = crate::win_chrome::Composition::new(&live.window) else {
+        log::info!("mica: no composition tree; keeping the opaque frame");
+        return;
+    };
+    let surface = match unsafe {
+        shared
+            .instance
+            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(composition.visual()))
+    } {
+        Ok(surface) => surface,
+        Err(error) => {
+            log::info!("mica: no surface on the visual ({error}); keeping the opaque frame");
+            return;
+        }
+    };
+    let capabilities = surface.get_capabilities(&shared.adapter);
+    if !capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+        || !capabilities.formats.contains(&format)
+    {
+        log::info!("mica: the visual's surface cannot carry alpha; keeping the opaque frame");
+        return;
+    }
+    shared.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(
+        &shared.device,
+        &wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: live.width,
+            height: live.height,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        },
+    );
+    if let Some(error) = pollster::block_on(shared.device.pop_error_scope()) {
+        log::info!("mica: configuring the visual's surface failed ({error}); keeping the opaque frame");
+        return;
+    }
+    if !composition.commit() {
+        log::info!("mica: the composition tree would not commit; keeping the opaque frame");
+        return;
+    }
+    live.surface = surface;
+    live.composition = Some(composition);
+    live.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
+    live.mica = true;
+    log::info!("mica: the frame shows Mica Alt");
+}
+
+#[cfg(not(windows))]
+fn attach_backdrop(_live: &mut Live, _shared: &SharedGpu, _format: wgpu::TextureFormat) {}
 
 /// Bring one backend all the way up, or say why it cannot come up.
 ///
@@ -786,6 +853,8 @@ pub struct App {
     close_prompts: bool,
     /// `window.decorations = true` asks for the system frame back.
     system_decorations: bool,
+    /// Mica behind the frame on Windows 11, unless `window.backdrop = "none"`.
+    backdrop: bool,
     /// The cursor the config asked for, and how fast it blinks.
     cursor_style: crate::terminal::CursorStyle,
     cursor_blink_ms: u64,
@@ -958,6 +1027,13 @@ impl WindowState {
             drawn_revision: None,
             presented_at: None,
             redraw_requested_at: None,
+            frame_sent: None,
+            caption_hover: None,
+            caption_hover_at: std::time::Instant::now(),
+            caption_left: None,
+            animate_until: None,
+            scroll_seen: None,
+            scrolled_at: None,
             drawn_cursor_solid: None,
             drawn_blink: None,
             screen_blink: (false, false),
@@ -1044,6 +1120,20 @@ struct WindowState {
     presented_at: Option<std::time::Instant>,
     /// When `tick` last asked for a frame that has not been drawn yet.
     redraw_requested_at: Option<std::time::Instant>,
+    /// What the compositor was last told about this window's frame: dark or
+    /// not, and the edge colour. See `sync_frame`.
+    frame_sent: Option<(bool, [u8; 3])>,
+    /// The caption button under the pointer, since when, and the one it
+    /// left and when -- what the hover fades are measured from.
+    caption_hover: Option<crate::topbar::Item>,
+    caption_hover_at: std::time::Instant,
+    caption_left: Option<(crate::topbar::Item, std::time::Instant)>,
+    /// Keep drawing until then: something on screen is still moving.
+    animate_until: Option<std::time::Instant>,
+    /// The scrollbar's memory: the view it last drew and when it last moved,
+    /// so an overlay bar shows while scrolling and fades once it stops.
+    scroll_seen: Option<(usize, usize)>,
+    scrolled_at: Option<std::time::Instant>,
     /// Cursor phase represented by the last submitted frame.
     ///
     /// A blinking cursor changes only twice per period. Treating "blinking is
@@ -1281,6 +1371,14 @@ struct Live {
     session_id: usize,
     width: u32,
     height: u32,
+    /// The composition tree the surface presents through, when the frame is
+    /// see-through for Mica. Dropped after the surface that uses it.
+    composition: Option<crate::win_chrome::Composition>,
+    /// How the surface's alpha reaches the compositor: `PreMultiplied`
+    /// behind Mica, the platform's default otherwise.
+    alpha_mode: wgpu::CompositeAlphaMode,
+    /// The frame is transparent and Mica shows through it.
+    mica: bool,
 }
 
 impl App {
@@ -1372,12 +1470,20 @@ impl App {
             .map(str::to_string);
         let shape = crate::terminal::Shape::from_config(config);
         let settings = unterm_services::settings::Settings::from_config(config);
+        // 12px either side and 8 above and below, in logical pixels: text
+        // that starts 6px from the frame reads cramped next to Windows
+        // Terminal's 8 and Rio's 10. A configured value still wins.
         let padding = |key: &str| {
+            let default = if key.ends_with("left") || key.ends_with("right") {
+                12.0
+            } else {
+                8.0
+            };
             config
                 .float_of(key)
                 .ok()
                 .flatten()
-                .unwrap_or(crate::ui_tokens::CHROME_PANEL_INSET as f64)
+                .unwrap_or(default)
                 .max(0.0) as f32
         };
         let pixel_size = config
@@ -1442,6 +1548,14 @@ impl App {
                 .flatten()
                 .map(|value| !value.eq_ignore_ascii_case("neverprompt"))
                 .unwrap_or(true),
+            backdrop: !matches!(
+                config
+                    .str_of("window.backdrop")
+                    .ok()
+                    .flatten()
+                    .map(|value| value.to_ascii_lowercase()),
+                Some(ref value) if value == "none" || value == "off" || value == "false"
+            ),
             system_decorations: config
                 .bool_of("window.decorations")
                 .ok()
@@ -1563,8 +1677,15 @@ impl App {
         let window = Arc::new(event_loop.create_window(attributes.with_visible(false))?);
         crate::startup_trace::mark("window.created");
         if !self.system_decorations {
-            round_window_corners(&window);
+            // Ask Windows 11 for what it draws itself: the rounded corners,
+            // a frame that knows it is dark, an edge in our colours, and the
+            // Snap Layouts flyout over the maximise button we draw.
+            crate::win_chrome::round_corners(&window);
+            crate::win_chrome::install_caption(&window);
         }
+        // A new window, even one built for a parked state: nothing has been
+        // said to the compositor about this handle yet.
+        self.window.frame_sent = None;
         if self.restore.as_ref().map(|saved| saved.maximized) == Some(true) {
             window.set_maximized(true);
         }
@@ -1761,8 +1882,17 @@ impl App {
             session_id: session.as_ref().map(|session| session.id).unwrap_or(0),
             width: size.width.max(1),
             height: size.height.max(1),
+            composition: None,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            mica: false,
         };
+        let mut live = live;
         live.configure(format);
+        if self.backdrop && !self.system_decorations && self.window.picture.is_none() {
+            if let Some(shared) = self.gpu.clone() {
+                attach_backdrop(&mut live, &shared, format);
+            }
+        }
         crate::startup_trace::mark("live.configured");
         live.window.set_visible(true);
         crate::startup_trace::mark("window.visible");
@@ -1954,6 +2084,12 @@ impl App {
         self.append_quick_menu(&mut quads);
         quads.raise_since_modal(modals);
 
+        // Where the terminal's opaque ground starts, for a frame behind Mica:
+        // right of the sidebar and below the top bar.
+        let mica_terminal = {
+            let metrics = self.window.font.metrics();
+            (self.dock_width(metrics), self.top_bar_height())
+        };
         let Some(live) = self.window.state.as_mut() else {
             return;
         };
@@ -1999,6 +2135,24 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // Behind Mica the frame is cleared to nothing and the terminal gets
+        // its background as a quad of its own: the one surface that stays
+        // opaque, because text reads best on a solid ground.
+        let clear = if live.mica {
+            quads.backgrounds.insert(
+                0,
+                unterm_render::quads::Quad {
+                    left: mica_terminal.0,
+                    top: mica_terminal.1,
+                    width: (live.width as f32 - mica_terminal.0).max(0.0),
+                    height: (live.height as f32 - mica_terminal.1).max(0.0),
+                    color: self.window.colors.background,
+                },
+            );
+            [0.0, 0.0, 0.0, 0.0]
+        } else {
+            self.window.colors.background
+        };
         live.renderer.draw(
             &view,
             live.width,
@@ -2006,7 +2160,7 @@ impl App {
             &quads,
             &live.atlas_texture,
             live.background.as_ref(),
-            self.window.colors.background,
+            clear,
         );
         frame.present();
         if !self.window.startup_first_frame_marked {
@@ -2541,6 +2695,58 @@ impl App {
     }
 
     /// The frame's tones, from the terminal's own colours.
+    /// Open a window whose shells run as administrator. Windows asks through
+    /// UAC; saying no is an answer, not an error.
+    fn open_admin_window(&mut self) {
+        let directory = self.current_directory();
+        let message = match crate::admin::launch(directory.as_deref()) {
+            Ok(crate::admin::Launch::Started) => unterm_services::i18n::t("admin.requested"),
+            Ok(crate::admin::Launch::Declined) => unterm_services::i18n::t("admin.declined"),
+            Err(err) => {
+                log::warn!("administrator window: {err:#}");
+                unterm_services::i18n::t_args("admin.failed", &[("err", &format!("{err:#}"))])
+            }
+        };
+        self.show_notice(message);
+    }
+
+    /// Tell Windows what this window's frame looks like: dark or light, and
+    /// the colour of the one-pixel edge it draws around it -- brighter while
+    /// the window has focus, as the system's own windows do. Sent only when it
+    /// changed; a no-op off Windows.
+    fn sync_frame(&mut self) {
+        if self.system_decorations {
+            return;
+        }
+        let chrome = self.chrome();
+        let edge = if self.window.focused {
+            crate::chrome::mix(chrome.outer_edge, self.window.colors.foreground, 0.10)
+        } else {
+            chrome.outer_edge
+        };
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let wanted = (!chrome.is_light, [byte(edge[0]), byte(edge[1]), byte(edge[2])]);
+        if self.window.frame_sent == Some(wanted) {
+            return;
+        }
+        if let Some(live) = self.window.state.as_ref() {
+            crate::win_chrome::set_dark(&live.window, wanted.0);
+            crate::win_chrome::set_border(&live.window, edge);
+            self.window.frame_sent = Some(wanted);
+        }
+    }
+
+    /// The top bar's and the left dock's own surface: see-through behind
+    /// Mica, so the backdrop is what shows there, and the chrome's tone
+    /// otherwise.
+    fn frame_surface(&self, surface: [f32; 4]) -> [f32; 4] {
+        if self.window.state.as_ref().is_some_and(|live| live.mica) {
+            [surface[0], surface[1], surface[2], 0.0]
+        } else {
+            surface
+        }
+    }
+
     fn chrome(&self) -> crate::chrome::Chrome {
         let chrome = crate::chrome::chrome(self.window.colors.background, self.window.colors.foreground);
         // A chosen theme owns the whole window, exactly as 0.57.4 behaved:
@@ -2577,7 +2783,19 @@ impl App {
     /// Where the terminal's first column starts, the strip included.
     fn terminal_left(&self) -> f32 {
         let metrics = self.window.font.metrics();
-        self.dock_width(metrics) + self.terminal_padding_left()
+        self.dock_width(metrics) + self.terminal_padding_left() + self.terminal_balance()
+    }
+
+    /// Half of what the grid leaves over across the width, so the text sits
+    /// centred between its paddings instead of the remainder of a cell piling
+    /// up against the right edge. Never more than half a cell, and the
+    /// column count is unchanged: the width the grid is sized from does not
+    /// include it.
+    fn terminal_balance(&self) -> f32 {
+        let metrics = self.window.font.metrics();
+        let width = self.terminal_width();
+        let (cols, _) = self.window.font.grid_for(width, self.terminal_height());
+        ((width - cols as f32 * metrics.width) / 2.0).floor().max(0.0)
     }
 
     /// How much of the window the left dock has taken.
@@ -2752,6 +2970,26 @@ impl App {
                     foreground: session
                         .map(|session| session.shell.process_name.clone())
                         .map(|name| crate::statusbar::short_name(&name)),
+                    task: session.and_then(|session| {
+                        let agent = facts.as_ref().map(|facts| facts.agent.trim().trim_start_matches('\u{26A1}').trim().to_string());
+                        let agent = agent.filter(|name| !name.is_empty()).or_else(|| {
+                            pane_ids.iter().find_map(|pane| {
+                                statuses
+                                    .iter()
+                                    .find(|status| status.pane_id == *pane as u64)
+                                    .map(|status| status.agent.clone())
+                                    .filter(|agent| !agent.is_empty())
+                            })
+                        })?;
+                        crate::sidebar::task_from_title(
+                            &session.title,
+                            Some(&agent),
+                            &crate::statusbar::short_name(&session.shell.process_name),
+                        )
+                    }),
+                    branch: session
+                        .and_then(|session| session.shell.cwd.as_deref())
+                        .and_then(|cwd| crate::git::branch_hint(std::path::Path::new(cwd))),
                     active: Some(tab) == active,
                     indicators,
                 }
@@ -2962,7 +3200,7 @@ impl App {
             top,
             width,
             height,
-            color: chrome.surface,
+            color: self.frame_surface(chrome.surface),
         });
         // The seam, so the strip and the terminal read as two surfaces of one
         // window rather than one surface that changed colour.
@@ -3026,7 +3264,55 @@ impl App {
         );
         let top = self.terminal_top() - self.chrome_inset();
         let height = self.terminal_height() + self.chrome_inset() * 2.0;
-        Some((0.0, top, width, height, self.chrome_row_height()))
+        Some((0.0, top, width, height, self.sidebar_row_height()))
+    }
+
+    /// A tab row: two chrome lines, the title and then where it is.
+    fn sidebar_row_height(&self) -> f32 {
+        (self.chrome_row_height() * crate::ui_tokens::SIDEBAR_ROW_LINES).round()
+    }
+
+    /// The footer's one line of actions.
+    fn sidebar_footer_height(&self) -> f32 {
+        self.chrome_row_height()
+    }
+
+    /// How tall one row of the strip is. Heights follow what a row holds: a
+    /// tab with a second line gets two, a tab without one gets one, and a
+    /// project header gets one plus the air above it that separates it from
+    /// the project before. A grid of equal two-line rows left every header
+    /// and every one-line tab with an empty line of its own -- the gaps
+    /// between projects were those.
+    fn sidebar_row_extent(&self, row: &crate::sidebar::Row) -> f32 {
+        let line = self.chrome_row_height();
+        match row {
+            crate::sidebar::Row::Group { .. } => (line * 1.2).round(),
+            crate::sidebar::Row::Tab { subtitle: Some(_), .. } => (line * 1.55).round(),
+            crate::sidebar::Row::Tab { .. } => (line * 0.95).round(),
+        }
+    }
+
+    /// Where each visible row sits, from `scroll` down to the footer: the
+    /// index into `rows`, its top and its height. The painter and the hit
+    /// test both read this, so a row is pressed exactly where it is drawn.
+    fn sidebar_layout(
+        &self,
+        rows: &[crate::sidebar::Row],
+        scroll: usize,
+        first: f32,
+        bottom: f32,
+    ) -> Vec<(usize, f32, f32)> {
+        let mut placed = Vec::new();
+        let mut top = first;
+        for (index, row) in rows.iter().enumerate().skip(scroll) {
+            let height = self.sidebar_row_extent(row);
+            if top + height > bottom {
+                break;
+            }
+            placed.push((index, top, height));
+            top += height;
+        }
+        placed
     }
 
     /// The scale text and pt tokens are drawn at, as distinct from the
@@ -3233,13 +3519,13 @@ impl App {
         let (_left, top, _width, height, row_height) = self.sidebar_dock()?;
         let pt = crate::chrome_font::point(self.window.scale);
         let first = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
-        let footer_top = top + height - row_height;
+        let footer_top = top + height - self.sidebar_footer_height();
         Some((((footer_top - first) / row_height).floor()).max(1.0) as usize)
     }
 
     /// Which strip row a point is over.
     fn sidebar_row_at(&self, x: f32, y: f32) -> Option<usize> {
-        let (left, top, width, height, row_height) = self.sidebar_dock()?;
+        let (left, top, width, height, _row_height) = self.sidebar_dock()?;
         if x < left || x >= left + width || y < top || y >= top + height {
             return None;
         }
@@ -3249,21 +3535,21 @@ impl App {
             return None;
         }
         let visible = self.sidebar_visible_rows()?;
-        let offset = ((y - first) / row_height) as usize;
-        if offset >= visible {
-            return None;
-        }
         let rows = self.sidebar_rows();
         let scroll = crate::sidebar::clamp_scroll(self.window.sidebar_scroll, rows.len(), visible);
-        let at = scroll + offset;
-        (at < rows.len()).then_some(at)
+        let bottom = top + height - self.sidebar_footer_height();
+        self.sidebar_layout(&rows, scroll, first, bottom)
+            .into_iter()
+            .find(|(_, row_top, row_height)| y >= *row_top && y < row_top + row_height)
+            .map(|(index, _, _)| index)
     }
 
     /// 0 = new session, 1 = the shell picker, 2 = settings — one row,
     /// three zones. Pure geometry: the footer is pinned to the bottom
     /// edge, so no session list has to be walked to find it.
     fn sidebar_footer_action_at(&mut self, x: f32, y: f32) -> Option<usize> {
-        let (left, top, width, height, row_height) = self.sidebar_dock()?;
+        let (left, top, width, height, _) = self.sidebar_dock()?;
+        let row_height = self.sidebar_footer_height();
         let footer_top = top + height - row_height;
         if x < left || x >= left + width || y < footer_top || y >= top + height {
             return None;
@@ -3380,9 +3666,10 @@ impl App {
                 // the presses are in `open.log` -- a run of them on one row,
                 // a second apart, then one on the row below that switched at
                 // once.
-                let on_arrow = self.sidebar_dock().is_some_and(|(left, _, _, _, row_height)| {
-                    self.window.pointer.0 < left + row_height
-                });
+                let arrow_zone = self.chrome_row_height();
+                let on_arrow = self
+                    .sidebar_dock()
+                    .is_some_and(|(left, _, _, _, _)| self.window.pointer.0 < left + arrow_zone);
                 if on_arrow {
                     if !self.window.sidebar_collapsed.remove(&key) {
                         self.window.sidebar_collapsed.insert(key);
@@ -3441,7 +3728,7 @@ impl App {
             top,
             width,
             height,
-            color: chrome.surface,
+            color: self.frame_surface(chrome.surface),
         });
         // The seam, so the strip and the terminal read as two surfaces of one
         // window rather than one surface that changed colour.
@@ -3455,7 +3742,8 @@ impl App {
 
         // The bottom row is reserved for the actions, so the list never
         // draws under them even when it fills the strip.
-        let footer_reserve = top + height - row_height;
+        let footer_height = self.sidebar_footer_height();
+        let footer_reserve = top + height - footer_height;
         let rows = self.sidebar_rows();
         let first_row = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
         let visible = (((footer_reserve - first_row) / row_height).floor()).max(1.0) as usize;
@@ -3535,180 +3823,104 @@ impl App {
 
         let content_left = left + inset;
         let content_width = width - inset * 2.0;
-        // Text sits a touch above the row's geometric middle: a cell carries
-        // descender space, so centring by arithmetic alone reads low.
-        let text_offset = ((row_height - self.window.chrome_font.metrics().height) / 2.0
-            + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
-            .max(0.0);
 
-        for (offset, row) in rows.iter().skip(scroll).take(visible).enumerate() {
-            let row_top = first_row + offset as f32 * row_height;
+        for (index, row_top, row_height) in self.sidebar_layout(&rows, scroll, first_row, footer_reserve) {
+            let row = &rows[index];
             match row {
                 crate::sidebar::Row::Group {
                     label,
                     hint,
-                    count,
                     collapsed,
                     active,
                     ..
                 } => {
-                    // A project header becomes a surface of its own when its
-                    // tab is in front, so the eye finds the group before the
-                    // row inside it.
-                    if *active {
-                        quads.backgrounds.extend(unterm_render::rounded::panel(
-                            content_left,
-                            row_top,
-                            content_width,
-                            row_height,
-                            radius,
-                            chrome.group_bg,
-                        ));
-                    }
+                    // A project header is wayfinding: the fold arrow, the
+                    // folder and the name, in a quieter voice than the rows
+                    // it organises, sitting low in its row so it reads as
+                    // the heading of what follows. No count: the rows are
+                    // right there to be counted, and the grey pill beside
+                    // every header was the heaviest thing in the strip.
+                    let line = self.window.chrome_font.metrics().height;
+                    // Low in its row: the air above separates projects, and
+                    // the header sits close to the tabs it names.
+                    let text_top = (row_top + row_height - line - 3.0 * pt
+                        + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+                        .max(row_top);
                     let mut pen = content_left + 4.0 * pt;
                     let arrow = if *collapsed {
                         crate::sidebar::CLOSED
                     } else {
                         crate::sidebar::OPEN
                     };
-                    pen = self.append_chrome(
-                        &arrow.to_string(),
-                        chrome.dim_text,
-                        (pen, row_top + text_offset),
-                        quads,
-                    );
+                    pen = self.append_chrome(&arrow.to_string(), chrome.dim_text, (pen, text_top), quads);
                     pen += 3.0 * pt;
-                    // The folder takes the accent when its project is the one
-                    // in front: one coloured mark per group, and it is the one
-                    // that says which group you are looking at.
                     pen = self.append_chrome(
                         &crate::sidebar::FOLDER.to_string(),
-                        if *active {
-                            chrome.focus_rail
-                        } else {
-                            chrome.dim_text
-                        },
-                        (pen, row_top + text_offset),
+                        if *active { chrome.focus_rail } else { chrome.dim_text },
+                        (pen, text_top),
                         quads,
                     );
-                    pen += 5.0 * pt;
-
-                    // The count sits against the right edge in a rounded pill,
-                    // so a project size is readable without counting rows.
-                    let badge = count.to_string();
-                    let badge_height = (row_height - 6.0 * pt).max(2.0);
-                    // Never narrower than it is tall: a one-digit count
-                    // in a pill thinner than its height reads as an
-                    // upright ellipse, not a pill.
-                    let badge_width = (self.chrome_width(&badge) + 10.0 * pt).max(badge_height);
-                    let badge_left = content_left + content_width - badge_width - 4.0 * pt;
-                    quads.backgrounds.extend(unterm_render::rounded::panel(
-                        badge_left,
-                        row_top + 3.0 * pt,
-                        badge_width,
-                        badge_height,
-                        badge_height / 2.0,
-                        chrome.hover_bg,
-                    ));
-                    let badge_text = self.chrome_width(&badge);
-                    self.append_chrome(
-                        &badge,
-                        chrome.dim_text,
-                        (
-                            badge_left + (badge_width - badge_text) / 2.0,
-                            row_top + text_offset,
-                        ),
-                        quads,
-                    );
-
-                    // The name, with its parent in front when two projects
-                    // share a leaf name. The parent is secondary text so the
-                    // project name itself stays dominant.
+                    pen += 6.0 * pt;
+                    let right = content_left + content_width - 4.0 * pt;
                     if let Some(hint) = hint {
-                        let shown = self.chrome_fit(&format!("{hint}/"), badge_left - pen);
-                        pen = self.append_chrome(
-                            &shown,
-                            chrome.dim_text,
-                            (pen, row_top + text_offset),
-                            quads,
-                        );
+                        let shown = self.chrome_fit(&format!("{hint}/"), right - pen);
+                        pen = self.append_chrome(&shown, chrome.dim_text, (pen, text_top), quads);
                     }
-                    // Group headers are wayfinding, not content: a
-                    // fainter voice than the rows they organise, active
-                    // or not.
                     let mut faint = chrome.dim_text;
-                    faint[3] *= if *active { 0.80 } else { 0.60 };
-                    let shown = self.chrome_fit(label, badge_left - pen);
-                    self.append_chrome(&shown, faint, (pen, row_top + text_offset), quads);
+                    faint[3] *= if *active { 0.85 } else { 0.65 };
+                    let shown = self.chrome_fit(label, right - pen);
+                    self.append_chrome(&shown, faint, (pen, text_top), quads);
                 }
                 crate::sidebar::Row::Tab {
-                    index,
                     label,
+                    subtitle,
                     detail,
                     active,
                     icon,
                     grouped,
                     badge,
                     indicators,
+                    ..
                 } => {
-                    // Children are inset under their header, so tabs and
-                    // projects read as parent and child rather than as peers.
-                    let indent = if *grouped { 10.0 * pt } else { 0.0 };
+                    // Children sit under their header, so tabs and projects
+                    // read as parent and child rather than as peers.
+                    let indent = if *grouped { 8.0 * pt } else { 0.0 };
                     let row_left = content_left + indent;
                     let row_width = (content_width - indent).max(1.0);
+                    let gap = (1.0 * pt).round();
+                    let tile_top = row_top + gap;
+                    let tile_height = (row_height - gap * 2.0).max(1.0);
 
-                    if *active {
-                        quads.backgrounds.extend(unterm_render::rounded::panel(
-                            row_left,
-                            row_top,
-                            row_width,
-                            row_height,
-                            radius,
-                            chrome.selected_bg,
-                        ));
-                    } else if self.window.pointer.0 >= row_left
+                    // One way to say "this is the tab in front": the row is
+                    // filled. It used to be filled *and* carry an accent bar,
+                    // two marks for one fact.
+                    let hovered = self.window.pointer.0 >= row_left
                         && self.window.pointer.0 < row_left + row_width
-                        && self.window.pointer.1 >= row_top
-                        && self.window.pointer.1 < row_top + row_height
-                    {
-                        // The row under the pointer lifts faintly, the way it
-                        // did before: hover is how a list says it is a list.
+                        && self.window.pointer.1 >= tile_top
+                        && self.window.pointer.1 < tile_top + tile_height;
+                    if *active || hovered {
                         quads.backgrounds.extend(unterm_render::rounded::panel(
                             row_left,
-                            row_top,
+                            tile_top,
                             row_width,
-                            row_height,
+                            tile_height,
                             radius,
-                            chrome.hover_bg,
+                            if *active { chrome.selected_bg } else { chrome.hover_bg },
                         ));
                     }
-                    // The rail: the one place the accent is used, and what the
-                    // eye finds first.
-                    let rail = if *active {
-                        Some((chrome.focus_rail, 2.0 * pt))
-                    } else if *grouped {
-                        Some((chrome.outer_edge, 1.0))
-                    } else {
-                        None
-                    };
-                    if let Some((color, thickness)) = rail {
-                        quads.backgrounds.push(unterm_render::quads::Quad {
-                            left: row_left,
-                            top: row_top,
-                            width: thickness,
-                            height: row_height,
-                            color,
-                        });
-                    }
 
-                    let mut pen = row_left + 7.0 * pt;
-                    pen = self.append_chrome(
-                        &format!("{}", index + 1),
-                        chrome.dim_text,
-                        (pen, row_top + text_offset),
-                        quads,
-                    );
-                    pen += 5.0 * pt;
+                    let line = self.window.chrome_font.metrics().height;
+                    let nudge = crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt;
+                    let line_gap = (1.5 * pt).round();
+                    let (first_top, second_top) = if subtitle.is_some() {
+                        let block = line * 2.0 + line_gap;
+                        let first = (tile_top + (tile_height - block) / 2.0 + nudge).max(tile_top);
+                        (first, Some(first + line + line_gap))
+                    } else {
+                        ((tile_top + (tile_height - line) / 2.0 + nudge).max(tile_top), None)
+                    };
+
+                    let mut pen = row_left + 8.0 * pt;
                     pen = self.append_chrome(
                         &icon.to_string(),
                         if *icon == crate::sidebar::ROBOT {
@@ -3718,18 +3930,16 @@ impl App {
                         } else {
                             chrome.dim_text
                         },
-                        (pen, row_top + text_offset),
+                        (pen, first_top),
                         quads,
                     );
                     pen += 7.0 * pt;
+                    let text_left = pen;
 
-                    // One mark against the right edge — the row's whole
-                    // status vocabulary: ✋ asks, a spinner works, ✓
-                    // finished, ▲ errored, • has unread output, and an
-                    // idle shell shows nothing. On every row including
-                    // the active one: the state is about the agent, not
-                    // about which row is being looked at.
-                    let mut right = row_left + row_width - 6.0 * pt;
+                    // The row's one status mark, against the right edge of
+                    // the first line: a hand asks, a spinner works, a tick
+                    // finished, a triangle errored, a dot has unread output.
+                    let mut right = row_left + row_width - 8.0 * pt;
                     let indicator: Option<(&str, [f32; 4])> = if let Some(badge) = badge {
                         Some((badge.glyph(spin), badge.color()))
                     } else if indicators.error {
@@ -3741,30 +3951,35 @@ impl App {
                     };
                     if let Some((glyph, color)) = indicator {
                         let wide = self.chrome_width(glyph);
-                        right -= wide + 4.0 * pt;
-                        self.append_chrome(
-                            glyph,
-                            color,
-                            (right + 4.0 * pt, row_top + text_offset),
-                            quads,
-                        );
+                        right -= wide;
+                        self.append_chrome(glyph, color, (right, first_top), quads);
+                        right -= 6.0 * pt;
                     }
-                    // The command only when it is not the shell repeating
-                    // itself: `cmd  cmd.exe` says one thing twice on a row
-                    // with no room for it.
+                    // The command beside the label only when it is not the
+                    // shell repeating itself.
                     let text = match detail {
-                        Some(detail) if !crate::sidebar::same_program(detail, label) => {
+                        Some(detail)
+                            if !crate::sidebar::same_program(detail, label)
+                                && !is_a_shell(detail)
+                                && subtitle.is_none() =>
+                        {
                             format!("{label}  {detail}")
                         }
                         _ => label.clone(),
                     };
-                    let shown = self.chrome_fit(&text, right - pen);
-                    self.append_chrome(
-                        &shown,
-                        if *active { foreground } else { chrome.dim_text },
-                        (pen, row_top + text_offset),
-                        quads,
-                    );
+                    let shown = self.chrome_fit(&text, right - text_left);
+                    let mut title_color = foreground;
+                    if !*active {
+                        title_color[3] *= 0.86;
+                    }
+                    self.append_chrome(&shown, title_color, (text_left, first_top), quads);
+
+                    if let (Some(subtitle), Some(second_top)) = (subtitle, second_top) {
+                        let mut quiet = chrome.dim_text;
+                        quiet[3] *= 0.8;
+                        let shown = self.chrome_fit(subtitle, row_left + row_width - 8.0 * pt - text_left);
+                        self.append_chrome(&shown, quiet, (text_left, second_top), quads);
+                    }
                 }
             }
         }
@@ -3775,6 +3990,11 @@ impl App {
         // The tab navigator moved into the chevron menu and the
         // palette — relocated, never dropped.
         use unterm_services::i18n::t;
+        // The footer is one chrome line, not a two-line list row.
+        let row_height = footer_height;
+        let text_offset = ((row_height - self.window.chrome_font.metrics().height) / 2.0
+            + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+            .max(0.0);
         let footer_left = left + inset;
         let footer_width = (width - inset * 2.0).max(0.0);
         quads.backgrounds.push(unterm_render::quads::Quad {
@@ -3953,7 +4173,7 @@ impl App {
             top: 0.0,
             width: window_width,
             height,
-            color: chrome.surface,
+            color: self.frame_surface(chrome.surface),
         });
         // A hairline under it, so the bar and the terminal read as two surfaces
         // of one window rather than one surface with a seam.
@@ -3967,6 +4187,21 @@ impl App {
 
         let bar = self.top_bar(window_width);
         let hovered = self.hovered_top_bar_item();
+        let now = std::time::Instant::now();
+        let caption_hover = hovered.filter(|item| {
+            matches!(
+                item,
+                crate::topbar::Item::Minimise | crate::topbar::Item::Maximise | crate::topbar::Item::Close
+            )
+        });
+        if caption_hover != self.window.caption_hover {
+            if let Some(previous) = self.window.caption_hover {
+                self.window.caption_left = Some((previous, now));
+            }
+            self.window.caption_hover = caption_hover;
+            self.window.caption_hover_at = now;
+            self.window.animate_until = Some(now + std::time::Duration::from_millis(170));
+        }
         let pt = self.chrome_pt();
         let radius = crate::ui_tokens::CORNER_RADIUS * pt;
         let text_top = ((height - self.window.chrome_font.metrics().height) / 2.0
@@ -3976,52 +4211,98 @@ impl App {
         for piece in &bar {
             let is_hovered = hovered == Some(piece.item);
 
-            // The window buttons are drawn rather than typed: a close cross
-            // from a font is a different cross on every machine.
+            // The window buttons, in this desktop's own style: see
+            // `window_buttons`. Hover fades in and out over 150ms, as Windows
+            // Terminal's do, and a background window's glyphs are dimmed.
             let maximized = self.window.unmaximized_rect.is_some()
                 || self
                     .window.state
                     .as_ref()
                     .is_some_and(|live| live.window.is_maximized());
             if let Some(button) = crate::topbar::window_button(piece.item, maximized) {
-                if is_hovered {
-                    let fill = if button == crate::window_buttons::Button::Close {
-                        crate::window_buttons::hover_fill(button, chrome.is_light)
-                    } else {
-                        self.chrome_overrides
-                            .button_hover_background
-                            .unwrap_or_else(|| {
-                                crate::window_buttons::hover_fill(button, chrome.is_light)
-                            })
-                    };
-                    quads.backgrounds.push(unterm_render::quads::Quad {
-                        left: piece.left,
-                        top: 0.0,
-                        width: piece.width,
-                        height,
-                        color: fill,
-                    });
+                let style = crate::window_buttons::style();
+                let scale = self.window.scale;
+                if piece.item == crate::topbar::Item::Maximise {
+                    // Where Snap Layouts should open, in client pixels.
+                    if let Some(live) = self.window.state.as_ref() {
+                        crate::win_chrome::set_maximise_button(
+                            &live.window,
+                            Some(crate::win_chrome::ButtonRect {
+                                left: piece.left.round() as i32,
+                                top: 0,
+                                width: piece.width.round() as i32,
+                                height: height.round() as i32,
+                            }),
+                        );
+                    }
                 }
-                let color = if is_hovered && button == crate::window_buttons::Button::Close {
-                    crate::window_buttons::hovered_icon_color(button, chrome.is_light)
-                } else if is_hovered {
-                    self.chrome_overrides
-                        .button_hover_foreground
-                        .or(self.chrome_overrides.button_foreground)
-                        .unwrap_or_else(|| {
-                            crate::window_buttons::hovered_icon_color(button, chrome.is_light)
-                        })
+                let hover = if caption_hover == Some(piece.item) {
+                    crate::window_buttons::fade(now - self.window.caption_hover_at)
+                } else if let Some((left, at)) = self.window.caption_left {
+                    if left == piece.item {
+                        1.0 - crate::window_buttons::fade(now - at)
+                    } else {
+                        0.0
+                    }
                 } else {
-                    self.chrome_overrides
-                        .button_foreground
-                        .unwrap_or_else(|| crate::window_buttons::icon_color(chrome.is_light))
+                    0.0
                 };
-                quads.backgrounds.extend(crate::window_buttons::quads(
+                let pressed = piece.item == crate::topbar::Item::Maximise
+                    && self
+                        .window.state
+                        .as_ref()
+                        .is_some_and(|live| crate::win_chrome::maximise_pressed(&live.window));
+                let state = crate::window_buttons::State {
+                    hover,
+                    pressed,
+                    active: self.window.focused,
+                };
+                let mut fill = crate::window_buttons::fill(style, button, state, chrome.is_light);
+                if button != crate::window_buttons::Button::Close {
+                    if let Some(custom) = self.chrome_overrides.button_hover_background {
+                        fill = [custom[0], custom[1], custom[2], custom[3] * hover];
+                    }
+                }
+                match style {
+                    crate::window_buttons::Style::Fluent => {
+                        if fill[3] > 0.0 {
+                            quads.backgrounds.push(unterm_render::quads::Quad {
+                                left: piece.left,
+                                top: 0.0,
+                                width: piece.width,
+                                height,
+                                color: fill,
+                            });
+                        }
+                    }
+                    crate::window_buttons::Style::Adwaita => {
+                        let (x, y, d) = crate::window_buttons::adwaita_circle(
+                            piece.left, 0.0, piece.width, height, scale,
+                        );
+                        quads.backgrounds.extend(unterm_render::rounded::panel(x, y, d, d, d / 2.0, fill));
+                    }
+                }
+                let mut color = crate::window_buttons::glyph_color(style, button, state, chrome.is_light);
+                if !(button == crate::window_buttons::Button::Close && hover > 0.5) {
+                    let custom = if hover > 0.5 {
+                        self.chrome_overrides
+                            .button_hover_foreground
+                            .or(self.chrome_overrides.button_foreground)
+                    } else {
+                        self.chrome_overrides.button_foreground
+                    };
+                    if let Some(custom) = custom {
+                        color = [custom[0], custom[1], custom[2], custom[3] * color[3]];
+                    }
+                }
+                quads.backgrounds.extend(crate::window_buttons::glyph(
+                    style,
                     button,
                     piece.left,
                     0.0,
                     piece.width,
                     height,
+                    scale,
                     color,
                 ));
                 continue;
@@ -4128,7 +4409,14 @@ impl App {
                 // order of voices.
                 crate::topbar::Item::Title => {
                     let mut quiet = chrome.dim_text;
-                    quiet[3] *= 0.66;
+                    // On Windows it is the title bar's title, beside the icon,
+                    // and Fluent sets that in secondary text; centred on macOS
+                    // and GNOME it is a quieter subtitle.
+                    if crate::topbar::native_traffic_lights()
+                        || crate::window_buttons::style() != crate::window_buttons::Style::Fluent
+                    {
+                        quiet[3] *= 0.66;
+                    }
                     quiet
                 }
                 crate::topbar::Item::Cockpit if cockpit_waiting => {
@@ -4312,6 +4600,16 @@ impl App {
     /// One place, so what is hit is always what was drawn.
     /// Which piece of the top bar the pointer is over.
     fn hovered_top_bar_item(&mut self) -> Option<crate::topbar::Item> {
+        // Over a maximise button that answers Snap Layouts, Windows sends the
+        // window non-client messages instead of the moves winit reports; the
+        // window procedure records the hover for us.
+        if self
+            .window.state
+            .as_ref()
+            .is_some_and(|live| crate::win_chrome::maximise_hovered(&live.window))
+        {
+            return Some(crate::topbar::Item::Maximise);
+        }
         if self.window.pointer.1 >= self.top_bar_height() {
             return None;
         }
@@ -4353,25 +4651,56 @@ impl App {
             return;
         };
 
-        // The track first, so the thumb reads as a position within something
-        // rather than a stripe floating at the edge.
-        quads.backgrounds.push(unterm_render::quads::Quad {
-            left,
-            top: track_top,
-            width: crate::scrollbar::WIDTH,
-            height: track,
-            // The track is a tint of the thumb rather than a mix of the
-            // frame: a scheme that chose a scrollbar colour chose it against
-            // its own background, and deriving one here ignores that.
-            color: crate::chrome::mix(self.window.colors.background, self.theme().scrollbar, 0.35),
+        // An overlay, not a gutter: no track, a thin thumb that is there
+        // while it has something to say -- the view is back in history, the
+        // pointer is at the edge to grab it, or it just moved -- and fades
+        // away once it stops. A bar standing beside every pane at rest was
+        // one more stripe of chrome around text that already had edges.
+        let now = std::time::Instant::now();
+        let seen = (session_id, top_row);
+        if self.window.scroll_seen.is_some_and(|previous| previous.0 == session_id && previous.1 != top_row) {
+            self.window.scrolled_at = Some(now);
+        }
+        self.window.scroll_seen = Some(seen);
+        let scale = self.window.scale.max(0.5);
+        let in_history = top_row + snapshot.rows < total;
+        let near = self.window.pointer.0 >= left - 12.0 * scale
+            && self.window.pointer.0 < left + crate::scrollbar::WIDTH + 4.0 * scale
+            && self.window.pointer.1 >= track_top
+            && self.window.pointer.1 < track_top + track;
+        const HOLD: std::time::Duration = std::time::Duration::from_millis(900);
+        let fade = std::time::Duration::from_millis(crate::ui_tokens::MOTION_SLOW_MS);
+        let recent = self.window.scrolled_at.map_or(0.0, |at| {
+            let since = now.saturating_duration_since(at);
+            if since <= HOLD {
+                1.0
+            } else {
+                1.0 - ((since - HOLD).as_secs_f32() / fade.as_secs_f32()).min(1.0)
+            }
         });
-        quads.backgrounds.push(unterm_render::quads::Quad {
-            left,
-            top: track_top + thumb.top,
-            width: crate::scrollbar::WIDTH,
-            height: thumb.height,
-            color: self.theme().scrollbar,
-        });
+        let visibility = if in_history || near { 1.0 } else { recent };
+        if recent > 0.0 && recent < 1.0 || (recent == 1.0 && !in_history && !near) {
+            self.window.animate_until = Some(now + std::time::Duration::from_millis(40));
+        }
+        if visibility <= 0.0 {
+            return;
+        }
+        let width = if near {
+            crate::scrollbar::WIDTH
+        } else {
+            (4.0 * scale).round().max(2.0)
+        };
+        let inset = ((crate::scrollbar::WIDTH - width) / 2.0).max(0.0);
+        let mut color = self.theme().scrollbar;
+        color[3] *= 0.85 * visibility;
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            left + inset,
+            track_top + thumb.top,
+            width,
+            thumb.height,
+            width / 2.0,
+            color,
+        ));
     }
 
     /// The visual bell, as `visual_bell` configures it: a flash that rises
@@ -4739,6 +5068,7 @@ impl App {
             Action::PreviousTab => self.cycle_tab(-1),
             Action::CloseTab => self.close_tab(),
             Action::NewWindow => self.new_window(),
+            Action::NewAdminWindow => self.open_admin_window(),
             Action::ClosePane => self.close_pane(session_id),
             Action::ZoomPane => self.toggle_zoom(session_id),
             Action::CharSelect => {
@@ -7870,7 +8200,18 @@ impl App {
     }
 
     fn open_shell_selector(&mut self) {
-        self.window.palette = Some(crate::palette::Palette::shells(launcher_entries()));
+        let mut entries = launcher_entries();
+        // Where people look for "a PowerShell as administrator": the list of
+        // shells to start. It opens a separate window, as it must -- see
+        // `admin` -- and the row says so.
+        if crate::admin::available() && !crate::admin::is_admin_window() {
+            entries.push(crate::palette::Entry {
+                label: unterm_services::i18n::t("admin.new_window"),
+                hint: "UAC".to_string(),
+                command: crate::palette::Command::Action(crate::keys::Action::NewAdminWindow),
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::shells(entries));
         self.window.drawn_revision = None;
     }
 
@@ -9160,12 +9501,44 @@ impl App {
                 color: [0.02, 0.02, 0.02, 0.82],
             });
         }
+        // A Fluent flyout: an 8px card lifted off the terminal by a soft
+        // shadow and edged with a one-pixel stroke. There is no blur to draw
+        // a shadow with, so it is built from a few translucent rounded
+        // layers that grow outward and sink a little, which reads the same
+        // at the distance a shadow is seen from.
+        let scale = self.window.scale.max(0.5);
+        let flyout_radius = (8.0 * scale).round();
+        for step in (1..=6).rev() {
+            let spread = step as f32 * 2.0 * scale;
+            let alpha = 0.035 * (7 - step) as f32 / 6.0 + 0.012;
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left - spread,
+                top - spread + 4.0 * scale,
+                width + spread * 2.0,
+                height + spread * 2.0,
+                flyout_radius + spread,
+                [0.0, 0.0, 0.0, alpha],
+            ));
+        }
+        let stroke = if crate::chrome::is_light_surface(self.window.colors.background) {
+            [0.0, 0.0, 0.0, 0.10]
+        } else {
+            mix(self.window.colors.background, self.window.colors.foreground, 0.18)
+        };
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            left - 1.0,
+            top - 1.0,
+            width + 2.0,
+            height + 2.0,
+            flyout_radius + 1.0,
+            stroke,
+        ));
         quads.backgrounds.extend(unterm_render::rounded::panel(
             left,
             top,
             width,
             height,
-            self.corner_radius(),
+            flyout_radius,
             if view == crate::palette::View::ShellSelector {
                 [0.102, 0.102, 0.102, 1.0]
             } else {
@@ -9556,21 +9929,29 @@ impl App {
                 index,
             },
         );
-        // The 0.57.4 shape: position when there are several tabs, the
-        // project, and which instance this window is -- what tells two
-        // Unterm windows apart in Alt-Tab.
-        let tabs = self.window.tabs.tab_ids().len();
-        let position = if tabs > 1 {
-            format!("[{index}/{tabs}] ")
-        } else {
-            String::new()
-        };
-        let project = self
+        // What the window is about, in the user's words: the project, and
+        // the program when it is something other than the shell itself.
+        // The old shape led with the tab's position and ended with the
+        // shell's name -- "[1/3] unterm — Zsh" -- two facts the sidebar shows
+        // anyway, in the one place a person looks for what they are doing.
+        let project_name = self
             .current_directory()
             .map(|dir| crate::sidebar::project_name(&dir.display().to_string()))
-            .filter(|name| !name.is_empty())
-            .map(|name| format!("{name} — "))
-            .unwrap_or_default();
+            .filter(|name| !name.is_empty());
+        let program = if rendered.trim().is_empty()
+            || crate::sidebar::same_program(rendered.trim(), &process_path)
+            || is_a_shell(rendered.trim())
+        {
+            None
+        } else {
+            Some(rendered.trim().to_string())
+        };
+        let subject = match (project_name, program) {
+            (Some(project), Some(program)) => format!("{project} — {program}"),
+            (Some(project), None) => project,
+            (None, Some(program)) => program,
+            (None, None) => rendered.trim().to_string(),
+        };
         // This process's own instance, not the machine's active one: with two
         // windows open, `read()` answers for whichever registered last, and
         // both titles claim to be it.
@@ -9583,12 +9964,24 @@ impl App {
         // The bar's centre gets the same subject without the product
         // name: the window already says "Unterm" in its own corner, and
         // a title bar that repeats it has said nothing twice.
-        self.window.bar_title = format!("{position}{project}{rendered}");
-        let title = format!("{position}{project}{rendered} — Unterm{instance}");
+        // The administrator window says so wherever the window is named:
+        // a shell that can change the machine must never be mistaken for one
+        // that cannot.
+        let (subject, instance) = if crate::admin::is_admin_window() {
+            (
+                format!("{}: {subject}", unterm_services::i18n::t("admin.title")),
+                String::new(),
+            )
+        } else {
+            (subject, instance)
+        };
+        self.window.bar_title = subject.clone();
+        let title = format!("{subject} — Unterm{instance}");
         if self.window.window_title.as_deref() == Some(title.as_str()) {
             return;
         }
         live.window.set_title(&title);
+        crate::mcp_host::note_window_title(self.window.id, &title);
         self.window.window_title = Some(title);
     }
 
@@ -10187,6 +10580,16 @@ impl App {
     /// spins is most of what an idle window used to cost.
     fn tick(&mut self) {
         let _slow = SlowGuard::new("tick");
+        // A click on a maximise button that answers Snap Layouts arrives as
+        // non-client messages; the window procedure keeps it for us.
+        if self
+            .window.state
+            .as_ref()
+            .is_some_and(|live| crate::win_chrome::take_maximise_click(&live.window))
+        {
+            self.toggle_maximize();
+            self.window.drawn_revision = None;
+        }
         self.finish_startup_session();
         if !self.window.startup_terminal_content_marked {
             if let Some(live) = self.window.state.as_ref().filter(|live| live.session_id != 0) {
@@ -10219,6 +10622,7 @@ impl App {
             self.feed_cockpit();
             self.update_window_title();
             self.keep_last_session_current();
+            self.sync_frame();
         }
         // The composer is checked every tick while it is open, because it is
         // waiting for a pane to go idle and a prompt held back for a quarter of
@@ -10351,6 +10755,13 @@ impl App {
         let Some(live) = self.window.state.as_ref() else {
             return false;
         };
+        // Something is mid-animation -- a hover fading in or out.
+        if self
+            .window.animate_until
+            .is_some_and(|until| until > std::time::Instant::now())
+        {
+            return true;
+        }
         // One number across the panes on screen: any of them moving is
         // a reason to redraw, and the backend answers it the cheapest
         // way it can -- per-pane revisions in this process, the frame
@@ -10415,6 +10826,13 @@ impl App {
     }
 }
 
+impl Drop for Live {
+    fn drop(&mut self) {
+        // The window procedure's notes about this handle go with it.
+        crate::win_chrome::forget(&self.window);
+    }
+}
+
 impl Live {
     fn configure(&self, format: wgpu::TextureFormat) {
         self.surface.configure(
@@ -10425,11 +10843,14 @@ impl Live {
                 width: self.width,
                 height: self.height,
                 present_mode: wgpu::PresentMode::AutoVsync,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                alpha_mode: self.alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
         );
+        if let Some(composition) = self.composition.as_ref() {
+            composition.commit();
+        }
     }
 }
 
@@ -10499,6 +10920,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::Focused(focused) => {
                 self.window.focused = focused;
+                self.sync_frame();
                 // What `instance.windows` calls focused, and the window a
                 // call that names none is about. It is recorded here rather
                 // than in `focus_window` above, which looks like the same
@@ -11723,6 +12145,7 @@ impl ApplicationHandler for App {
             }
         }
         self.collect_clipboard_results();
+        crate::mcp_host::deliver_repaint();
         self.tick();
         // Waiting until the next tick rather than spinning. Something has to
         // ask the engine whether a shell has written -- nothing wakes the loop
@@ -11738,6 +12161,21 @@ impl ApplicationHandler for App {
             std::time::Instant::now() + self.tick_interval(),
         ));
     }
+}
+
+/// Whether a title is only a shell's name, which says nothing a tab row does
+/// not already say.
+fn is_a_shell(title: &str) -> bool {
+    let stem = title
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(title)
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    matches!(
+        stem.as_str(),
+        "zsh" | "bash" | "sh" | "fish" | "nu" | "pwsh" | "powershell" | "cmd" | "tcsh" | "dash" | "elvish" | "xonsh"
+    )
 }
 
 /// The command the config names, if it names one.
@@ -12922,6 +13360,9 @@ fn transform_hsv(color: [f32; 4], hue_factor: f32, saturation: f32, brightness: 
 fn command_entries() -> Vec<crate::palette::Entry> {
     let mut entries: Vec<crate::palette::Entry> = Vec::new();
     for &action in crate::keys::PALETTE_ACTIONS {
+        if !crate::keys::available(action) {
+            continue;
+        }
         let label = command_label(action);
         entries.push(crate::palette::Entry {
             label,
@@ -12955,6 +13396,7 @@ fn command_label(action: crate::keys::Action) -> String {
         Action::CommandPalette => Some("command.command_palette"),
         Action::Launcher => Some("command.launcher"),
         Action::NewWindow => Some("command.new_window"),
+        Action::NewAdminWindow => Some("admin.new_window"),
         Action::ZoomPane => Some("command.zoom_pane"),
         Action::SelectPane => Some("command.select_pane"),
         Action::TreeSidebar => Some("command.file_tree"),
@@ -13149,6 +13591,9 @@ mod palette_entry_tests {
     fn the_palette_contains_every_declared_gui_action() {
         let entries = command_entries();
         for action in crate::keys::PALETTE_ACTIONS {
+            if !crate::keys::available(*action) {
+                continue;
+            }
             assert!(
                 entries.iter().any(|entry| {
                     matches!(entry.command, crate::palette::Command::Action(found) if found == *action)

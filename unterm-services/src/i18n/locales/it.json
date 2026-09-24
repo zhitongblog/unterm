@@ -319,5 +319,8 @@
   "web.toast.refresh": "aggiornamento: {err}",
   "web.toast.session_failed": "sessione: {err}",
   "web.toast.theme_applied": "Tema applicato: {id}",
-  "web.toast.theme_failed": "tema: {err}"
+  "web.toast.theme_failed": "tema: {err}",
+  "admin.new_window": "Nuova finestra amministratore",
+  "admin.title": "Amministratore",
+  "admin.declined": "Finestra amministratore annullata al prompt UAC."
 }

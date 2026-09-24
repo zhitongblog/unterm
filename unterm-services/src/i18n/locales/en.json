@@ -622,5 +622,8 @@
   "web.update.available_post": "is available — install to upgrade.",
   "web.update.available_pre": "A new release",
   "web.update.dismiss": "Dismiss",
-  "web.update.view_release": "View release →"
+  "web.update.view_release": "View release →",
+  "admin.new_window": "New Administrator Window",
+  "admin.title": "Administrator",
+  "admin.declined": "Administrator window cancelled at the UAC prompt."
 }

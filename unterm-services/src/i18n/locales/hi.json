@@ -319,5 +319,8 @@
   "web.toast.refresh": "ताज़ा करना: {err}",
   "web.toast.session_failed": "सत्र: {err}",
   "web.toast.theme_applied": "थीम लागू: {id}",
-  "web.toast.theme_failed": "थीम: {err}"
+  "web.toast.theme_failed": "थीम: {err}",
+  "admin.new_window": "नई व्यवस्थापक विंडो",
+  "admin.title": "व्यवस्थापक",
+  "admin.declined": "UAC संकेत पर व्यवस्थापक विंडो रद्द की गई।"
 }

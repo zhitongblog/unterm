@@ -72,7 +72,7 @@ gtk = "0.18"
 # Asking DWM to round the window's corners: a frameless window is not
 # rounded by default, and square corners next to every other Windows 11
 # window read as a window that did not finish loading.
-winapi = { workspace = true, features = ["dwmapi", "windef", "minwindef", "winerror", "consoleapi", "wincon", "processenv", "winbase"] }
+winapi = { workspace = true, features = ["dwmapi", "windef", "minwindef", "winerror", "consoleapi", "wincon", "processenv", "winbase", "commctrl", "winuser", "uxtheme", "dcomp", "shellapi", "processthreadsapi", "securitybaseapi", "handleapi", "winnt", "unknwnbase", "dxgi", "combaseapi"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = { workspace = true }

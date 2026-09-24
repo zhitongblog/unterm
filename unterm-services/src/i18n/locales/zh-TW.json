@@ -319,5 +319,8 @@
   "web.toast.refresh": "重新整理失敗:{err}",
   "web.toast.session_failed": "工作階段:{err}",
   "web.toast.theme_applied": "已套用佈景主題:{id}",
-  "web.toast.theme_failed": "佈景主題:{err}"
+  "web.toast.theme_failed": "佈景主題:{err}",
+  "admin.new_window": "新增系統管理員視窗",
+  "admin.title": "系統管理員",
+  "admin.declined": "已在 UAC 提示中取消系統管理員視窗。"
 }

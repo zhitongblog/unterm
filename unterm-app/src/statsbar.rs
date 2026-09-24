@@ -174,6 +174,9 @@ fn refreshing() -> &'static parking_lot::Mutex<std::collections::HashSet<usize>>
     RUNNING.get_or_init(Default::default)
 }
 
+/// How many panes may be refreshing their facts at once.
+const MAX_REFRESHING: usize = 4;
+
 /// What is known about a pane, refreshing behind the caller's back.
 ///
 /// Returns whatever was known last, immediately -- including nothing, the
@@ -192,7 +195,11 @@ pub fn facts_for(pane_id: usize) -> Facts {
     }
 
     let mut running = refreshing().lock();
-    if running.insert(pane_id) {
+    // A few at a time. Every refresh asks the Core over the one connection the
+    // window shares, so fifty panes going stale together queued fifty threads
+    // on it -- and the window's own requests behind them, a third of a second
+    // per tick. A pane left out now is still stale on the next look.
+    if running.len() < MAX_REFRESHING && running.insert(pane_id) {
         let spawned = std::thread::Builder::new()
             .name("stats-facts".into())
             .spawn(move || {

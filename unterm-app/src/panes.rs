@@ -43,7 +43,10 @@ pub fn place(session_id: usize, rect: PaneRect, metrics: CellMetrics) -> PanePla
 /// panes, because the panes have to land on cell boundaries -- but filling
 /// that cell draws a bar as wide as a character, which reads as a window frame
 /// between two windows rather than as a seam in one.
-const WEIGHT: f32 = 2.0;
+///
+/// One pixel: Fluent's divider stroke. Two read as a frame between windows at
+/// 100% scaling, which is the scaling most Windows desktops still run at.
+const WEIGHT: f32 = 1.0;
 
 /// The divider between two panes, if there is room for one.
 ///

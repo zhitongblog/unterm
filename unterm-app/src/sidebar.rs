@@ -41,12 +41,11 @@ pub fn width(
 
 /// The previous front end kept a one-tab window compact and only spent the
 /// full sidebar width once the list actually needed it.
-pub fn adaptive_default_width(tab_count: usize) -> f32 {
-    match tab_count {
-        0 | 1 => 148.0,
-        2..=4 => 156.0,
-        _ => crate::ui_tokens::LEFT_TAB_BAR_WIDTH,
-    }
+pub fn adaptive_default_width(_tab_count: usize) -> f32 {
+    // Two lines a row -- task, then where and which branch -- need the width
+    // at any count; a strip that grows when a second tab opens moves the
+    // terminal under the reader for no reason.
+    crate::ui_tokens::LEFT_TAB_BAR_WIDTH
 }
 
 /// The icon a tab row leads with.
@@ -185,6 +184,9 @@ pub enum Row {
     Tab {
         index: usize,
         label: String,
+        /// The second line: whose agent it is when the label is its task,
+        /// where the tab is when no project header says so, and its branch.
+        subtitle: Option<String>,
         /// What is running in it, if anything is.
         detail: Option<String>,
         active: bool,
@@ -222,6 +224,11 @@ pub struct TabInfo {
     pub cwd: Option<String>,
     /// The command running in front of the shell, if one is.
     pub foreground: Option<String>,
+    /// What the agent in this pane says it is doing -- the title Claude Code
+    /// and its peers set on the terminal -- when it is more than its name.
+    pub task: Option<String>,
+    /// The git branch the pane is on, when it is known yet.
+    pub branch: Option<String>,
     pub active: bool,
     pub indicators: Indicators,
 }
@@ -282,6 +289,13 @@ pub fn rows(tabs: &[TabInfo], collapsed: &std::collections::HashSet<String>) -> 
         // Tabs with no directory have no project to be filed under, and get
         // no header of their own -- a header reading "no project" names
         // nothing.
+        // A header over a single tab says the tab's own name twice. Only a
+        // project with several tabs gets one; a lone tab carries its folder
+        // and branch itself.
+        if members.len() == 1 && !key.as_ref().is_some_and(|key| collapsed.contains(key)) {
+            rows.push(row_for(members[0], false));
+            continue;
+        }
         if let Some(key) = key {
             rows.push(Row::Group {
                 label: leaf(key),
@@ -314,6 +328,7 @@ fn row_for(tab: &TabInfo, grouped: bool) -> Row {
     Row::Tab {
         index: tab.index,
         label: label_for(tab),
+        subtitle: subtitle_for(tab, grouped),
         detail: tab.foreground.clone(),
         active: tab.active,
         icon: shell_icon(tab.agent.as_deref().unwrap_or(&tab.title)),
@@ -363,10 +378,23 @@ pub fn output_looks_like_error(lines: &[String]) -> bool {
 fn label_for(tab: &TabInfo) -> String {
     use unterm_engine::next_core::tab_title::{resolve_name, TabContext, TabTitleRules};
 
-    // An agent's name is the title. The pane title just repeats it, so showing
-    // both is showing the same word twice on a row with no room for it.
+    // What an agent is doing is what its row is about; its name goes to the
+    // second line. Without a task, the name is the title.
+    if let Some(task) = tab.task.as_deref().filter(|task| !task.trim().is_empty()) {
+        return task.trim().to_string();
+    }
     if let Some(agent) = tab.agent.as_deref().filter(|name| !name.trim().is_empty()) {
         return agent.to_string();
+    }
+    // A shell sitting at its prompt is known by where it is. Three rows all
+    // reading "zsh" said nothing at all.
+    if is_a_shell_name(&tab.title) {
+        if let Some(cwd) = tab.cwd.as_deref() {
+            let name = if is_home(cwd) { "~".to_string() } else { leaf(cwd) };
+            if !name.is_empty() {
+                return name;
+            }
+        }
     }
 
     let rules = TabTitleRules {
@@ -386,6 +414,75 @@ fn label_for(tab: &TabInfo) -> String {
     } else {
         resolved
     }
+}
+
+/// A tab's second line, if it has anything to say.
+fn subtitle_for(tab: &TabInfo, grouped: bool) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    // The label is the agent's task: name the agent here.
+    if tab.task.as_deref().is_some_and(|task| !task.trim().is_empty()) {
+        if let Some(agent) = tab.agent.as_deref().filter(|name| !name.trim().is_empty()) {
+            parts.push(agent.trim().to_string());
+        }
+    }
+    // Where it is -- unless a project header above already says, or the
+    // label already is the folder.
+    if !grouped {
+        if let Some(cwd) = tab.cwd.as_deref() {
+            let name = if is_home(cwd) { "~".to_string() } else { leaf(cwd) };
+            if !name.is_empty() && name != label_for(tab) {
+                parts.push(name);
+            }
+        }
+    }
+    if let Some(branch) = tab.branch.as_deref().filter(|branch| !branch.trim().is_empty()) {
+        parts.push(format!("\u{e0a0} {}", branch.trim()));
+    }
+    (!parts.is_empty()).then(|| parts.join("  \u{00b7}  "))
+}
+
+/// Whether a tab title is only a shell's name.
+fn is_a_shell_name(title: &str) -> bool {
+    let stem = title
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    matches!(
+        stem.as_str(),
+        "zsh" | "bash" | "sh" | "fish" | "nu" | "pwsh" | "powershell" | "cmd" | "tcsh" | "dash" | "elvish" | "xonsh" | "shell"
+    )
+}
+
+/// The task an agent announced in its pane's title, if the title is one.
+///
+/// Claude Code and its peers set the terminal title to what they are working
+/// on, led by a status glyph that changes as they work; and to their own name
+/// when idle. Only the former is a task.
+pub fn task_from_title(title: &str, agent: Option<&str>, program: &str) -> Option<String> {
+    let trimmed = title
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_lowercase();
+    let is_name = |name: &str| {
+        let name = name.trim().to_lowercase();
+        !name.is_empty() && (lower == name || lower == format!("{name} code"))
+    };
+    if agent.is_some_and(is_name)
+        || is_name(program)
+        || lower == "claude code"
+        || is_a_shell_name(trimmed)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 /// A project's identity: its path, compared the way the platform compares
@@ -629,6 +726,8 @@ mod tests {
             agent: None,
             cwd: cwd.map(str::to_string),
             foreground: None,
+            task: None,
+            branch: None,
             active: index == 0,
             indicators: Indicators::default(),
         }
@@ -648,6 +747,7 @@ mod tests {
             tab(0, "one", Some("/work/alpha")),
             tab(1, "two", Some("/work/beta")),
             tab(2, "three", Some("/work/alpha")),
+            tab(3, "four", Some("/work/beta")),
         ];
         let rows = rows_of(&tabs);
         // Every header owns the rows between it and the next header, and
@@ -680,7 +780,7 @@ mod tests {
             assert_eq!(count, under, "project {key} counts rows it has not got");
         }
         seen.sort();
-        assert_eq!(seen, vec![0, 1, 2], "every tab is somewhere in the strip");
+        assert_eq!(seen, vec![0, 1, 2, 3], "every tab is somewhere in the strip");
     }
 
     /// The ninth row is the ninth tab, and so is the twentieth.
@@ -796,6 +896,8 @@ mod tests {
                 agent: None,
                 cwd: Some("/work/some/deeply/nested/project".to_string()),
                 foreground: Some("npm run dev --workspace=everything".to_string()),
+                task: None,
+                branch: None,
                 active: true,
                 indicators: Indicators::default(),
             },
@@ -830,6 +932,8 @@ mod tests {
             agent: None,
             cwd: Some("/work/app".to_string()),
             foreground: Some("cargo test".to_string()),
+            task: None,
+            branch: None,
             active: true,
             indicators: Indicators::default(),
         }]);
@@ -838,18 +942,24 @@ mod tests {
 
     #[test]
     fn shell_command_project_and_known_agent_are_visually_distinct() {
+        // A shell at its prompt is known by where it is: three rows all
+        // reading "pwsh" told nobody anything.
         let shell = rows_of(&[tab(0, "pwsh", Some("/work/app"))]);
-        assert!(text_of(&shell[0]).contains("pwsh"));
+        assert!(text_of(&shell[0]).contains("app"));
+        assert!(!text_of(&shell[0]).contains("pwsh"));
 
         let command = rows_of(&[TabInfo {
             foreground: Some("cargo test".into()),
+            task: None,
+            branch: None,
             ..tab(0, "pwsh", Some("/work/app"))
         }]);
         assert!(text_of(&command[0]).contains("cargo test"));
 
         let projects = rows_of(&[
             tab(0, "pwsh", Some("/work/alpha")),
-            tab(1, "pwsh", Some("/work/beta")),
+            tab(1, "pwsh", Some("/work/alpha")),
+            tab(2, "pwsh", Some("/work/beta")),
         ]);
         assert!(labels(&projects).contains(&"[alpha]".to_string()));
 
@@ -941,14 +1051,45 @@ mod tests {
         assert!((scaled / open - 1.5).abs() < 0.05, "{open} then {scaled}");
     }
 
+    /// Two-line rows need the full width whatever the count, and a strip
+    /// that widened when a second tab opened moved the terminal under the
+    /// reader.
     #[test]
-    fn the_default_width_grows_with_the_number_of_tabs() {
-        assert_eq!(adaptive_default_width(1), 148.0);
-        assert_eq!(adaptive_default_width(3), 156.0);
+    fn the_default_width_does_not_move_with_the_number_of_tabs() {
+        for count in [0, 1, 3, 8, 40] {
+            assert_eq!(adaptive_default_width(count), crate::ui_tokens::LEFT_TAB_BAR_WIDTH);
+        }
+    }
+
+    /// An agent's task is the row's title; its name moves to the second line.
+    #[test]
+    fn an_agents_task_leads_its_row() {
+        let rows = rows_of(&[TabInfo {
+            agent: Some("claude".into()),
+            task: Some("Rotate buttons for PDFs".into()),
+            branch: Some("main".into()),
+            ..tab(0, "claude", Some("/work/pdf"))
+        }]);
+        let crate::sidebar::Row::Tab { label, subtitle, .. } = &rows[0] else {
+            panic!("a tab row");
+        };
+        assert_eq!(label, "Rotate buttons for PDFs");
+        let subtitle = subtitle.as_deref().unwrap_or_default();
+        assert!(subtitle.contains("claude") && subtitle.contains("main"), "{subtitle:?}");
+    }
+
+    /// Only a title that is a task counts as one: the agent's own name, a
+    /// shell, or a path is not.
+    #[test]
+    fn a_task_is_told_apart_from_a_name() {
         assert_eq!(
-            adaptive_default_width(8),
-            crate::ui_tokens::LEFT_TAB_BAR_WIDTH
+            task_from_title("\u{2733} 文档阅读旋转功能", Some("claude"), "claude"),
+            Some("文档阅读旋转功能".to_string())
         );
+        assert_eq!(task_from_title("\u{2733} Claude Code", Some("claude"), "claude"), None);
+        assert_eq!(task_from_title("claude", Some("claude"), "claude"), None);
+        assert_eq!(task_from_title("pwsh", None, "pwsh"), None);
+        assert_eq!(task_from_title("/Users/me/work", None, "zsh"), None);
     }
 
     /// It never takes more of the window than the budget allows, however wide
@@ -996,12 +1137,14 @@ mod tests {
     fn two_projects_are_grouped() {
         let rows = rows_of(&[
             tab(0, "pwsh", Some("/home/me/alpha")),
-            tab(1, "pwsh", Some("/home/me/beta")),
+            tab(1, "pwsh", Some("/home/me/alpha")),
+            tab(2, "pwsh", Some("/home/me/beta")),
+            tab(3, "pwsh", Some("/home/me/beta")),
         ]);
         let labels = labels(&rows);
-        assert_eq!(labels.len(), 4, "{labels:?}");
+        assert_eq!(labels.len(), 6, "{labels:?}");
         assert!(labels[0].starts_with('['), "{labels:?}");
-        assert!(labels[2].starts_with('['), "{labels:?}");
+        assert!(labels[3].starts_with('['), "{labels:?}");
     }
 
     /// Two folders with the same name are told apart by the shortest parent
@@ -1010,7 +1153,9 @@ mod tests {
     fn same_named_projects_are_told_apart_by_the_shortest_parent() {
         let rows = rows_of(&[
             tab(0, "pwsh", Some("/work/acme/app")),
-            tab(1, "pwsh", Some("/work/globex/app")),
+            tab(1, "pwsh", Some("/work/acme/app")),
+            tab(2, "pwsh", Some("/work/globex/app")),
+            tab(3, "pwsh", Some("/work/globex/app")),
         ]);
         let labels = labels(&rows);
         assert!(labels.contains(&"[acme/app]".to_string()), "{labels:?}");
@@ -1023,7 +1168,9 @@ mod tests {
     fn a_path_that_is_a_suffix_of_another_still_gets_a_hint() {
         let rows = rows_of(&[
             tab(0, "pwsh", Some("/acme/app")),
-            tab(1, "pwsh", Some("/work/acme/app")),
+            tab(1, "pwsh", Some("/acme/app")),
+            tab(2, "pwsh", Some("/work/acme/app")),
+            tab(3, "pwsh", Some("/work/acme/app")),
         ]);
         let hints: Vec<String> = rows
             .iter()
@@ -1076,7 +1223,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(counts, vec![2, 1]);
+        // beta's lone tab stands on its own: a header over one tab repeats it.
+        assert_eq!(counts, vec![2]);
     }
 
     /// The wheel cannot run the strip's position past its end.

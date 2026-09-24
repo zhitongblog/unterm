@@ -8,6 +8,7 @@
 //! runs asking a libtest harness for `--version`. Unit tests of a lib target
 //! are `kind=lib, name=unterm_app`, land in `deps/`, and are never uplifted.
 
+mod admin;
 mod args;
 mod background;
 mod brand;
@@ -59,6 +60,7 @@ mod tree;
 mod ui_tokens;
 mod unicode_names;
 mod window;
+mod win_chrome;
 mod window_buttons;
 mod workspaces;
 
@@ -207,16 +209,23 @@ OPTIONS:\n\
 }
 
 fn run() -> anyhow::Result<()> {
-    let args = args::parse(std::env::args().skip(1));
+    let mut args = args::parse(std::env::args().skip(1));
     startup_trace::mark("args.parsed");
     for argument in &args.unrecognised {
         log::warn!("ignoring unrecognised argument {argument:?}");
+    }
+    // The administrator window: elevated, alone, and reachable by nothing
+    // unelevated. Honoured only with a real administrator token; see `admin`.
+    let admin = args.admin && admin::is_elevated();
+    if admin {
+        args.config = admin::prepare(args.config.take());
+        log::info!("administrator window: in-process sessions, no agent surface");
     }
 
     // "Open in Unterm tab": the window the user means is the one already
     // open. Forward the directory there and exit; only with nobody to take
     // it does this process go on to become a window itself.
-    if args.tab {
+    if args.tab && !admin {
         if let Some(cwd) = args.cwd.as_deref() {
             match forward::open_tab_in_live_window(cwd) {
                 Ok(()) => return Ok(()),
@@ -285,7 +294,11 @@ fn run() -> anyhow::Result<()> {
     // here would answer the same questions from an empty world, and an
     // agent would have no way to tell which one it reached.
     let served_here = matches!(backend, engine_backend::Backend::Local);
-    let (_port, token) = if served_here {
+    let (_port, token) = if admin {
+        // Nothing for the unelevated side to connect to: no MCP server, no
+        // instance record, no settings page.
+        (0, String::new())
+    } else if served_here {
         let (port, token) =
             unterm_mcp::start_mcp_server_with_version(unterm_protocol::PRODUCT_VERSION);
         log::info!("MCP server listening on 127.0.0.1:{port}");
@@ -321,6 +334,19 @@ fn run() -> anyhow::Result<()> {
         }
     };
     startup_trace::mark("instance.registered");
+    if !admin {
+        start_shared_services(token);
+    }
+    stallwatch_and_watchers();
+    let event_loop = winit::event_loop::EventLoop::new()?;
+    startup_trace::mark("event_loop.created");
+    finish_startup(&config, args, event_loop)
+}
+
+/// What a normal window shares with the rest of the machine: the bridge
+/// bookkeeping, the settings page and the update check. The administrator
+/// window runs none of them.
+fn start_shared_services(token: String) {
     match unterm_services::bridge_registry::request_incompatible_drains() {
         Ok(0) => {}
         Ok(count) => log::info!("requested drain for {count} incompatible MCP bridge(s)"),
@@ -361,7 +387,9 @@ fn run() -> anyhow::Result<()> {
     // a release had shipped.
     unterm_settings::update_check::start_background_poller();
     startup_trace::mark("update_poller.started");
+}
 
+fn stallwatch_and_watchers() {
     // The stall watchdog, armed before the loop it watches exists: a frozen
     // window must leave a trace, not an argument about whether it happened.
     stallwatch::start();
@@ -370,8 +398,13 @@ fn run() -> anyhow::Result<()> {
     // switch is cleared before it can swallow anyone's Backspace.
     #[cfg(target_os = "macos")]
     ime_watch::start();
-    let event_loop = winit::event_loop::EventLoop::new()?;
-    startup_trace::mark("event_loop.created");
+}
+
+fn finish_startup(
+    config: &unterm_engine::next_core::config::Config,
+    args: args::Args,
+    event_loop: winit::event_loop::EventLoop<()>,
+) -> anyhow::Result<()> {
     // The loop's delegate exists now; teach it to answer Finder and friends
     // when they say "open this folder".
     #[cfg(target_os = "macos")]
@@ -381,7 +414,8 @@ fn run() -> anyhow::Result<()> {
     // a fresh registration is not an enabled one.
     #[cfg(target_os = "macos")]
     macos_open::keep_finder_extension_enabled();
-    let mut app = window::App::new(&config)?;
+    mcp_host::install_waker(event_loop.create_proxy());
+    let mut app = window::App::new(config)?;
     startup_trace::mark("app.created");
     // A plain launch reopens where the last one closed; naming a directory
     // or a command on the line asks for something specific instead.

@@ -32,6 +32,11 @@ struct KnownWindow {
     /// agent uses to name this window again later.
     id: u64,
     handle: std::sync::Arc<winit::window::Window>,
+    /// What its title bar says, pushed here by whoever sets it. Never read
+    /// back from `handle`: on macOS that call waits for the main thread, and
+    /// the main thread may itself be waiting for this list's lock -- which is
+    /// how listing windows once froze the window for good.
+    title: String,
     /// How many tabs it is showing, for `instance.windows`. Pushed here by
     /// the event loop rather than read from it: this is read on the MCP
     /// thread, which has no way to reach a `TabRegistry` the loop owns.
@@ -99,6 +104,7 @@ pub fn remember_window(id: u64, handle: std::sync::Arc<winit::window::Window>) {
             held.push(KnownWindow {
                 id,
                 handle,
+                title: String::from("Unterm"),
                 tabs: 1,
                 panes: Vec::new(),
             });
@@ -160,6 +166,17 @@ pub fn note_window_view(id: u64, tabs: usize, panes: &[usize]) {
     }
 }
 
+/// Called when a window's title changes.
+pub fn note_window_title(id: u64, title: &str) {
+    if let Ok(mut held) = WINDOWS.write() {
+        if let Some(known) = held.iter_mut().find(|known| known.id == id) {
+            if known.title != title {
+                known.title = title.to_string();
+            }
+        }
+    }
+}
+
 /// Every window, for `instance.windows` and `instance.list`.
 pub fn window_summaries() -> Vec<unterm_engine::WindowSummary> {
     let Ok(held) = WINDOWS.read() else {
@@ -169,7 +186,7 @@ pub fn window_summaries() -> Vec<unterm_engine::WindowSummary> {
     held.iter()
         .map(|known| unterm_engine::WindowSummary {
             id: known.id,
-            title: known.handle.title(),
+            title: known.title.clone(),
             focused: known.id == focused,
             panes: known.panes.clone(),
             tabs: known.tabs,
@@ -180,9 +197,43 @@ pub fn window_summaries() -> Vec<unterm_engine::WindowSummary> {
 /// Ask the window to paint, from any thread. A no-op until the window
 /// exists; whoever calls before then loses nothing, because the first
 /// frame is on its way regardless.
+///
+/// Off the loop's thread this only leaves a note and wakes the loop. On macOS
+/// winit answers `request_redraw` from another thread by waiting for the main
+/// thread to run it, so a worker that repaints while the loop waits for that
+/// worker -- joining it, or for a value it is still computing -- holds both
+/// forever: the window freezes on its last frame with the loop idle.
 pub fn request_repaint() {
+    if std::thread::current().name() != Some("main") {
+        REPAINT.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(waker) = WAKER.get() {
+            if let Ok(waker) = waker.lock() {
+                let _ = waker.send_event(());
+            }
+        }
+        return;
+    }
     if let Some(window) = window() {
         window.request_redraw();
+    }
+}
+
+/// A repaint asked for by another thread, not yet passed to the window.
+static REPAINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What wakes the event loop from another thread without waiting for it.
+static WAKER: std::sync::OnceLock<std::sync::Mutex<winit::event_loop::EventLoopProxy<()>>> =
+    std::sync::OnceLock::new();
+
+/// Hand over the loop's waker, once, before it runs.
+pub fn install_waker(proxy: winit::event_loop::EventLoopProxy<()>) {
+    let _ = WAKER.set(std::sync::Mutex::new(proxy));
+}
+
+/// On the loop's thread: pass on a repaint another thread asked for.
+pub fn deliver_repaint() {
+    if REPAINT.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        request_repaint();
     }
 }
 
@@ -219,13 +270,15 @@ impl McpHost for AppMcpHost {
     /// Name the window, so an agent's chosen name is what a person sees in
     /// the taskbar and Alt-Tab -- not only what `instance.list` reports.
     fn set_window_title(&self, title: Option<&str>) -> bool {
-        let Some(window) = window() else {
+        let Some((id, window)) = window_with_id() else {
             return false;
         };
-        window.set_title(&match title {
+        let title = match title {
             Some(title) => format!("{title} — Unterm"),
             None => "Unterm".to_string(),
-        });
+        };
+        window.set_title(&title);
+        note_window_title(id, &title);
         true
     }
 
