@@ -271,6 +271,22 @@ mod tests {
         assert_eq!(gnome[..3], [1.0, 1.0, 1.0], "GNOME's close is not red");
     }
 
+    /// The cross on the red is white in a light theme and a dark one, dims a
+    /// little while held, and goes back to the theme's colour once the
+    /// pointer has left.
+    #[test]
+    fn the_close_cross_is_white_on_its_red() {
+        for light in [false, true] {
+            let hovered = State { hover: 1.0, pressed: false, active: true };
+            assert_eq!(glyph_color(Style::Fluent, Button::Close, hovered, light), [1.0, 1.0, 1.0, 1.0]);
+            let held = State { hover: 1.0, pressed: true, active: true };
+            let color = glyph_color(Style::Fluent, Button::Close, held, light);
+            assert_eq!(color[..3], [1.0, 1.0, 1.0]);
+            assert!(color[3] < 1.0);
+        }
+        assert_eq!(glyph_color(Style::Fluent, Button::Close, State::REST, true)[..3], [0.0, 0.0, 0.0]);
+    }
+
     /// A button at rest has no backplate on Windows; a fade runs 0 -> 1.
     #[test]
     fn a_fluent_button_at_rest_has_no_backplate_and_the_fade_runs_to_full() {

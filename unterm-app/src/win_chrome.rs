@@ -446,7 +446,7 @@ pub fn take_maximise_click(window: &Window) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod caption_tests {
     use super::ButtonRect;
 
     #[test]

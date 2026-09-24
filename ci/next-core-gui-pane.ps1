@@ -526,7 +526,9 @@ $Suites = @(
         # 27 since the wheel started bounding the strip's own position on
         # the way in. The painter always clamped what it drew, so a position
         # past the end looked right and only showed itself on the way back.
-        ExpectedCount = 27
+        # 29 since a row leads with what an agent is doing: a task told apart
+        # from a name, and the strip's width no longer following the count.
+        ExpectedCount = 29
         RequiredTests = @(
             # The header's count and the rows beneath it are now the same
             # list, and a row past the ninth leads to its own tab rather than
@@ -649,9 +651,9 @@ $Suites = @(
         Filter = "window_buttons::tests::"
         ExpectedCount = 9
         RequiredTests = @(
-            "window_buttons::tests::every_button_draws_something",
-            "window_buttons::tests::an_icon_stays_inside_its_button",
-            "window_buttons::tests::only_the_close_button_turns_red",
+            "window_buttons::tests::every_button_draws_something_in_both_styles",
+            "window_buttons::tests::a_glyph_is_centred_and_stays_in_its_slot",
+            "window_buttons::tests::only_the_fluent_close_turns_red",
             "window_buttons::tests::the_close_cross_is_white_on_its_red"
         )
     },
