@@ -1676,6 +1676,7 @@ impl App {
         // terminal while Core/GPU/session setup finishes.
         let window = Arc::new(event_loop.create_window(attributes.with_visible(false))?);
         crate::startup_trace::mark("window.created");
+        fit_to_monitor(&window);
         if !self.system_decorations {
             // Ask Windows 11 for what it draws itself: the rounded corners,
             // a frame that knows it is dark, an edge in our colours, and the
@@ -12161,6 +12162,31 @@ impl ApplicationHandler for App {
             std::time::Instant::now() + self.tick_interval(),
         ));
     }
+}
+
+/// Keep a new window on its display. The default size is the grid the config
+/// asks for plus the sidebar and padding, and a saved one is whatever the last
+/// display allowed; on a small or different screen either can run past the
+/// edge and put the caption buttons out of reach.
+fn fit_to_monitor(window: &Window) {
+    let Some(monitor) = window.current_monitor().or_else(|| window.primary_monitor()) else {
+        return;
+    };
+    let screen = monitor.size();
+    let outer = window.outer_size();
+    let inner = window.inner_size();
+    let (frame_w, frame_h) = (
+        outer.width.saturating_sub(inner.width),
+        outer.height.saturating_sub(inner.height),
+    );
+    let max_w = screen.width * 9 / 10;
+    let max_h = screen.height * 9 / 10;
+    if outer.width <= max_w && outer.height <= max_h {
+        return;
+    }
+    let width = inner.width.min(max_w.saturating_sub(frame_w)).max(1);
+    let height = inner.height.min(max_h.saturating_sub(frame_h)).max(1);
+    let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(width, height));
 }
 
 /// Whether a title is only a shell's name, which says nothing a tab row does

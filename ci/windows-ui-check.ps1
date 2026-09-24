@@ -27,17 +27,29 @@ public static class U {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     public delegate bool EnumProc(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l);
-    // The largest visible top-level window a process owns: winit also makes
-    // small hidden helper windows, which is what MainWindowHandle can name.
-    public static IntPtr Largest(uint want) {
-        IntPtr best = IntPtr.Zero; long area = 0;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+    public static string Text(IntPtr h) { var s = new System.Text.StringBuilder(512); GetWindowText(h, s, 512); return s.ToString(); }
+    public static string Class(IntPtr h) { var s = new System.Text.StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
+    // Every visible top-level window a process owns, described.
+    public static string Describe(uint want) {
+        var lines = new System.Text.StringBuilder();
         EnumWindows((h, l) => {
             uint pid; GetWindowThreadProcessId(h, out pid);
             RECT r;
-            if (pid == want && IsWindowVisible(h) && GetWindowRect(h, out r)) {
-                long a = (long)(r.R - r.L) * (r.B - r.T);
-                if (a > area) { area = a; best = h; }
-            }
+            if (pid == want && IsWindowVisible(h) && GetWindowRect(h, out r))
+                lines.AppendLine(string.Format("  {0} class={1} title='{2}' rect={3},{4}-{5},{6}", h, Class(h), Text(h), r.L, r.T, r.R, r.B));
+            return true;
+        }, IntPtr.Zero);
+        return lines.ToString();
+    }
+    // The window whose title names Unterm: winit also makes helper windows,
+    // and MainWindowHandle can name one of those.
+    public static IntPtr Main(uint want) {
+        IntPtr best = IntPtr.Zero;
+        EnumWindows((h, l) => {
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            if (pid == want && IsWindowVisible(h) && Text(h).Contains("Unterm")) { best = h; return false; }
             return true;
         }, IntPtr.Zero);
         return best;
@@ -61,7 +73,7 @@ function WaitWindow($process, [int]$seconds = 60) {
     while ((Get-Date) -lt $deadline) {
         $process.Refresh()
         if ($process.HasExited) { return [IntPtr]::Zero }
-        $h = [U]::Largest([uint32]$process.Id)
+        $h = [U]::Main([uint32]$process.Id)
         if ($h -ne [IntPtr]::Zero) { return $h }
         Start-Sleep -Milliseconds 500
     }
@@ -84,6 +96,7 @@ if ($hwnd -eq [IntPtr]::Zero) {
     $failures.Add("no window appeared")
 } else {
     Start-Sleep 6
+    "unterm windows:`n$([U]::Describe([uint32]$app.Id))" | Tee-Object -Append (Join-Path $OutDir "report.txt")
     [U]::ShowWindow($hwnd, 9) | Out-Null
     # On screen and a known size, so every button is somewhere a pointer can go.
     [U]::SetWindowPos($hwnd, [IntPtr]::Zero, 40, 30, 900, 600, 0x0004) | Out-Null
