@@ -1031,6 +1031,7 @@ impl WindowState {
             caption_hover: None,
             caption_hover_at: std::time::Instant::now(),
             caption_left: None,
+            pointer_target: (None, None),
             animate_until: None,
             scroll_seen: None,
             scrolled_at: None,
@@ -1128,6 +1129,9 @@ struct WindowState {
     caption_hover: Option<crate::topbar::Item>,
     caption_hover_at: std::time::Instant,
     caption_left: Option<(crate::topbar::Item, std::time::Instant)>,
+    /// What the pointer was last over in the chrome -- a bar item, a strip
+    /// row -- so moving onto something else asks for the frame that shows it.
+    pointer_target: (Option<crate::topbar::Item>, Option<usize>),
     /// Keep drawing until then: something on screen is still moving.
     animate_until: Option<std::time::Instant>,
     /// The scrollbar's memory: the view it last drew and when it last moved,
@@ -4602,6 +4606,25 @@ impl App {
     ///
     /// One place, so what is hit is always what was drawn.
     /// Which piece of the top bar the pointer is over.
+    /// Hover is drawn from where the pointer is when a frame is painted, and
+    /// nothing else paints a quiet window -- so a pointer moving onto a
+    /// button, or off it, asks for one frame, and only then.
+    fn refresh_pointer_target(&mut self) {
+        let (x, y) = self.window.pointer;
+        let target = (
+            self.hovered_top_bar_item(),
+            if y >= 0.0 { self.sidebar_row_at(x, y) } else { None },
+        );
+        if target == self.window.pointer_target {
+            return;
+        }
+        self.window.pointer_target = target;
+        self.window.drawn_revision = None;
+        if let Some(live) = self.window.state.as_ref() {
+            live.window.request_redraw();
+        }
+    }
+
     fn hovered_top_bar_item(&mut self) -> Option<crate::topbar::Item> {
         // Over a maximise button that answers Snap Layouts, Windows sends the
         // window non-client messages instead of the moves winit reports; the
@@ -11332,9 +11355,14 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::CursorLeft { .. } => {
+                self.window.pointer = (-1.0, -1.0);
+                self.refresh_pointer_target();
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.window.pointer = (position.x as f32, position.y as f32);
                 self.apply_cursor();
+                self.refresh_pointer_target();
                 if self.window.dragging_scrollbar {
                     self.scroll_to_pointer();
                     return;
