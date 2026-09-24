@@ -1,7 +1,0 @@
-D:\code\unterm-remote-master\target-sync\release\deps\ordered_float-b7d3d8f98b5da323.d: C:\Users\Alex\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ordered-float-4.6.0\src\lib.rs
-
-D:\code\unterm-remote-master\target-sync\release\deps\libordered_float-b7d3d8f98b5da323.rlib: C:\Users\Alex\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ordered-float-4.6.0\src\lib.rs
-
-D:\code\unterm-remote-master\target-sync\release\deps\libordered_float-b7d3d8f98b5da323.rmeta: C:\Users\Alex\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ordered-float-4.6.0\src\lib.rs
-
-C:\Users\Alex\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ordered-float-4.6.0\src\lib.rs:

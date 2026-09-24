@@ -1,6 +1,0 @@
-$ mkdir -p "D:\\code\\unterm-remote-master\\target-sync\\release\\build\\az-e0f925d912df83ba\\out\\try_track_caller"
-$ cd "D:\\code\\unterm-remote-master\\target-sync\\release\\build\\az-e0f925d912df83ba\\out\\try_track_caller"
-$ printf '%s' "// try_tra"... > "D:\\code\\unterm-remote-master\\target-sync\\release\\build\\az-e0f925d912df83ba\\out\\try_track_caller\\try_track_caller.rs"
-$ "C:\\Users\\Alex\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\bin\\rustc.exe" "try_track_caller.rs" "--emit=dep-info,metadata" >& /dev/null
-cargo:rustc-cfg=track_caller
-$ rm -r "D:\\code\\unterm-remote-master\\target-sync\\release\\build\\az-e0f925d912df83ba\\out\\try_track_caller"
