@@ -93,6 +93,8 @@ pub struct Row {
     pub hint: String,
     /// True when this pane wants the person.
     pub needs_you: bool,
+    /// The state itself, for the mark the row carries.
+    pub state: AgentState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -171,13 +173,14 @@ pub fn located_rows(statuses: &[LocatedStatus]) -> Vec<Row> {
                 window_title: status.window_title.clone(),
                 tab_id: status.tab_id,
                 label: format!(
-                    "{}  {}  {}",
+                    "{} \u{00B7} {} \u{00B7} {}",
                     status.agent,
                     describe_state(status.state),
                     describe_age(status.age_seconds)
                 ),
                 hint: status.task_hint.clone().unwrap_or_default(),
                 needs_you: needs_attention(status.state),
+                state: status.state,
             };
             (rank(status.state), status.age_seconds, row)
         })

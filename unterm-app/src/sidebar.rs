@@ -477,12 +477,22 @@ pub fn task_from_title(title: &str, agent: Option<&str>, program: &str) -> Optio
         || is_name(program)
         || lower == "claude code"
         || is_a_shell_name(trimmed)
-        || trimmed.contains('/')
-        || trimmed.contains('\\')
+        || looks_like_a_path(title.trim())
     {
         return None;
     }
     Some(trimmed.to_string())
+}
+
+/// A title that is a place rather than a piece of work: `/Users/me/work`,
+/// `~/code`, `C:\\Windows\\system32\\cmd.exe`. A task may mention a path --
+/// "Add rate limiting to /v1/charge" -- and is still a task.
+fn looks_like_a_path(title: &str) -> bool {
+    let bytes = title.as_bytes();
+    title.starts_with('/')
+        || title.starts_with('~')
+        || (bytes.len() > 2 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+        || (!title.contains(' ') && (title.contains('/') || title.contains('\\')))
 }
 
 /// A project's identity: its path, compared the way the platform compares
@@ -1090,6 +1100,13 @@ mod tests {
         assert_eq!(task_from_title("claude", Some("claude"), "claude"), None);
         assert_eq!(task_from_title("pwsh", None, "pwsh"), None);
         assert_eq!(task_from_title("/Users/me/work", None, "zsh"), None);
+        assert_eq!(task_from_title("~/code/api", None, "zsh"), None);
+        assert_eq!(task_from_title("C:\\Program Files\\Git\\bin\\bash.exe", None, "bash"), None);
+        assert_eq!(task_from_title("src/app.rs", None, "vim"), None);
+        assert_eq!(
+            task_from_title("\u{2834} Add rate limiting to /v1/charge", Some("claude"), "claude"),
+            Some("Add rate limiting to /v1/charge".to_string())
+        );
     }
 
     /// It never takes more of the window than the budget allows, however wide

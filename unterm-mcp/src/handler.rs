@@ -7550,14 +7550,54 @@ impl McpHandler {
         if explicit_pane.is_some() {
             let pane_id = Self::pane_id_from_params(params)? as u64;
             let status = unterm_services::cockpit::status_for_pane(pane_id)
-                .map(|s| Self::cockpit_status_json(&s));
+                .map(|s| Self::cockpit_status_json(&s))
+                .or_else(|| {
+                    Self::published_agents(&std::collections::HashSet::new())
+                        .into_iter()
+                        .find(|agent| agent["pane_id"].as_u64() == Some(pane_id))
+                });
             return Ok(json!({ "enabled": true, "agent": status }));
         }
-        let agents: Vec<Value> = unterm_services::cockpit::snapshot()
+        let mut agents: Vec<Value> = unterm_services::cockpit::snapshot()
             .iter()
             .map(Self::cockpit_status_json)
             .collect();
+        let known: std::collections::HashSet<u64> =
+            agents.iter().filter_map(|agent| agent["pane_id"].as_u64()).collect();
+        agents.extend(Self::published_agents(&known));
         Ok(json!({ "enabled": true, "agents": agents }))
+    }
+
+    /// The agents the windows have published, for panes this process is not
+    /// tracking itself.
+    ///
+    /// The cockpit is kept by whichever process draws the window, and the MCP
+    /// server can live in the Core, which sees the panes but not what their
+    /// agents are doing. Every window writes its agents into its instance
+    /// record; reading those is how `agent.status` answered "no agents" while
+    /// the inbox, which already read them, listed three.
+    fn published_agents(known: &std::collections::HashSet<u64>) -> Vec<Value> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut agents = Vec::new();
+        let mut seen = known.clone();
+        for instance in unterm_services::server_info::list_live_instances() {
+            for agent in instance.agents {
+                if !seen.insert(agent.pane_id) {
+                    continue;
+                }
+                agents.push(json!({
+                    "pane_id": agent.pane_id,
+                    "agent": agent.agent,
+                    "state": agent.state,
+                    "for_secs": now.saturating_sub(agent.since_unix_ms).max(0) / 1000,
+                    "task_hint": agent.task_hint,
+                    "last_signal": "peer-snapshot",
+                    "fleet_id": null,
+                    "instance_id": instance.id.clone(),
+                }));
+            }
+        }
+        agents
     }
 
     /// `agent.signal` — official hook ingestion (Claude Code hooks,

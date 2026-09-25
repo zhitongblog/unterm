@@ -275,6 +275,18 @@ pub fn timestamp_components() -> (String, String, String) {
     (date, hms, iso)
 }
 
+/// Tell git that `<project>/.unterm` is Unterm's, not the project's.
+///
+/// Recordings and exports land there, and without this they are untracked
+/// files in the user's repo: `git status` fills up, and a fleet refuses to
+/// start because the worktree is not clean.
+pub fn keep_out_of_git(project: &std::path::Path) {
+    let ignore = project.join(".unterm").join(".gitignore");
+    if !ignore.exists() {
+        let _ = std::fs::write(ignore, "*\n");
+    }
+}
+
 pub fn preferred_session_dir(
     project_path: Option<&str>,
     project_slug: &str,
@@ -286,6 +298,7 @@ pub fn preferred_session_dir(
         // Only use project-local storage when we can actually write there.
         // Probe by attempting to create the directory; revert on failure.
         if std::fs::create_dir_all(&in_project).is_ok() && is_dir_writable(&in_project) {
+            keep_out_of_git(&path);
             return in_project;
         }
         log::info!(
@@ -318,5 +331,22 @@ pub fn is_dir_writable(dir: &std::path::Path) -> bool {
             ok
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod keep_out_of_git_tests {
+    #[test]
+    fn a_recording_in_a_project_does_not_dirty_it() {
+        let project = std::env::temp_dir().join(format!("unterm-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        std::fs::create_dir_all(&project).unwrap();
+        let dir = super::preferred_session_dir(project.to_str(), "demo", "2026-09-25");
+        assert!(dir.starts_with(&project));
+        assert_eq!(
+            std::fs::read_to_string(project.join(".unterm").join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        let _ = std::fs::remove_dir_all(&project);
     }
 }

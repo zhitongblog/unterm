@@ -416,13 +416,32 @@ fn run_cockpit_inbox(json_out: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<6} {:<3} {:<9} {:<10} {:<7} {:<18} TASK",
+        "{:<6} {:<3} {:<9} {:<10} {:<7} {:<5} TASK",
         "PANE", "", "AGENT", "STATE", "FOR", "TAB"
     );
     for item in &items {
         let state = item.get("state").and_then(Value::as_str).unwrap_or("");
+        // What the agent is doing: its own word for it, else its title
+        // without the spinner or mark in front.
+        let task = item
+            .get("task_hint")
+            .and_then(Value::as_str)
+            .filter(|hint| !hint.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                item.get("pane_title")
+                    .and_then(Value::as_str)
+                    .map(|title| title.trim_start_matches(|c: char| !c.is_alphanumeric()).trim().to_string())
+                    .filter(|title| !title.is_empty())
+            })
+            .unwrap_or_else(|| "-".to_string());
+        let tab = item
+            .get("tab_id")
+            .and_then(Value::as_u64)
+            .map(|tab| tab.to_string())
+            .unwrap_or_else(|| "-".to_string());
         println!(
-            "{:<6} {:<3} {:<9} {:<10} {:<7} {:<18} {}",
+            "{:<6} {:<3} {:<9} {:<10} {:<7} {:<5} {}",
             item.get("pane_id").and_then(Value::as_u64).unwrap_or(0),
             state_glyph(state),
             item.get("agent").and_then(Value::as_str).unwrap_or(""),
@@ -431,10 +450,8 @@ fn run_cockpit_inbox(json_out: bool) -> Result<()> {
                 "{}s",
                 item.get("for_secs").and_then(Value::as_u64).unwrap_or(0)
             ),
-            item.get("pane_title")
-                .and_then(Value::as_str)
-                .unwrap_or("-"),
-            item.get("task_hint").and_then(Value::as_str).unwrap_or("-"),
+            tab,
+            task,
         );
     }
     Ok(())

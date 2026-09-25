@@ -22,10 +22,19 @@ pub(super) fn parse(sequence: &str) -> Option<OscCommand> {
         "8" => parse_osc8_hyperlink(value).map(OscCommand::Hyperlink),
         "52" => parse_osc52_clipboard(value).map(OscCommand::Clipboard),
         "133" if value.split(';').next() == Some("A") => Some(OscCommand::PromptStart),
-        "9" if !value.is_empty() => Some(OscCommand::Notification(value.to_string())),
+        // `9;4;1;60` is ConEmu's progress bar and `9;9;<path>` its working
+        // directory: a numbered subcommand, not text for the user's eye.
+        "9" if !value.is_empty() && !is_conemu_command(value) => {
+            Some(OscCommand::Notification(value.to_string()))
+        }
         "777" => parse_osc777_notification(value).map(OscCommand::Notification),
         _ => None,
     }
+}
+
+fn is_conemu_command(value: &str) -> bool {
+    let first = value.split(';').next().unwrap_or("");
+    !first.is_empty() && first.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// `OSC 52 ; <selection> ; <base64>`. A `?` payload -- read the clipboard --
@@ -244,6 +253,22 @@ mod clipboard_tests {
         assert_eq!(
             parse("52;c;bGluZSAxCmxpbmUgMg=="),
             Some(OscCommand::Clipboard("line 1\nline 2".to_string()))
+        );
+    }
+}
+
+#[cfg(test)]
+mod conemu_tests {
+    use super::{parse, OscCommand};
+
+    #[test]
+    fn a_progress_report_is_not_a_notification() {
+        assert_eq!(parse("9;4;1;60"), None);
+        assert_eq!(parse("9;4;0"), None);
+        assert_eq!(parse("9;9;C:\\work"), None);
+        assert_eq!(
+            parse("9;Build finished"),
+            Some(OscCommand::Notification("Build finished".into()))
         );
     }
 }

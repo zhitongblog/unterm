@@ -5950,6 +5950,20 @@ impl App {
                 task_hint: status.task_hint,
             })
             .collect();
+        // An agent that names no task in its signals usually names it in its
+        // title -- the same place the strip reads it from.
+        if located.iter().any(|status| status.task_hint.is_none()) {
+            if let Ok(sessions) = unterm_engine::SessionEngine::list_sessions(&self.engine) {
+                for status in located.iter_mut().filter(|status| status.task_hint.is_none()) {
+                    status.task_hint = sessions
+                        .iter()
+                        .find(|session| session.id as u64 == status.pane_id)
+                        .and_then(|session| {
+                            crate::sidebar::task_from_title(&session.title, Some(&status.agent), &status.agent)
+                        });
+                }
+            }
+        }
         located.extend(crate::cockpit::peer_statuses());
         crate::cockpit::located_rows(&located)
     }
@@ -6405,107 +6419,141 @@ impl App {
             return;
         }
         let rows = self.inbox_rows();
+        let here = unterm_services::server_info::current_instance_id().unwrap_or_default();
 
         let metrics = self.window.font.metrics();
-        let width = (window_width * 0.5)
-            .max(metrics.width * 30.0)
-            .min(window_width);
-        let left = ((window_width - width) / 2.0).max(0.0);
-        let top = metrics.height * 2.0;
         let shown = rows.len().min(MAX_INBOX_ROWS);
         if shown == 0 {
             self.window.inbox_selected = 0;
         } else {
             self.window.inbox_selected = self.window.inbox_selected.min(shown - 1);
         }
-        let height = metrics.height * (shown + 1) as f32;
+        // One row per agent: its mark, what it is doing, then -- quieter --
+        // who it is, its state and for how long. Where it is only when that
+        // is another window; a location for a row in this one is noise.
+        let lines: Vec<(Option<crate::cockpit::Badge>, String, String)> = rows
+            .iter()
+            .take(shown)
+            .map(|row| {
+                let task = if row.hint.trim().is_empty() {
+                    row.label.split(" \u{00B7} ").next().unwrap_or_default().to_string()
+                } else {
+                    row.hint.trim().to_string()
+                };
+                let mut detail = row.label.clone();
+                if !row.instance_id.is_empty() && row.instance_id != here {
+                    let window = if row.window_title.is_empty() {
+                        row.instance_id.clone()
+                    } else {
+                        row.window_title.clone()
+                    };
+                    detail = format!("{detail} \u{00B7} {window}");
+                }
+                (crate::cockpit::badge(row.state), task, detail)
+            })
+            .collect();
+        let widest = lines
+            .iter()
+            .map(|(_, task, detail)| task.chars().count() + detail.chars().count() + 6)
+            .max()
+            .unwrap_or(0)
+            .max(40) as f32;
+        // Over the terminal, not the whole window: a card straddling the
+        // strip's edge reads as misplaced.
+        let area_left = self.terminal_left();
+        let area = self.terminal_width().min(window_width).max(1.0);
+        let width = (metrics.width * (widest + 2.0))
+            .min(area - metrics.width * 2.0)
+            .max(metrics.width * 20.0)
+            .min(window_width);
+        let left = (area_left + (area - width) / 2.0).max(0.0);
+        let row_height = (metrics.height * 1.5).round();
+        let top = self.terminal_top() + metrics.height;
+        let height = row_height * (shown.max(1) + 1) as f32 + metrics.height * 0.5;
         let foreground = self.window.colors.foreground;
-
-        quads.backgrounds.extend(unterm_render::rounded::panel(
+        let quiet = mix(foreground, self.window.colors.background, 0.45);
+        self.append_flyout(
             left,
             top,
             width,
             height,
-            self.corner_radius(),
             mix(self.window.colors.background, foreground, 0.10),
-        ));
+            quads,
+        );
 
-        let heading = if rows.is_empty() {
-            unterm_services::i18n::t("cockpit.inbox_title")
+        let pad = metrics.width * 1.5;
+        let text_nudge = (row_height - metrics.height) / 2.0;
+        let waiting = rows.iter().filter(|row| row.needs_you).count();
+        let heading = unterm_services::i18n::t("cockpit.inbox_title");
+        let count = if rows.is_empty() {
+            String::new()
         } else {
-            format!(
-                "{}  ({})",
-                unterm_services::i18n::t("cockpit.inbox_title"),
-                unterm_services::i18n::t_args(
-                    "composer.waiting",
-                    &[(
-                        "n",
-                        &rows.iter().filter(|row| row.needs_you).count().to_string()
-                    )]
-                )
-            )
+            unterm_services::i18n::t_args("composer.waiting", &[("n", &waiting.to_string())])
         };
         crate::terminal::append_text(
             &heading,
             &mut self.window.font,
             &mut self.window.atlas,
             foreground,
-            (left + metrics.width, top),
+            (left + pad, top + text_nudge + metrics.height * 0.25),
             quads,
         );
-
-        for (index, row) in rows.iter().take(shown).enumerate() {
-            let row_top = top + metrics.height * (index + 1) as f32;
+        crate::terminal::append_text(
+            &count,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            quiet,
+            (
+                left + pad + metrics.width * (heading.chars().count() as f32 + 2.0),
+                top + text_nudge + metrics.height * 0.25,
+            ),
+            quads,
+        );
+        let columns = (((width - pad * 2.0) / metrics.width.max(1.0)) as usize).saturating_sub(3);
+        let first = top + row_height + metrics.height * 0.25;
+        let radius = self.corner_radius();
+        for (index, (badge, task, detail)) in lines.iter().enumerate() {
+            let row_top = first + row_height * index as f32;
             if index == self.window.inbox_selected {
-                quads.backgrounds.push(unterm_render::quads::Quad {
-                    left,
-                    top: row_top,
-                    width,
-                    height: metrics.height,
-                    color: mix(self.window.colors.background, foreground, 0.18),
-                });
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    left + metrics.width * 0.5,
+                    row_top,
+                    width - metrics.width,
+                    row_height,
+                    radius,
+                    mix(self.window.colors.background, foreground, 0.18),
+                ));
             }
-            if row.needs_you {
-                // The ones wanting an answer are marked, so the list can be
-                // read at a glance rather than word by word.
-                quads.backgrounds.push(unterm_render::quads::Quad {
-                    left,
-                    top: row_top,
-                    width: metrics.width * 0.4,
-                    height: metrics.height,
-                    color: foreground,
-                });
+            let text_top = row_top + text_nudge;
+            if let Some(badge) = badge {
+                crate::terminal::append_text(
+                    badge.glyph(0),
+                    &mut self.window.font,
+                    &mut self.window.atlas,
+                    badge.color(),
+                    (left + pad, text_top),
+                    quads,
+                );
             }
-            let marker = if index == self.window.inbox_selected {
-                "›"
-            } else {
-                " "
-            };
-            let location = if row.instance_id.is_empty() {
-                format!("{}", row.pane_id)
-            } else {
-                let window = if row.window_title.is_empty() || row.window_title == row.instance_id {
-                    row.instance_id.clone()
-                } else {
-                    format!("{} ({})", row.window_title, row.instance_id)
-                };
-                if let Some(tab_id) = row.tab_id {
-                    format!("{window} / tab {tab_id} / pane {}", row.pane_id)
-                } else {
-                    format!("{window} / pane {}", row.pane_id)
-                }
-            };
-            let text = if row.hint.is_empty() {
-                format!("{marker} {location}  {}", row.label)
-            } else {
-                format!("{marker} {location}  {}  -- {}", row.label, row.hint)
-            };
+            let task_room = columns.saturating_sub(detail.chars().count().min(columns / 2) + 2);
+            let task = crate::sidebar::fit(task, task_room.max(8));
+            let task_left = left + pad + metrics.width * 3.0;
             crate::terminal::append_text(
-                &text,
+                &task,
                 &mut self.window.font,
                 &mut self.window.atlas,
                 foreground,
-                (left + metrics.width, row_top),
+                (task_left, text_top),
+                quads,
+            );
+            let used = task.chars().count() + 2;
+            let detail = crate::sidebar::fit(detail, columns.saturating_sub(used).max(4));
+            crate::terminal::append_text(
+                &detail,
+                &mut self.window.font,
+                &mut self.window.atlas,
+                quiet,
+                (task_left + metrics.width * used as f32, text_top),
                 quads,
             );
         }
@@ -9444,6 +9492,52 @@ impl App {
     ///
     /// Drawn last so it sits over everything, and opaque so the text behind it
     /// cannot be mistaken for one of its rows.
+    /// A Fluent flyout's card: 8px corners, lifted off the terminal by a soft
+    /// shadow and edged with a one-pixel stroke. There is no blur to draw a
+    /// shadow with, so it is built from a few translucent rounded layers that
+    /// grow outward and sink a little, which reads the same at the distance a
+    /// shadow is seen from.
+    fn append_flyout(
+        &self,
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+        fill: [f32; 4],
+        quads: &mut unterm_render::quads::FrameQuads,
+    ) {
+        let scale = self.window.scale.max(0.5);
+        let radius = (8.0 * scale).round();
+        for step in (1..=6).rev() {
+            let spread = step as f32 * 2.0 * scale;
+            let alpha = 0.035 * (7 - step) as f32 / 6.0 + 0.012;
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left - spread,
+                top - spread + 4.0 * scale,
+                width + spread * 2.0,
+                height + spread * 2.0,
+                radius + spread,
+                [0.0, 0.0, 0.0, alpha],
+            ));
+        }
+        let stroke = if crate::chrome::is_light_surface(self.window.colors.background) {
+            [0.0, 0.0, 0.0, 0.10]
+        } else {
+            mix(self.window.colors.background, self.window.colors.foreground, 0.18)
+        };
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            left - 1.0,
+            top - 1.0,
+            width + 2.0,
+            height + 2.0,
+            radius + 1.0,
+            stroke,
+        ));
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            left, top, width, height, radius, fill,
+        ));
+    }
+
     fn append_palette(&mut self, window_width: f32, quads: &mut unterm_render::quads::FrameQuads) {
         let Some(palette) = self.window.palette.as_ref() else {
             return;
@@ -9535,45 +9629,12 @@ impl App {
         // a shadow with, so it is built from a few translucent rounded
         // layers that grow outward and sink a little, which reads the same
         // at the distance a shadow is seen from.
-        let scale = self.window.scale.max(0.5);
-        let flyout_radius = (8.0 * scale).round();
-        for step in (1..=6).rev() {
-            let spread = step as f32 * 2.0 * scale;
-            let alpha = 0.035 * (7 - step) as f32 / 6.0 + 0.012;
-            quads.backgrounds.extend(unterm_render::rounded::panel(
-                left - spread,
-                top - spread + 4.0 * scale,
-                width + spread * 2.0,
-                height + spread * 2.0,
-                flyout_radius + spread,
-                [0.0, 0.0, 0.0, alpha],
-            ));
-        }
-        let stroke = if crate::chrome::is_light_surface(self.window.colors.background) {
-            [0.0, 0.0, 0.0, 0.10]
+        let fill = if view == crate::palette::View::ShellSelector {
+            [0.102, 0.102, 0.102, 1.0]
         } else {
-            mix(self.window.colors.background, self.window.colors.foreground, 0.18)
+            mix(self.window.colors.background, self.window.colors.foreground, 0.10)
         };
-        quads.backgrounds.extend(unterm_render::rounded::panel(
-            left - 1.0,
-            top - 1.0,
-            width + 2.0,
-            height + 2.0,
-            flyout_radius + 1.0,
-            stroke,
-        ));
-        quads.backgrounds.extend(unterm_render::rounded::panel(
-            left,
-            top,
-            width,
-            height,
-            flyout_radius,
-            if view == crate::palette::View::ShellSelector {
-                [0.102, 0.102, 0.102, 1.0]
-            } else {
-                mix(self.window.colors.background, self.window.colors.foreground, 0.10)
-            },
-        ));
+        self.append_flyout(left, top, width, height, fill, quads);
 
         let foreground = self.window.colors.foreground;
         if view == crate::palette::View::ShellSelector {

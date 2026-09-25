@@ -274,14 +274,19 @@ pub fn merge_member_with_policy(fleet_id: &str, member: &str, force: bool) -> Re
     let fleet = super::fleet::get(fleet_id).ok_or_else(|| anyhow!("no fleet {fleet_id:?}"))?;
     let m = super::fleet::resolve_member(&fleet, member)?;
     let base_head = git(&fleet.base_repo, &["rev-parse", "HEAD"])?;
-    let member_head = git(
-        &fleet.base_repo,
-        &["rev-parse", "--verify", &format!("{}^{{commit}}", m.branch)],
-    )?;
     let dirty = git(&fleet.base_repo, &["status", "--porcelain"])?;
     if !dirty.is_empty() {
         bail!("base repo not clean — commit or stash before merging a fleet member");
     }
+    // What an agent leaves is usually uncommitted: it edits, it tests, it
+    // stops. The diff and the verification both saw that work, so the merge
+    // takes it too -- committed on the member's own branch, in the worktree
+    // the fleet made for it, rather than refused as "no changes".
+    commit_leftover_work(&m.worktree, &fleet.task, &m.branch)?;
+    let member_head = git(
+        &fleet.base_repo,
+        &["rev-parse", "--verify", &format!("{}^{{commit}}", m.branch)],
+    )?;
     git(&fleet.base_repo, &["merge", "--squash", &m.branch])?;
     let staged_files: Vec<String> = git(&fleet.base_repo, &["diff", "--cached", "--name-only"])?
         .lines()
@@ -303,6 +308,25 @@ pub fn merge_member_with_policy(fleet_id: &str, member: &str, force: bool) -> Re
         "verification": verification,
         "verification_forced": force,
     }))
+}
+
+/// Commit whatever a fleet member left uncommitted in its worktree.
+fn commit_leftover_work(worktree: &Path, task: &str, branch: &str) -> Result<()> {
+    if git(worktree, &["status", "--porcelain"])?.is_empty() {
+        return Ok(());
+    }
+    git(worktree, &["add", "-A"])?;
+    let message = format!("{branch}: {task}");
+    // An agent's worktree may have no identity configured; the squash that
+    // follows is committed by the person anyway.
+    let known = git(worktree, &["config", "user.email"]).unwrap_or_default();
+    let mut args: Vec<&str> = Vec::new();
+    if known.trim().is_empty() {
+        args.extend(["-c", "user.name=Unterm fleet", "-c", "user.email=fleet@unterm.invalid"]);
+    }
+    args.extend(["commit", "-q", "--no-verify", "-m", &message]);
+    git(worktree, &args)?;
+    Ok(())
 }
 
 pub fn discard_member(fleet_id: &str, member: &str) -> Result<Value> {
@@ -442,6 +466,30 @@ mod tests {
             std::fs::read_to_string(repo.join("a.txt")).unwrap(),
             "keep me\n"
         );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+}
+
+#[cfg(test)]
+mod leftover_work_tests {
+    use super::{commit_leftover_work, git};
+
+    #[test]
+    fn an_agents_uncommitted_edits_are_committed_on_its_branch() {
+        let repo = std::env::temp_dir().join(format!("unterm-leftover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"]).unwrap();
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        commit_leftover_work(&repo, "add b", "fleet/add-b-1").unwrap();
+        assert!(git(&repo, &["status", "--porcelain"]).unwrap().is_empty());
+        assert_eq!(git(&repo, &["log", "-1", "--format=%s"]).unwrap(), "fleet/add-b-1: add b");
+        // Nothing left over is nothing to do.
+        commit_leftover_work(&repo, "add b", "fleet/add-b-1").unwrap();
+        assert_eq!(git(&repo, &["rev-list", "--count", "HEAD"]).unwrap(), "2");
         let _ = std::fs::remove_dir_all(&repo);
     }
 }

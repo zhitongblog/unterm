@@ -57,6 +57,14 @@ pub(super) fn paths(
         .map(|path| path.join(".unterm").join("sessions").join(timestamp))
         .unwrap_or_else(|| sessions_root().join(project_slug).join(timestamp));
     let _ = std::fs::create_dir_all(&dir);
+    // Ours, not the project's: git is told to look away, or a recording
+    // leaves the repo dirty and a fleet refuses to start in it.
+    if let Some(project) = project_path {
+        let ignore = PathBuf::from(project).join(".unterm").join(".gitignore");
+        if !ignore.exists() {
+            let _ = std::fs::write(ignore, "*\n");
+        }
+    }
     let stem = format!("tab-{pane_id}-{timestamp}");
     (
         dir.join(format!("{stem}.log")),

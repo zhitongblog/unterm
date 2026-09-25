@@ -57,7 +57,9 @@ pub fn run(cmd: SessionsCommand, json_out: bool) -> Result<()> {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
                         let blocks = e.get("block_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let started = e.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
+                        let started = readable_time(
+                            e.get("started_at").and_then(|v| v.as_str()).unwrap_or(""),
+                        );
                         let proj = e.get("project_slug").and_then(|v| v.as_str()).unwrap_or("");
                         println!("{:<38} {:<6} {:<24} {}", id, blocks, started, proj);
                     }
@@ -84,4 +86,33 @@ pub fn run(cmd: SessionsCommand, json_out: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A recording's start as a date. The live recorder files it as a bare count
+/// of microseconds since the epoch, which read in a table as a meaningless
+/// sixteen-digit number.
+fn readable_time(raw: &str) -> String {
+    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return raw.to_string();
+    }
+    let Ok(value) = raw.parse::<i64>() else {
+        return raw.to_string();
+    };
+    let micros = match raw.len() {
+        16.. => value,
+        13..=15 => value.saturating_mul(1_000),
+        _ => value.saturating_mul(1_000_000),
+    };
+    chrono::DateTime::from_timestamp_micros(micros)
+        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_else(|| raw.to_string())
+}
+
+#[cfg(test)]
+mod readable_time_tests {
+    #[test]
+    fn a_microsecond_count_reads_as_a_date() {
+        assert_eq!(super::readable_time("1790324289544601"), "2026-09-25T08:18:09Z");
+        assert_eq!(super::readable_time("2026-09-25T08:18:09+00:00"), "2026-09-25T08:18:09+00:00");
+    }
 }
