@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.71.14 — 2026-09-25
+
+### Changed
+
+- **The agent inbox reads at a glance.** Each row is the agent's mark, what it
+  is working on, then — quieter — which agent, its state and for how long.
+  Rows from this window no longer repeat the window's title, long ones are cut
+  to fit, and the card sits over the terminal instead of straddling the strip.
+
+- **Mica, when asked for, works without a GPU too** (Windows software
+  rendering), and the title bar stays solid over it so Windows' own caption
+  buttons can no longer show through ours.
+
+### Fixed
+
+- **`agent.status` answered “no agents” while the inbox listed three.** The MCP
+  server runs in the Core, which sees the panes but not their agents; it now
+  reads what each window publishes, as the inbox already did.
+
+- **A progress report marked an agent as waiting for you.** `OSC 9;4` (the
+  progress bar Windows Terminal defined, which several CLIs emit) and the other
+  numbered `OSC 9` commands were taken for notifications, with a garbled
+  “4;1;60” notice to go with them.
+
+- **A task that mentions a path lost its name.** “Add rate limiting to
+  /v1/charge” was taken for a path and the row fell back to the agent's name.
+
+- **On Linux, tabs were named “user@host: ~/dir”.** That prompt title is the
+  shell saying where it is; the strip now shows the folder, and the window
+  title no longer calls it the running program.
+
+- **`review merge` said “no changes” for work the diff showed.** Agents leave
+  their edits uncommitted; the merge now takes them, committed on the member's
+  own branch in its worktree.
+
+- **A recording made the repo dirty, and a fleet then refused to start.**
+  `<project>/.unterm/` now carries a `.gitignore` of its own.
+
+- **`instance set-title` changed nothing anyone could see.** The title now lands
+  in the window's instance entry and on the window; `--clear` hands the title
+  back to the automatic one.
+
+- `unterm-cli agent inbox` lines its columns up, and `sessions list` prints a
+  recording's start as a date.
+
+### Site
+
+- unterm.app is rebuilt around real screenshots, with an advanced guide of
+  tested recipes (`/guide`) and the full feature list on `/features`.
+
 ## v0.71.13 — 2026-09-25
 
 ### Added
