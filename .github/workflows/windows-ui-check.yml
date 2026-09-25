@@ -6,11 +6,16 @@ name: windows-ui-check
 on:
   workflow_dispatch:
   push:
-    branches: ["feat/windows-**"]
+    branches: ["feat/windows-**", "feat/site-**"]
 
 jobs:
   ui:
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        # 2022 has no Mica; 2025 is built on Windows 11 24H2.
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,5 +29,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-ui-check
+          name: windows-ui-check-${{ matrix.os }}
           path: ui-check

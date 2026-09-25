@@ -191,13 +191,16 @@ if ($adminHwnd -eq [IntPtr]::Zero) {
     }
 }
 
-# Mica asked for where Windows has none (Server 2022 here): the window must
-# still come up, opaque, rather than fail to draw.
+# Mica, asked for. Where Windows has it the frame shows it; where it does
+# not, the window must still come up, opaque, rather than fail to draw.
+# The log says which path it took.
 Get-Process unterm, unterm-core -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep 2
 $conf = Join-Path $env:USERPROFILE ".unterm\unterm.conf"
 Add-Content $conf "`n[window]`nbackdrop = `"mica`"`n"
-$mica = Start-Process $exe -PassThru
+$env:RUST_LOG = "info"
+$micaLog = Join-Path (Resolve-Path $OutDir) "mica-stderr.log"
+$mica = Start-Process $exe -PassThru -RedirectStandardError $micaLog
 $micaHwnd = WaitWindow $mica
 if ($micaHwnd -eq [IntPtr]::Zero) {
     $failures.Add("with window.backdrop = mica the window did not appear")
@@ -209,6 +212,9 @@ if ($micaHwnd -eq [IntPtr]::Zero) {
     Shot "06-mica-requested"
     $mica.Refresh()
     "with backdrop = mica: exited=$($mica.HasExited)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
+    "windows build: $([Environment]::OSVersion.Version)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
+    Get-Content $micaLog -ErrorAction SilentlyContinue | Select-String "mica|adapter|backend" |
+        ForEach-Object { "log: $_" } | Tee-Object -Append (Join-Path $OutDir "report.txt")
     if ($mica.HasExited) { $failures.Add("with window.backdrop = mica unterm exited") }
 }
 

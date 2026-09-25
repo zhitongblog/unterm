@@ -99,10 +99,13 @@ Direction: down`,
       },
       {
         id: "instances",
-        code: `unterm-cli instance list
-unterm-cli --instance bravo agent inbox`,
-        output: `ID        PID      MCP     HTTP    CWD                      TITLE
-alpha     25399    49333   19877`,
+        code: `unterm-cli instance set-title "payments on-call"
+unterm-cli instance list
+unterm-cli --instance bravo agent inbox
+unterm-cli instance set-title --clear`,
+        output: `Title: payments on-call
+ID        PID      MCP     HTTP    CWD                      TITLE
+alpha     1383     49173   19877                            payments on-call`,
       },
       {
         id: "mcp",

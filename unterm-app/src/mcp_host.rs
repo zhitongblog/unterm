@@ -218,6 +218,14 @@ pub fn request_repaint() {
     }
 }
 
+/// A title somebody chose for this window, which the automatic one yields to.
+static PINNED_TITLE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The title an agent or `instance set-title` pinned, if any.
+pub fn pinned_title() -> Option<String> {
+    PINNED_TITLE.lock().ok().and_then(|held| held.clone())
+}
+
 /// A repaint asked for by another thread, not yet passed to the window.
 static REPAINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -273,12 +281,26 @@ impl McpHost for AppMcpHost {
         let Some((id, window)) = window_with_id() else {
             return false;
         };
-        let title = match title {
+        // Pinned for the window's own title logic, and recorded in this
+        // front end's instance entry -- the one `instance.list` reads. The
+        // call arrives here from the Core, whose own record is not the
+        // window's; writing it there changed nothing anyone could see.
+        let pinned = title.map(str::trim).filter(|title| !title.is_empty()).map(str::to_string);
+        if let Ok(mut held) = PINNED_TITLE.lock() {
+            *held = pinned.clone();
+        }
+        if let Err(err) = unterm_services::server_info::set_title(pinned.clone()) {
+            log::warn!("could not record the instance title: {err:#}");
+        }
+        let title = match pinned {
             Some(title) => format!("{title} — Unterm"),
             None => "Unterm".to_string(),
         };
         window.set_title(&title);
         note_window_title(id, &title);
+        // The loop rebuilds the title from what the pane shows; let it
+        // know the answer changed.
+        request_repaint();
         true
     }
 

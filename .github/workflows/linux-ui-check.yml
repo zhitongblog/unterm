@@ -1,0 +1,37 @@
+name: linux-ui-check
+
+# Builds Unterm on Ubuntu and drives it on a virtual X display with Mesa's
+# software renderer: the window, its caption buttons and a few tabs.
+# Screenshots are uploaded for review.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/site-**", "feat/linux-**"]
+
+jobs:
+  ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build and display deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libssl-dev libgtk-3-dev \
+            libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-keysyms1-dev libxcb-icccm4-dev libxcb-image0-dev libxcb-util-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            xvfb openbox xdotool imagemagick x11-xserver-utils \
+            mesa-vulkan-drivers libgl1-mesa-dri libegl1 libvulkan1
+      - run: cargo build --release -p unterm-app -p unterm-core -p unterm-cli
+      - name: Drive the window
+        run: ./ci/linux-ui-check.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-ui-check
+          path: ui-check-linux

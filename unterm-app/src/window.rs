@@ -230,7 +230,7 @@ fn surface_on(
 
 /// Put Mica behind the window's frame, or leave the window exactly as it was.
 ///
-/// Only on a hardware DX12 adapter, and only once every step has worked: DWM
+/// Only on DX12, and only once every step has worked: DWM
 /// takes the backdrop (22H2 and later), a DirectComposition tree comes up, a
 /// surface on its visual offers premultiplied alpha and configures cleanly,
 /// and the tree commits. Then that surface replaces the window's own. Any
@@ -238,11 +238,14 @@ fn surface_on(
 /// window -- because the frame's transparency lives only in the new one.
 #[cfg(windows)]
 fn attach_backdrop(live: &mut Live, shared: &SharedGpu, format: wgpu::TextureFormat) {
-    let info = shared.adapter.get_info();
-    if info.backend != wgpu::Backend::Dx12 || info.device_type == wgpu::DeviceType::Cpu {
+    // Software (WARP) adapters included: the backdrop is only ever asked
+    // for, so whoever asked on a machine without a GPU has chosen the cost.
+    if shared.adapter.get_info().backend != wgpu::Backend::Dx12 {
+        log::info!("mica: not on DX12; keeping the opaque frame");
         return;
     }
     if !crate::win_chrome::enable_mica_alt(&live.window) {
+        log::info!("mica: DWM refused the backdrop (before 22H2?); keeping the opaque frame");
         return;
     }
     let Some(composition) = crate::win_chrome::Composition::new(&live.window) else {
@@ -10042,6 +10045,8 @@ impl App {
             (None, Some(program)) => program,
             (None, None) => rendered.trim().to_string(),
         };
+        // A name somebody gave this window outranks the one guessed from it.
+        let subject = crate::mcp_host::pinned_title().unwrap_or(subject);
         // This process's own instance, not the machine's active one: with two
         // windows open, `read()` answers for whichever registered last, and
         // both titles claim to be it.
