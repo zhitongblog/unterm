@@ -2747,7 +2747,7 @@ impl App {
         }
     }
 
-    /// The top bar's and the left dock's own surface: see-through behind
+    /// The left dock's own surface: see-through behind
     /// Mica, so the backdrop is what shows there, and the chrome's tone
     /// otherwise.
     fn frame_surface(&self, surface: [f32; 4]) -> [f32; 4] {
@@ -4179,12 +4179,16 @@ impl App {
         let chrome = self.chrome();
         let foreground = self.chrome_foreground();
 
+        // Opaque even over Mica. With the frame extended into the client
+        // area, DWM draws its own minimise/maximise/close there, and a
+        // transparent bar showed them through ours -- every button twice.
+        // The backdrop shows in the strip instead.
         quads.backgrounds.push(unterm_render::quads::Quad {
             left: 0.0,
             top: 0.0,
             width: window_width,
             height,
-            color: self.frame_surface(chrome.surface),
+            color: chrome.surface,
         });
         // A hairline under it, so the bar and the terminal read as two surfaces
         // of one window rather than one surface with a seam.

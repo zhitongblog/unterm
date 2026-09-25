@@ -119,32 +119,7 @@ mod imp {
             if !set_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TABBEDWINDOW) {
                 return false;
             }
-            if winapi::um::dwmapi::DwmExtendFrameIntoClientArea(hwnd, &margins) < 0 {
-                return false;
-            }
-            // With the frame extended over the client area, DWM draws its own
-            // minimise/maximise/close into it -- behind the bar we leave
-            // transparent for the backdrop, so every button showed twice. It
-            // draws them for a window with a system menu; this window's
-            // buttons are its own, so it goes without one while Mica is on.
-            // The minimise and maximise styles stay: they are what Snap and
-            // the taskbar act on.
-            use winapi::um::winuser::{
-                GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_SYSMENU,
-            };
-            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-            SetWindowLongPtrW(hwnd, GWL_STYLE, style & !(WS_SYSMENU as isize));
-            SetWindowPos(
-                hwnd,
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
-                0,
-                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-            true
+            winapi::um::dwmapi::DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0
         }
     }
 
