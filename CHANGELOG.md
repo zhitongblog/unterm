@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.71.13 — 2026-09-25
+
+### Added
+
+- **An administrator window on Windows.** "New Administrator Window" (palette,
+  and the new-session menu) asks UAC for an elevated Unterm in the current
+  folder. It is a separate process that shares nothing with the normal one --
+  no Core, no MCP server, no settings page, its own state under
+  `~/.unterm/admin` -- so nothing running as the user can type into an
+  elevated shell through it. Its title says "Administrator:".
+
+- **Snap Layouts on the maximise button**, rounded corners, a dark frame and a
+  frame edge in the theme's colours on Windows 11.
+
+- **Mica behind the frame on Windows 11, opt-in** with `backdrop = "mica"`
+  under `[window]`. The terminal itself stays opaque. It falls back to an
+  opaque window wherever Windows offers no Mica.
+
+### Changed
+
+- **The title bar follows the desktop it is on.** Windows gets Fluent caption
+  buttons (46px, a hover that fades in, the red close) and the app's mark
+  beside the window title; Linux gets GNOME's round buttons and no brand. The
+  title names the project, and the program when it is not the shell.
+
+- **The tab strip says what each tab is doing.** A row leads with an agent's
+  task or the folder, with the git branch beneath it; a project with a single
+  tab no longer gets a header of its own, and rows are only as tall as what
+  they hold.
+
+- A scrollbar that stays out of the way until you scroll, a command palette
+  with rounded corners and a shadow, more room around the terminal, and text
+  outside macOS drawn with the weight DirectWrite gives it.
+
+### Fixed
+
+- **The window could freeze on its last frame for good.** An agent listing
+  windows (`session.focus`, `instance.windows`) read a window's title while
+  holding the window list, and on macOS reading a title waits for the main
+  thread -- which could be waiting for that same list. Titles are now kept by
+  the window itself, and background threads that ask for a repaint no longer
+  wait for the main thread at all.
+
+- **Many panes made an idle window stutter.** With fifty sessions the window
+  paused for a third of a second, sometimes two, every few seconds while the
+  status line's per-pane facts refreshed all at once over the one connection
+  to the Core. At most four refresh at a time now.
+
+- **Hovering a title-bar button or a tab row showed nothing** until something
+  else redrew the window. Moving onto or off one now paints it.
+
+- **A new window could open wider than the screen,** with its window buttons
+  out of reach. It is kept within the display it opens on.
+
 ## v0.71.12 — 2026-09-23
 
 ### Fixed
