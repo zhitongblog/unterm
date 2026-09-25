@@ -1,0 +1,19 @@
+---
+import Base from "../layouts/Base.astro";
+import Features from "../components/Features.astro";
+import dict from "../i18n/en-US.json";
+import { LOCALES, alternatesFor } from "../i18n/locales";
+import { fetchStats } from "../lib/stats";
+const stats = await fetchStats();
+---
+
+<Base
+  lang="en-US"
+  dict={dict}
+  alternates={alternatesFor("/features")}
+  locales={LOCALES}
+  pathPrefix=""
+  seo={{ title: `${dict["features.page.title"]} — Unterm`, description: dict["features.page.sub"], canonicalPath: "/features", xDefault: "https://unterm.app/features" }}
+>
+  <Features dict={dict} pathPrefix="" stats={stats} />
+</Base>

@@ -3,7 +3,7 @@
         xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
     <loc>https://unterm.app/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -19,7 +19,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -35,7 +35,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -51,7 +51,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -67,7 +67,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -83,7 +83,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -99,7 +99,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -115,7 +115,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -131,7 +131,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -153,31 +153,31 @@
   </url>
   <url>
     <loc>https://unterm.app/docs/agent-integration</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/agent-recipes</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/architecture</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/cli-reference</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/configuration</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -195,25 +195,25 @@
   </url>
   <url>
     <loc>https://unterm.app/docs/mcp-reference</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/multi-instance</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/profiles</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/blog/live-stats-three-layer</loc>
-    <lastmod>2026-05-29</lastmod>
+    <lastmod>2026-09-25</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
@@ -1080,5 +1080,293 @@
     <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/ghostty"/>
     <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/ghostty"/>
     <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/ghostty"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-CN/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-TW/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ja-JP/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ko-KR/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/de-DE/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/fr-FR/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/it-IT/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/hi-IN/features</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/features"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/features"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/features"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/features"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/features"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/features"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/features"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/features"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/features"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-CN/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-TW/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ja-JP/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ko-KR/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/de-DE/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/fr-FR/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/it-IT/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/hi-IN/guide</loc>
+    <lastmod>2026-09-25</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/guide"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/guide"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/guide"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/guide"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/guide"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/guide"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/guide"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
   </url>
 </urlset>

@@ -1,0 +1,275 @@
+---
+// The advanced guide: recipes, each one a problem, the commands, what they
+// print and what to know. The commands and their output were run against a
+// real Unterm before they were written here; keep it that way when adding.
+
+import enUS from "../i18n/en-US.json";
+
+interface Props {
+  dict: Record<string, string>;
+  pathPrefix: string;
+}
+const { dict, pathPrefix } = Astro.props as Props;
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
+const hasNote = (id: string) => `guide.${id}.note` in dict || `guide.${id}.note` in enUS;
+
+interface Recipe {
+  id: string;
+  code?: string;
+  output?: string;
+}
+
+const groups: { title: string; recipes: Recipe[] }[] = [
+  {
+    title: "guide.group.agents",
+    recipes: [
+      {
+        id: "connect",
+        code: `unterm-cli setup-ai --dry-run   # what would change
+unterm-cli setup-ai             # register with every agent found`,
+      },
+      {
+        id: "inbox",
+        code: `unterm-cli agent inbox
+
+# just the ones waiting on you
+unterm-cli --json agent inbox \\
+  | jq -r '.items[] | select(.state=="waiting") | "\\(.agent): \\(.task_hint // .pane_title)"'`,
+        output: `PANE       AGENT     STATE      FOR     TAB   TASK
+3      ✋   codex     waiting    23s     2     Partition the ledger tables
+4      ✓   claude    done       13s     3     Fix the flaky checkout e2e test
+2      ⚡   claude    working    27s     1     Add rate limiting to /v1/charge
+
+codex: Partition the ledger tables`,
+      },
+      {
+        id: "hooks",
+        code: `unterm-cli agent enable-hooks --dry-run
+unterm-cli agent enable-hooks`,
+      },
+      {
+        id: "fleet",
+        code: `cd ~/code/payments-api
+unterm-cli fleet launch --cwd "$PWD" --agents claude,codex \\
+  -- "add an idempotency key to POST /v1/charge"
+
+unterm-cli review diff    --fleet add-an-idempotency-key --member 1 --stat
+unterm-cli review verify  --fleet add-an-idempotency-key --member 1 --command "cargo test"
+unterm-cli review merge   --fleet add-an-idempotency-key --member 1
+unterm-cli review discard --fleet add-an-idempotency-key --member 2
+unterm-cli fleet clean add-an-idempotency-key`,
+        output: `fleet add-an-idempotency-key launched — 2 member(s)
+  claude    fleet/add-an-idempotency-key-1  ~/code/payments-api.fleet/add-an-idempotency-key-1
+  codex     fleet/add-an-idempotency-key-2  ~/code/payments-api.fleet/add-an-idempotency-key-2
+  +?     -0     idempotency.rs (new)
+verification verify-1790326294259-0 queued: cargo test
+merged fleet/add-an-idempotency-key-1 — staged in ~/code/payments-api (commit it yourself)
+member 2 of add-an-idempotency-key discarded
+fleet add-an-idempotency-key cleaned`,
+      },
+      {
+        id: "suggest",
+        code: `unterm-cli session suggest post --rationale "tests passed" \\
+  -- "git push origin feat/rate-limit"
+unterm-cli session suggest list`,
+        output: `Suggestion: sg_1790324293038_1
+Status: queued
+SUGGESTION               PANE     AGENT      TEXT
+sg_1790324293038_1       5        anonymous  git push origin feat/rate-limit`,
+      },
+    ],
+  },
+  {
+    title: "guide.group.script",
+    recipes: [
+      {
+        id: "script",
+        code: `P=$(unterm-cli session create --cwd ~/code/infra | awk '/^Pane:/{print $2}')
+unterm-cli exec wait --pane-id $P --timeout-ms 600000 -- "git log --oneline -3 && ls"
+unterm-cli session text --pane-id $P | tail -20`,
+        output: `2f1cf7d (HEAD -> main) init
+README.md`,
+      },
+      {
+        id: "split",
+        code: `unterm-cli session split --direction down --size-percent 35 --cwd ~/code/web-dashboard`,
+        output: `Pane: 6
+Title: /bin/zsh
+Direction: down`,
+      },
+      {
+        id: "instances",
+        code: `unterm-cli instance list
+unterm-cli --instance bravo agent inbox`,
+        output: `ID        PID      MCP     HTTP    CWD                      TITLE
+alpha     25399    49333   19877`,
+      },
+      {
+        id: "mcp",
+        code: `J=~/.unterm/server.json      # %USERPROFILE%\\.unterm\\server.json on Windows
+PORT=$(jq .mcp_port $J); TOKEN=$(jq -r .auth_token $J)
+{ printf '{"jsonrpc":"2.0","id":1,"method":"auth.login","params":{"token":"%s"}}\\n' "$TOKEN"
+  printf '{"jsonrpc":"2.0","id":2,"method":"agent.status"}\\n'
+  sleep 1; } | nc 127.0.0.1 "$PORT"`,
+        output: `{"id":1,"jsonrpc":"2.0","result":{"status":"ok"}}
+{"id":2,"jsonrpc":"2.0","result":{"agents":[{"agent":"codex","pane_id":3,"state":"waiting",…},…],"enabled":true}}`,
+      },
+    ],
+  },
+  {
+    title: "guide.group.keep",
+    recipes: [
+      {
+        id: "handoff",
+        code: `unterm-cli scrollback --pane-id 2 --tail 200 > last-run.txt
+unterm-cli session export --pane-id 2 -o session.md`,
+        output: `---
+unterm_session_id: e2320821-38dc-4148-b94f-9bd4eef56357
+tab_id: 2
+project_path: ~/code/payments-api
+project_slug: payments-api`,
+      },
+      {
+        id: "longshot",
+        code: `unterm-cli screenshot --scrollback --pane-id 2 -o pane.png`,
+      },
+      {
+        id: "record",
+        code: `unterm-cli session record start
+# … work in the pane …
+unterm-cli session record stop
+unterm-cli sessions list
+unterm-cli sessions read <session-id>`,
+        output: `Session id: next-core-5-1790324289544601
+Block count: 4
+Markdown: ~/code/infra/.unterm/sessions/1790324289544601/tab-5-1790324289544601.md
+Exit reason: recording_stopped`,
+      },
+      {
+        id: "workspace",
+        code: `unterm-cli workspace save morning
+unterm-cli workspace restore morning --dry-run
+unterm-cli workspace restore morning`,
+        output: `Workspace: morning
+Sessions: 6
+Workspace: morning
+Planned: 6`,
+      },
+    ],
+  },
+  {
+    title: "guide.group.setup",
+    recipes: [
+      {
+        id: "profiles",
+        code: `unterm-cli profile create "Work — Acme" --accent "#E8B34B"
+unterm-cli profile set-secret "Work — Acme" GITHUB_TOKEN     # asks for the value
+unterm-cli session create --cwd ~/code/acme --profile work-acme`,
+        output: `Created profile "Work — Acme"
+  ID:    work-acme
+Stored GITHUB_TOKEN in keychain for profile work-acme`,
+      },
+      { id: "admin" },
+      {
+        id: "config",
+        code: `font_size = 14
+
+[window]
+padding_left = 16
+padding_right = 16
+backdrop = "mica"        # Windows 11
+
+[cockpit]
+done_hold_secs = 30      # how long a finished agent stays marked`,
+      },
+      { id: "keys" },
+    ],
+  },
+];
+
+const keys = [
+  { combo: ["Ctrl", "Shift", "P"], label: "guide.keys.palette" },
+  { combo: ["Ctrl", "Shift", "A"], label: "guide.keys.inbox" },
+  { combo: ["Ctrl", "Shift", "Alt", "A"], label: "guide.keys.fleet" },
+  { combo: ["Ctrl", "Shift", "S"], label: "guide.keys.quick" },
+  { combo: ["Ctrl", "Shift", "J"], label: "guide.keys.composer" },
+  { combo: ["Ctrl", "Shift", "G"], label: "guide.keys.git" },
+  { combo: ["Ctrl", "Shift", "D / E"], label: "guide.keys.split" },
+  { combo: ["Ctrl", "Shift", "Z"], label: "guide.keys.zoom" },
+];
+---
+
+<section class="pt-16 pb-8 border-b border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("guide.kicker")}</div>
+    <h1 class="mt-3 text-4xl sm:text-5xl font-bold tracking-tight text-zinc-50 text-balance">{t("guide.title")}</h1>
+    <p class="mt-4 text-lg text-notion-muted max-w-3xl">{t("guide.sub")}</p>
+  </div>
+</section>
+
+<div class="max-w-5xl mx-auto px-6 py-12 lg:grid lg:grid-cols-[220px_1fr] lg:gap-12">
+  <nav class="hidden lg:block">
+    <div class="sticky top-20 text-sm">
+      <div class="text-xs font-mono uppercase tracking-widest text-notion-faint">{t("guide.toc")}</div>
+      {groups.map((g) => (
+        <div class="mt-5">
+          <div class="font-semibold text-notion-ink">{t(g.title)}</div>
+          <ul class="mt-2 space-y-1.5">
+            {g.recipes.map((r) => (
+              <li><a href={`#${r.id}`} class="text-notion-muted hover:text-notion-teal leading-snug block">{t(`guide.${r.id}.title`)}</a></li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </nav>
+
+  <div class="min-w-0">
+    {groups.map((g) => (
+      <section class="mb-14">
+        <h2 class="text-xs font-mono uppercase tracking-widest text-notion-faint border-b border-notion-border pb-2">{t(g.title)}</h2>
+        {g.recipes.map((r) => (
+          <article id={r.id} class="scroll-mt-20 pt-8">
+            <h3 class="text-2xl font-semibold tracking-tight text-notion-ink">
+              <a href={`#${r.id}`} class="hover:text-notion-teal">{t(`guide.${r.id}.title`)}</a>
+            </h3>
+            <p class="mt-3 text-notion-muted leading-relaxed guide-prose" set:html={t(`guide.${r.id}.why`)}></p>
+            {r.code && (
+              <pre class="mt-4 rounded-xl border border-notion-border bg-[#141615] px-5 py-4 text-[13px] leading-relaxed font-mono text-zinc-200 overflow-x-auto"><code>{r.code}</code></pre>
+            )}
+            {r.output && (
+              <div class="mt-3">
+                <div class="text-[11px] font-mono uppercase tracking-widest text-notion-faint">{t("guide.output")}</div>
+                <pre class="mt-1.5 rounded-xl border border-notion-border/60 bg-notion-surface/30 px-5 py-4 text-[12.5px] leading-relaxed font-mono text-notion-muted overflow-x-auto"><code>{r.output}</code></pre>
+              </div>
+            )}
+            {r.id === "keys" && (
+              <div class="mt-4 rounded-xl border border-notion-border overflow-hidden">
+                <table class="w-full text-sm">
+                  <tbody>
+                    {keys.map((k) => (
+                      <tr class="border-t border-notion-border first:border-t-0">
+                        <td class="px-4 py-2.5 whitespace-nowrap">{k.combo.map((c) => <kbd>{c}</kbd>)}</td>
+                        <td class="px-4 py-2.5 text-notion-muted">{t(k.label)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {hasNote(r.id) && (
+              <p class="mt-3 text-sm text-notion-faint leading-relaxed guide-prose" set:html={t(`guide.${r.id}.note`)}></p>
+            )}
+          </article>
+        ))}
+      </section>
+    ))}
+    <p class="text-sm text-notion-faint">
+      <a href="/docs/cli-reference" class="text-notion-teal hover:underline">CLI reference</a>
+      <span class="mx-2 text-zinc-700">·</span>
+      <a href="/docs/mcp-reference" class="text-notion-teal hover:underline">MCP reference</a>
+      <span class="mx-2 text-zinc-700">·</span>
+      <a href={pathPrefix + "/features"} class="text-notion-teal hover:underline">{t("home.features.cta")}</a>
+    </p>
+  </div>
+</div>

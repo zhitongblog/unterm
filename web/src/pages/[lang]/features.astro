@@ -1,9 +1,9 @@
 ---
 import Base from "../../layouts/Base.astro";
-import Home from "../../components/Home.astro";
-import { LOCALES, alternates } from "../../i18n/locales";
+import Features from "../../components/Features.astro";
+import { LOCALES, alternatesFor } from "../../i18n/locales";
 import { fetchStats } from "../../lib/stats";
-
+import enUS from "../../i18n/en-US.json";
 import zhCN from "../../i18n/zh-CN.json";
 import zhTW from "../../i18n/zh-TW.json";
 import jaJP from "../../i18n/ja-JP.json";
@@ -40,15 +40,17 @@ export function getStaticPaths() {
 const { lang } = Astro.params;
 const dict = DICTS[lang as string];
 const pathPrefix = `/${lang}`;
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
 const stats = await fetchStats();
 ---
 
 <Base
   lang={lang as string}
   dict={dict}
-  alternates={alternates()}
+  alternates={alternatesFor("/features")}
   locales={LOCALES}
   pathPrefix={pathPrefix}
+  seo={{ title: `${t("features.page.title")} — Unterm`, description: t("features.page.sub"), canonicalPath: `${pathPrefix}/features`, xDefault: "https://unterm.app/features" }}
 >
-  <Home dict={dict} pathPrefix={pathPrefix} stats={stats} />
+  <Features dict={dict} pathPrefix={pathPrefix} stats={stats} />
 </Base>

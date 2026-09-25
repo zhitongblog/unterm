@@ -28,3 +28,12 @@ export function alternates() {
     href: origin + l.href,
   }));
 }
+
+/** hreflang link tags for a sub-page, e.g. "/guide" -> /guide, /zh-CN/guide, … */
+export function alternatesFor(path: string) {
+  const origin = "https://unterm.app";
+  return LOCALES.map((l) => ({
+    code: l.code,
+    href: origin + (l.href === "/" ? "" : l.href.replace(/\/$/, "")) + path,
+  }));
+}

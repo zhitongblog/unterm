@@ -1,0 +1,19 @@
+---
+import Base from "../layouts/Base.astro";
+import Guide from "../components/Guide.astro";
+import dict from "../i18n/en-US.json";
+import { LOCALES, alternatesFor } from "../i18n/locales";
+
+
+---
+
+<Base
+  lang="en-US"
+  dict={dict}
+  alternates={alternatesFor("/guide")}
+  locales={LOCALES}
+  pathPrefix=""
+  seo={{ title: dict["guide.meta.title"], description: dict["guide.meta.desc"], canonicalPath: "/guide", xDefault: "https://unterm.app/guide" }}
+>
+  <Guide dict={dict} pathPrefix="" />
+</Base>

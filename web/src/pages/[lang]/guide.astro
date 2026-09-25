@@ -1,9 +1,9 @@
 ---
 import Base from "../../layouts/Base.astro";
-import Home from "../../components/Home.astro";
-import { LOCALES, alternates } from "../../i18n/locales";
-import { fetchStats } from "../../lib/stats";
+import Guide from "../../components/Guide.astro";
+import { LOCALES, alternatesFor } from "../../i18n/locales";
 
+import enUS from "../../i18n/en-US.json";
 import zhCN from "../../i18n/zh-CN.json";
 import zhTW from "../../i18n/zh-TW.json";
 import jaJP from "../../i18n/ja-JP.json";
@@ -40,15 +40,17 @@ export function getStaticPaths() {
 const { lang } = Astro.params;
 const dict = DICTS[lang as string];
 const pathPrefix = `/${lang}`;
-const stats = await fetchStats();
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
+
 ---
 
 <Base
   lang={lang as string}
   dict={dict}
-  alternates={alternates()}
+  alternates={alternatesFor("/guide")}
   locales={LOCALES}
   pathPrefix={pathPrefix}
+  seo={{ title: t("guide.meta.title"), description: t("guide.meta.desc"), canonicalPath: `${pathPrefix}/guide`, xDefault: "https://unterm.app/guide" }}
 >
-  <Home dict={dict} pathPrefix={pathPrefix} stats={stats} />
+  <Guide dict={dict} pathPrefix={pathPrefix} />
 </Base>

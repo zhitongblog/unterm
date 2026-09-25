@@ -61,7 +61,7 @@ const ogAltLocales = alternates
 // ?v= busts the Cloudflare edge cache (assets/* carries max-age=86400,
 // so the bare URL can keep serving the previous card for up to a day
 // after a deploy). Bump it whenever og.png is regenerated.
-const ogImage = "https://unterm.app/assets/og.png?v=0.71.13";
+const ogImage = "https://unterm.app/assets/og.png?v=0.71.13-shots";
 
 // Structured data (SEO rich results + GEO / answer-engine extraction).
 // SoftwareApplication is the primary entity; WebSite + Organization give
@@ -136,6 +136,28 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
     ))}
 
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    <style is:global>
+      kbd {
+        display: inline-block;
+        min-width: 1.6em;
+        margin: 0 0.12em;
+        padding: 0.05em 0.45em;
+        border: 1px solid rgb(255 255 255 / 0.14);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        background: rgb(255 255 255 / 0.05);
+        font: 500 0.82em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: center;
+        color: rgb(228 228 222);
+      }
+      .guide-prose code {
+        font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        background: rgb(255 255 255 / 0.06);
+        color: rgb(236 236 230);
+      }
+    </style>
 
     <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png?v=0.71.13" />
     <link rel="icon" type="image/png" sizes="256x256" href="/assets/icon-256.png?v=0.71.13" />
@@ -159,17 +181,12 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
           <span class="font-semibold tracking-tight text-notion-ink group-hover:text-white">Unterm</span>
           <span class="text-xs font-mono text-notion-faint hidden sm:inline">v0.71.13</span>
         </a>
-        <nav class="hidden md:flex items-center gap-5 text-sm text-notion-muted">
-          <a href={pathPrefix + "/#agents"} class="hover:text-notion-teal text-notion-teal">{t("nav.agents")}</a>
-          <a href={pathPrefix + "/#capabilities"} class="hover:text-notion-ink">{t("nav.capabilities")}</a>
-          <a href={pathPrefix + "/#features"} class="hover:text-notion-ink">{t("nav.features")}</a>
-          <a href={pathPrefix + "/#demo"} class="hover:text-notion-ink">{t("nav.demo")}</a>
-          <a href={pathPrefix + "/#principles"} class="hover:text-notion-ink">{t("nav.principles")}</a>
+        <nav class="hidden md:flex items-center gap-6 text-sm text-notion-muted">
+          <a href={pathPrefix + "/features"} class="hover:text-notion-ink">{t("nav.features")}</a>
+          <a href={pathPrefix + "/guide"} class="hover:text-notion-ink">{t("nav.guide")}</a>
           <a href={pathPrefix + "/#compare"} class="hover:text-notion-ink">{t("nav.compare")}</a>
           <a href="/docs/agent-integration" class="hover:text-notion-ink">{t("nav.docs")}</a>
-          <a href={pathPrefix + "/#install"} class="hover:text-notion-ink">{t("nav.install")}</a>
-          <a href={pathPrefix + "/#faq"} class="hover:text-notion-ink">{t("nav.faq")}</a>
-          <a href={pathPrefix + "/#sponsor"} class="hover:text-rose-300"><span class="text-rose-400">♥</span> {t("nav.sponsor")}</a>
+          <a href={pathPrefix + "/#install"} class="px-3 py-1.5 rounded-md bg-notion-green/15 text-notion-teal hover:bg-notion-green/25 font-medium">{t("nav.download")}</a>
         </nav>
         <div class="flex items-center gap-3">
           <select id="lang-picker"
@@ -207,13 +224,24 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
             <a href="/changelog" class="hover:text-notion-ink">{t("footer.changelog")}</a>
             <a href="/docs/agent-integration" class="hover:text-notion-ink">{t("footer.docs")}</a>
             <a href="https://github.com/zhitongblog/unterm/blob/master/LICENSE.md" target="_blank" rel="noopener" class="hover:text-notion-ink">{t("footer.license")}</a>
-            <a href="https://doaipm.com" target="_blank" rel="noopener" class="hover:text-notion-ink">doaipm</a>
+            <a href={pathPrefix + "/features"} class="hover:text-notion-ink">{t("footer.features")}</a>
+            <a href={pathPrefix + "/guide"} class="hover:text-notion-ink">{t("footer.guide")}</a>
+            <a href={pathPrefix + "/features#sponsor"} class="hover:text-rose-300"><span class="text-rose-400">♥</span> {t("footer.sponsor")}</a>
             <span>{t("footer.copy")}</span>
           </div>
         </div>
         <!-- SoloMD-style tech-stack callout: a single line at the very bottom
              that signals "this is what's actually under the hood." Helps
              ship engineers get a quick read on whether to read the source. -->
+        <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-notion-faint">
+          <span class="uppercase tracking-widest font-mono text-[10px]">{t("footer.also")}</span>
+          <a href="https://doaipm.com" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 hover:text-notion-ink">
+            <img src="/assets/ads/doaipm.svg" width="16" height="16" alt="" class="rounded" />DO AI PM <span class="text-notion-faint">· {t("ads.doaipm")}</span>
+          </a>
+          <a href="https://unflick.app" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 hover:text-notion-ink">
+            <img src="/assets/ads/unflick.svg" width="16" height="16" alt="" class="rounded" />Unflick <span class="text-notion-faint">· {t("ads.unflick")}</span>
+          </a>
+        </div>
         <div class="text-center text-xs text-notion-faint font-mono pt-4 border-t border-notion-border/60">
           {t("footer.stack")}
         </div>

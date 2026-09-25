@@ -1,0 +1,421 @@
+---
+// The home page: what Unterm is, shown rather than listed, in the order a
+// visitor decides -- what it looks like, what it does for them, how to get it.
+// Everything else lives on /features and /guide.
+
+import { formatCount, type Stats } from "../lib/stats";
+import { resolveRelease, dlBaseUrl } from "../lib/release";
+import enUS from "../i18n/en-US.json";
+import { COMPETITORS } from "../data/competitors";
+
+interface Props {
+  dict: Record<string, string>;
+  pathPrefix: string;
+  stats: Stats;
+}
+
+const { dict, pathPrefix, stats } = Astro.props as Props;
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
+const release = resolveRelease(stats);
+const u = release.urls;
+
+// A star count is social proof only once it is a number worth showing; a
+// small one argues the other way. Downloads carry the page until then.
+const showStars = typeof stats.stars === "number" && stats.stars >= 200;
+
+const shot = (name: string) => ({
+  src: `/assets/shots/${name}.webp`,
+  srcset: `/assets/shots/${name}-1000.webp 1000w, /assets/shots/${name}.webp 2000w`,
+});
+
+const cockpit = [
+  { title: "home.cockpit.1.title", body: "home.cockpit.1.body" },
+  { title: "home.cockpit.2.title", body: "home.cockpit.2.body" },
+  { title: "home.cockpit.3.title", body: "home.cockpit.3.body" },
+];
+
+const fleetSteps = [
+  { n: "01", title: "home.fleet.1.title", body: "home.fleet.1.body" },
+  { n: "02", title: "home.fleet.2.title", body: "home.fleet.2.body" },
+  { n: "03", title: "home.fleet.3.title", body: "home.fleet.3.body" },
+];
+
+const agents = [
+  { name: "Claude Code", vendor: "Anthropic", dot: "bg-amber-400" },
+  { name: "Codex CLI", vendor: "OpenAI", dot: "bg-notion-teal" },
+  { name: "Gemini CLI", vendor: "Google", dot: "bg-sky-400" },
+  { name: "OpenCode", vendor: "SST", dot: "bg-violet-400" },
+  { name: "Aider", vendor: "Open source", dot: "bg-rose-400" },
+  { name: "Cursor · Windsurf", vendor: "MCP", dot: "bg-emerald-400" },
+];
+
+// The recipes the home page points at; the guide has the rest.
+const recipes = [
+  { id: "inbox", title: "guide.inbox.title" },
+  { id: "fleet", title: "guide.fleet.title" },
+  { id: "script", title: "guide.script.title" },
+  { id: "handoff", title: "guide.handoff.title" },
+  { id: "profiles", title: "guide.profiles.title" },
+  { id: "mcp", title: "guide.mcp.title" },
+];
+
+const cmpRows = [
+  { row: "cmp.r.cockpit", unterm: "✓", warp: "~ cloud", iterm: "✗", ghostty: "✗" },
+  { row: "cmp.r.mcp", unterm: "✓", warp: "✗", iterm: "✗", ghostty: "✗" },
+  { row: "cmp.r.cli", unterm: "✓", warp: "✗", iterm: "Python API", ghostty: "✗" },
+  { row: "cmp.r.agents", unterm: "✓ ×7", warp: "✗", iterm: "✗", ghostty: "✗" },
+  { row: "cmp.r.local", unterm: "✓", warp: "✗", iterm: "✓", ghostty: "✓" },
+  { row: "cmp.r.cross", unterm: "✓", warp: "✓", iterm: "macOS", ghostty: "mac+Linux" },
+  { row: "cmp.r.oss", unterm: "✓ MIT", warp: "✗", iterm: "✓ GPL", ghostty: "✓ MIT" },
+  { row: "cmp.r.price", unterm: "$0", warp: "cmp.freemium", iterm: "$0", ghostty: "$0" },
+];
+
+const faq = [
+  { q: "faq.what.q", a: "faq.what.a" },
+  { q: "faq.q1", a: "faq.a1" },
+  { q: "faq.q2", a: "faq.a2" },
+  { q: "faq.mcp.q", a: "faq.mcp.a" },
+  { q: "faq.privacy.q", a: "faq.privacy.a" },
+  { q: "faq.cost.q", a: "faq.cost.a" },
+  { q: "faq.platform.q", a: "faq.platform.a" },
+  { q: "faq.opensrc.q", a: "faq.opensrc.a" },
+];
+const stripHtml = (s: string) => s.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: faq.map((f) => ({
+    "@type": "Question",
+    name: stripHtml(t(f.q)),
+    acceptedAnswer: { "@type": "Answer", text: stripHtml(t(f.a)) },
+  })),
+};
+
+const driveScript = `# once: register Unterm with every agent on this machine
+unterm-cli setup-ai
+
+# what an agent (or you) can then do
+P=$(unterm-cli session create --cwd ~/code/api | awk '/^Pane:/{print $2}')
+unterm-cli exec wait --pane-id $P -- "npm test"
+unterm-cli scrollback --pane-id $P --tail 40
+unterm-cli agent inbox`;
+---
+
+<!-- ============== HERO ============== -->
+<section class="relative overflow-hidden">
+  <div class="absolute pointer-events-none -top-48 left-1/2 -translate-x-1/2 w-[1100px] h-[900px] rounded-full"
+       style="background: radial-gradient(closest-side, rgb(232 179 75 / 0.12), transparent 70%);"></div>
+  <div class="relative max-w-6xl mx-auto px-6 pt-16 sm:pt-20 pb-10 text-center">
+    <div class="inline-flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-3 py-1 rounded-full bg-notion-surface/80 border border-notion-border text-xs text-notion-muted mb-6">
+      <span class="w-1.5 h-1.5 rounded-full bg-notion-teal"></span>
+      <a href="/changelog" class="text-notion-teal font-medium hover:underline">{release.tag}</a>
+      <span class="text-zinc-700">·</span>
+      <span>{t("hero.badge.signed")}</span>
+      <span class="text-zinc-700">·</span>
+      <span>{t("home.hero.platforms")}</span>
+    </div>
+    <h1 class="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight text-zinc-50 leading-[1.04] text-balance">
+      <span>{t("hero.title.1")}</span>
+      <span class="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent">{t("hero.title.2")}</span>
+    </h1>
+    <p class="mt-6 text-lg sm:text-xl text-notion-muted max-w-2xl mx-auto leading-relaxed text-balance">{t("home.hero.sub")}</p>
+    <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+      <!-- /api/download picks the right file for the visitor's platform at the edge. -->
+      <a href={`/api/download?v=${release.tag}`}
+         class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-notion-green hover:bg-notion-teal text-zinc-950 font-semibold transition shadow-lg shadow-amber-500/20">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+        <span>{t("hero.cta.download")}</span>
+      </a>
+      <a href="https://github.com/zhitongblog/unterm" target="_blank" rel="noopener"
+         class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-notion-surface hover:bg-notion-sunken border border-notion-border hover:border-notion-borderStrong text-notion-ink font-medium transition">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.8 10.9.6.1.8-.2.8-.6V20c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.7.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.4-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2.9-.3 2-.4 3-.4s2.1.1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.9 1.2 3.2 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+        <span>{t("home.hero.github")}</span>
+        {showStars && <span class="text-notion-faint font-mono text-sm" data-stat="stars">{formatCount(stats.stars)}</span>}
+      </a>
+    </div>
+    <p class="mt-5 text-sm text-notion-faint">
+      {typeof stats.downloads === "number" && stats.downloads > 0 && (
+        <><span class="font-semibold text-notion-muted" data-stat="downloads">{formatCount(stats.downloads)}</span> {t("home.hero.downloads")}<span class="text-zinc-700 mx-1.5">·</span></>
+      )}
+      {t("home.hero.free")}
+      <span class="text-zinc-700 mx-1.5">·</span><a href={pathPrefix + "/#install"} class="hover:text-notion-ink underline decoration-dotted underline-offset-4">{t("hero.cta.other")}</a>
+    </p>
+  </div>
+  <div class="relative max-w-6xl mx-auto px-4 sm:px-6 pb-20">
+    <div class="absolute inset-x-10 -inset-y-2 bg-gradient-to-r from-amber-500/10 via-amber-300/5 to-amber-500/10 blur-3xl rounded-3xl"></div>
+    <img src={shot("hero-macos").src} srcset={shot("hero-macos").srcset}
+         sizes="(min-width: 1152px) 1104px, 100vw"
+         width="2000" height="1360" alt={t("home.hero.alt")}
+         class="relative w-full h-auto rounded-2xl ring-1 ring-white/10 shadow-2xl shadow-black/60"
+         fetchpriority="high" />
+  </div>
+</section>
+
+<!-- ============== COCKPIT ============== -->
+<section id="cockpit" class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="max-w-2xl">
+      <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("home.cockpit.kicker")}</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink text-balance">{t("home.cockpit.title")}</h2>
+      <p class="mt-4 text-lg text-notion-muted leading-relaxed">{t("home.cockpit.sub")}</p>
+    </div>
+    <div class="mt-10 grid md:grid-cols-3 gap-4">
+      {cockpit.map((c) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/40 p-5">
+          <div class="font-semibold text-notion-ink">{t(c.title)}</div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed" set:html={t(c.body)}></p>
+        </div>
+      ))}
+    </div>
+    <div class="mt-10 grid lg:grid-cols-2 gap-6">
+      <figure>
+        <img src={shot("inbox-macos").src} srcset={shot("inbox-macos").srcset} sizes="(min-width: 1024px) 540px, 100vw"
+             width="2000" height="1360" loading="lazy" alt={t("home.cockpit.alt.inbox")}
+             class="w-full h-auto rounded-xl ring-1 ring-white/10 shadow-xl shadow-black/50" />
+        <figcaption class="mt-3 text-sm text-notion-faint">{t("home.cockpit.alt.inbox")}</figcaption>
+      </figure>
+      <figure>
+        <img src={shot("jump-codex").src} srcset={shot("jump-codex").srcset} sizes="(min-width: 1024px) 540px, 100vw"
+             width="2000" height="1360" loading="lazy" alt={t("home.cockpit.alt.jump")}
+             class="w-full h-auto rounded-xl ring-1 ring-white/10 shadow-xl shadow-black/50" />
+        <figcaption class="mt-3 text-sm text-notion-faint">{t("home.cockpit.alt.jump")}</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============== DRIVABLE ============== -->
+<section id="drive" class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-10 lg:gap-14 items-center">
+    <div>
+      <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("home.drive.kicker")}</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink text-balance">{t("home.drive.title")}</h2>
+      <p class="mt-4 text-lg text-notion-muted leading-relaxed">{t("home.drive.sub")}</p>
+      <ul class="mt-6 space-y-2.5 text-notion-ink">
+        {["home.drive.1", "home.drive.2", "home.drive.3"].map((k) => (
+          <li class="flex gap-3"><span class="mt-2 w-1.5 h-1.5 rounded-full bg-notion-teal shrink-0"></span><span>{t(k)}</span></li>
+        ))}
+      </ul>
+      <p class="mt-6 text-sm text-notion-faint">{t("home.drive.note")}</p>
+    </div>
+    <div class="rounded-xl border border-notion-border bg-[#141615] shadow-2xl shadow-black/50 overflow-hidden">
+      <div class="flex items-center gap-2 px-4 py-2.5 border-b border-white/10 bg-[#242625]">
+        <span class="w-3 h-3 rounded-full bg-red-500/70"></span><span class="w-3 h-3 rounded-full bg-yellow-500/70"></span><span class="w-3 h-3 rounded-full bg-green-500/70"></span>
+        <span class="ml-2 text-xs font-mono text-zinc-400">zsh</span>
+      </div>
+      <pre class="px-5 py-5 text-[13px] leading-relaxed font-mono text-zinc-200 overflow-x-auto"><code>{driveScript}</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============== FLEETS ============== -->
+<section id="fleet" class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="max-w-2xl">
+      <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("home.fleet.kicker")}</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink text-balance">{t("home.fleet.title")}</h2>
+      <p class="mt-4 text-lg text-notion-muted leading-relaxed">{t("home.fleet.sub")}</p>
+    </div>
+    <div class="mt-10 grid lg:grid-cols-[1fr_1.5fr] gap-8 items-center">
+      <div class="grid gap-4">
+        {fleetSteps.map((s) => (
+          <div class="rounded-xl border border-notion-border bg-notion-surface/40 p-5">
+            <div class="text-xs font-mono text-notion-green">{s.n}</div>
+            <div class="mt-1.5 font-semibold text-notion-ink">{t(s.title)}</div>
+            <p class="mt-1.5 text-sm text-notion-muted leading-relaxed" set:html={t(s.body)}></p>
+          </div>
+        ))}
+      </div>
+      <img src={shot("fleet-macos").src} srcset={shot("fleet-macos").srcset} sizes="(min-width: 1024px) 660px, 100vw"
+           width="2000" height="1360" loading="lazy" alt={t("home.fleet.alt")}
+           class="w-full h-auto rounded-xl ring-1 ring-white/10 shadow-xl shadow-black/50" />
+    </div>
+  </div>
+</section>
+
+<!-- ============== AGENTS ============== -->
+<section id="agents" class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6 text-center">
+    <h2 class="text-3xl font-semibold tracking-tight text-notion-ink">{t("home.agents.title")}</h2>
+    <p class="mt-3 text-notion-muted max-w-2xl mx-auto">{t("home.agents.sub")}</p>
+    <div class="mt-10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      {agents.map((a) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/50 px-4 py-4 text-left">
+          <div class="flex items-center gap-2">
+            <span class={`inline-block h-2 w-2 rounded-full ${a.dot}`}></span>
+            <span class="text-sm font-semibold text-notion-ink">{a.name}</span>
+          </div>
+          <div class="mt-1 text-xs text-notion-faint">{a.vendor}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== ADVANCED ============== -->
+<section id="advanced" class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+      <div class="max-w-2xl">
+        <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("home.more.kicker")}</div>
+        <h2 class="mt-3 text-3xl font-semibold tracking-tight text-notion-ink">{t("home.more.title")}</h2>
+        <p class="mt-3 text-notion-muted">{t("home.more.sub")}</p>
+      </div>
+      <a href={pathPrefix + "/guide"} class="inline-flex items-center gap-2 text-notion-teal hover:underline font-medium shrink-0">{t("home.more.cta")} →</a>
+    </div>
+    <div class="mt-8 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {recipes.map((r) => (
+        <a href={`${pathPrefix}/guide#${r.id}`}
+           class="group rounded-xl border border-notion-border bg-notion-surface/40 hover:bg-notion-surface hover:border-notion-borderStrong p-5 transition">
+          <div class="font-medium text-notion-ink group-hover:text-white">{t(r.title)}</div>
+          <div class="mt-2 text-xs font-mono text-notion-faint group-hover:text-notion-teal">/guide#{r.id} →</div>
+        </a>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== COMPARE ============== -->
+<section id="compare" class="py-20 border-t border-notion-border">
+  <div class="max-w-4xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center text-notion-ink">{t("home.cmp.title")}</h2>
+    <div class="mt-8 overflow-x-auto rounded-xl border border-notion-border">
+      <table class="w-full text-sm">
+        <thead class="bg-notion-surface/80 text-notion-muted">
+          <tr>
+            <th class="text-left px-4 py-3 font-medium">{t("cmp.h.feature")}</th>
+            <th class="px-3 py-3 font-semibold text-notion-green border-l border-notion-border">Unterm</th>
+            <th class="px-3 py-3 font-medium border-l border-notion-border">Warp</th>
+            <th class="px-3 py-3 font-medium border-l border-notion-border">iTerm2</th>
+            <th class="px-3 py-3 font-medium border-l border-notion-border">Ghostty</th>
+          </tr>
+        </thead>
+        <tbody class="text-notion-ink">
+          {cmpRows.map((r) => (
+            <tr class="border-t border-notion-border">
+              <td class="px-4 py-3">{t(r.row)}</td>
+              <td class="text-center text-notion-green font-medium border-l border-notion-border/60">{r.unterm}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{t(r.warp)}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{r.iterm}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{r.ghostty}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <div class="mt-6 flex flex-wrap justify-center gap-2">
+      <a href={pathPrefix + "/features#compare"} class="text-sm px-3 py-1.5 rounded-lg border border-notion-border text-notion-teal hover:border-notion-borderStrong transition">{t("home.cmp.more")} →</a>
+      {COMPETITORS.map((c) => (
+        <a href={pathPrefix + "/compare/" + c.slug}
+           class="text-sm px-3 py-1.5 rounded-lg border border-notion-border text-notion-muted hover:text-notion-ink hover:border-notion-borderStrong transition">vs {c.name}</a>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== INSTALL ============== -->
+<section id="install" class="py-20 border-t border-notion-border">
+  <div class="max-w-4xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center text-notion-ink">{t("install.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted">{t("install.subtitle")}</p>
+    <div class="mt-10 rounded-xl border border-notion-border bg-notion-surface/40 overflow-hidden">
+      <div class="flex border-b border-notion-border text-sm font-medium">
+        <button type="button" data-tab="unix" class="install-tab px-5 py-3 text-notion-ink bg-notion-sunken/60 border-r border-notion-border">macOS · Linux</button>
+        <button type="button" data-tab="win" class="install-tab px-5 py-3 text-notion-muted hover:text-notion-ink">Windows</button>
+        <div class="ml-auto text-xs text-notion-faint self-center pr-4 hidden sm:block">{t("install.copy_hint")}</div>
+      </div>
+      <div class="install-pane" data-pane="unix">
+        <pre class="font-mono text-sm text-notion-ink px-5 py-5 overflow-x-auto"><code>curl -fsSL https://unterm.app/install.sh | sh</code></pre>
+        <p class="text-xs text-notion-faint px-5 pb-4" set:html={t("install.unix_detail")}></p>
+      </div>
+      <div class="install-pane hidden" data-pane="win">
+        <pre class="font-mono text-sm text-notion-ink px-5 py-5 overflow-x-auto"><code>irm https://unterm.app/install.ps1 | iex</code></pre>
+        <p class="text-xs text-notion-faint px-5 pb-4" set:html={t("install.win_detail")}></p>
+      </div>
+    </div>
+    <p class="mt-6 text-center text-xs text-notion-faint">{t("install.or_manual")}</p>
+    <div class="mt-4 grid sm:grid-cols-3 gap-4">
+      <a href={u.dmg} class="group block bg-notion-surface/60 hover:bg-notion-surface border border-notion-border hover:border-notion-borderStrong rounded-xl p-5 transition">
+        <div class="flex items-center justify-between"><div class="font-semibold">{t("install.macos.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.macos.size")}</span></div>
+        <div class="text-sm text-notion-muted mt-1">{t("install.macos.detail")}</div>
+        <div class="mt-3 text-xs text-notion-green group-hover:text-notion-teal font-mono">.dmg →</div>
+      </a>
+      <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5 flex flex-col">
+        <div class="flex items-center justify-between"><div class="font-semibold">{t("install.windows.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.windows.size")}</span></div>
+        <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.windows.detail")}</div>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs font-mono">
+          <a href={u.msi} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.msi x64</a>
+          <a href={u.msiArm} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.msi arm64</a>
+          <a href={u.winZip} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">.zip x64</a>
+          <a href={u.winZipArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">.zip arm64</a>
+        </div>
+      </div>
+      <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5 flex flex-col">
+        <div class="flex items-center justify-between"><div class="font-semibold">{t("install.linux.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.linux.size")}</span></div>
+        <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.linux.detail")}</div>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs font-mono">
+          <a href={u.deb} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.deb x64</a>
+          <a href={u.debArm} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.deb arm64</a>
+          <a href={u.appimage} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">AppImage x64</a>
+          <a href={u.appimageArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">AppImage arm64</a>
+        </div>
+      </div>
+    </div>
+    <p class="mt-6 text-center text-xs text-notion-faint">
+      <a href={`${dlBaseUrl}/latest`} class="hover:text-notion-ink">{release.tag} · {release.date}</a>
+      <span class="mx-1.5 text-zinc-700">·</span><a href="/changelog" class="hover:text-notion-ink">Changelog</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============== FAQ ============== -->
+<section id="faq" class="py-20 border-t border-notion-border">
+  <script type="application/ld+json" set:html={JSON.stringify(faqJsonLd)} />
+  <div class="max-w-3xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center text-notion-ink">{t("faq.title")}</h2>
+    <div class="mt-10 divide-y divide-zinc-800 border border-notion-border rounded-xl bg-notion-surface/40">
+      {faq.map((q) => (
+        <details class="group">
+          <summary class="cursor-pointer flex items-center justify-between px-5 py-4 hover:bg-notion-surface select-none">
+            <span class="font-medium pr-4">{t(q.q)}</span>
+            <svg class="w-4 h-4 shrink-0 text-notion-faint group-open:rotate-180 transition" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
+          <p class="px-5 pb-5 text-sm text-notion-muted leading-relaxed" set:html={t(q.a)}></p>
+        </details>
+      ))}
+    </div>
+    <div class="mt-10 text-center">
+      <a href={pathPrefix + "/features"} class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-notion-border hover:border-notion-borderStrong text-notion-ink transition">{t("home.features.cta")} →</a>
+    </div>
+  </div>
+</section>
+
+<script is:inline>
+  (function () {
+    const tabs = document.querySelectorAll(".install-tab");
+    const panes = document.querySelectorAll(".install-pane");
+    tabs.forEach((tab) =>
+      tab.addEventListener("click", () => {
+        tabs.forEach((x) => {
+          const on = x === tab;
+          x.classList.toggle("text-notion-ink", on);
+          x.classList.toggle("bg-notion-sunken/60", on);
+          x.classList.toggle("text-notion-muted", !on);
+        });
+        panes.forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== tab.dataset.tab));
+      })
+    );
+    document.querySelectorAll(".install-pane pre").forEach((pre) => {
+      pre.style.cursor = "copy";
+      pre.title = "click to copy";
+      pre.addEventListener("click", async () => {
+        const text = pre.textContent.trim();
+        const code = pre.querySelector("code") || pre;
+        try { await navigator.clipboard.writeText(text); } catch (_) { return; }
+        const original = code.textContent;
+        code.textContent = "✓ copied";
+        setTimeout(() => { code.textContent = original; }, 1100);
+      });
+    });
+  })();
+</script>

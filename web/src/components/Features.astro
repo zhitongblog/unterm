@@ -1,0 +1,801 @@
+---
+// All page sections wrapped into one component.
+// The dict is passed in by the per-locale page entry; nothing here knows
+// what the active language is, it just looks keys up in the dict.
+
+import { formatCount, type Stats } from "../lib/stats";
+import enUS from "../i18n/en-US.json";
+import { COMPETITORS } from "../data/competitors";
+import { resolveRelease } from "../lib/release";
+
+interface Props {
+  dict: Record<string, string>;
+  pathPrefix: string;
+  stats: Stats;
+}
+
+const { dict, pathPrefix, stats } = Astro.props as Props;
+const t = (k: string) => dict[k] ?? enUS[k] ?? k;
+
+const release = resolveRelease(stats);
+const releaseTag = release.tag;
+const releaseDate = release.date;
+
+// FAQ entries — shape matches the keys inside the locale JSON.
+const faq = [
+  { q: "faq.what.q",        a: "faq.what.a" },
+  // Cockpit-era questions (v0.55) — phrased the way people actually
+  // search / ask an answer engine.
+  { q: "faq.q1",            a: "faq.a1" },
+  { q: "faq.q2",            a: "faq.a2" },
+  { q: "faq.q3",            a: "faq.a3" },
+  { q: "faq.q6",            a: "faq.a6" },
+  { q: "faq.mouse.q",       a: "faq.mouse.a" },
+  { q: "faq.mcp.q",         a: "faq.mcp.a" },
+  { q: "faq.multi.q",       a: "faq.multi.a" },
+  { q: "faq.warp.q",        a: "faq.warp.a" },
+  { q: "faq.privacy.q",     a: "faq.privacy.a" },
+  { q: "faq.telemetry.q",   a: "faq.telemetry.a" },
+  { q: "faq.cost.q",        a: "faq.cost.a" },
+  { q: "faq.size.q",        a: "faq.size.a" },
+  { q: "faq.locale.q",      a: "faq.locale.a" },
+  { q: "faq.agents_run.q",  a: "faq.agents_run.a" },
+  { q: "faq.script.q",      a: "faq.script.a" },
+  { q: "faq.platform.q",    a: "faq.platform.a" },
+  { q: "faq.opensrc.q",     a: "faq.opensrc.a" },
+  { q: "faq.contrib.q",     a: "faq.contrib.a" },
+];
+
+// Personas section — three columns, each with header + body + 4 bullets.
+// The bullet keys follow the persona prefix so locale files can stay flat.
+const personas = [
+  {
+    icon: "🤖",
+    title: "persona.ai.title",
+    body: "persona.ai.body",
+    bullets: ["persona.ai.bullets.1", "persona.ai.bullets.2", "persona.ai.bullets.3", "persona.ai.bullets.4"],
+  },
+  {
+    icon: "⚙️",
+    title: "persona.ops.title",
+    body: "persona.ops.body",
+    bullets: ["persona.ops.bullets.1", "persona.ops.bullets.2", "persona.ops.bullets.3", "persona.ops.bullets.4"],
+  },
+  {
+    icon: "🔧",
+    title: "persona.power.title",
+    body: "persona.power.body",
+    bullets: ["persona.power.bullets.1", "persona.power.bullets.2", "persona.power.bullets.3", "persona.power.bullets.4"],
+  },
+];
+
+const demoFlow = [
+  { n: "01", title: "demo.flow.1.title", body: "demo.flow.1.body" },
+  { n: "02", title: "demo.flow.2.title", body: "demo.flow.2.body" },
+  { n: "03", title: "demo.flow.3.title", body: "demo.flow.3.body" },
+];
+
+// What's-new-in-v0.12 section: four highlight cards. Same card shape as
+// features but with a "v0.12" version chip and a denser tech-paragraph
+// body (these are about what changed, not what exists).
+const whatsnew = [
+  { v: "v0.71", title: "whatsnew.gpu71.title",      body: "whatsnew.gpu71.body" },
+  { v: "v0.68", title: "whatsnew.window68.title",   body: "whatsnew.window68.body" },
+  { v: "v0.68", title: "whatsnew.host68.title",     body: "whatsnew.host68.body" },
+  { v: "v0.66", title: "whatsnew.park66.title",     body: "whatsnew.park66.body" },
+  { v: "v0.64", title: "whatsnew.cjk64.title",      body: "whatsnew.cjk64.body" },
+  { v: "v0.63", title: "whatsnew.core63.title",     body: "whatsnew.core63.body" },
+  { v: "v0.61", title: "whatsnew.kernel61.title",   body: "whatsnew.kernel61.body" },
+];
+
+// Agent Cockpit (v0.55 headline): five pillars, one band. Icons stay
+// emoji (rendered by the browser, not the terminal font).
+const cockpit = [
+  { icon: "🛰️", title: "cockpit.state.title",  body: "cockpit.state.body" },
+  { icon: "📥", title: "cockpit.inbox.title",  body: "cockpit.inbox.body" },
+  { icon: "🚀", title: "cockpit.fleet.title",  body: "cockpit.fleet.body" },
+  { icon: "🔍", title: "cockpit.review.title", body: "cockpit.review.body" },
+  { icon: "🔌", title: "cockpit.api.title",    body: "cockpit.api.body", wide: true },
+];
+
+
+const principles = [
+  { n: "01", title: "principles.local.title",        body: "principles.local.body" },
+  { n: "02", title: "principles.outside.title",      body: "principles.outside.body" },
+  { n: "03", title: "principles.mcp.title",          body: "principles.mcp.body" },
+  { n: "04", title: "principles.parity.title",       body: "principles.parity.body" },
+  { n: "05", title: "principles.subtraction.title",  body: "principles.subtraction.body" },
+  { n: "06", title: "principles.subscription.title", body: "principles.subscription.body", wide: true },
+];
+
+// TL;DR spec rows — keep parallel to SoloMD's "what X is, in 60 seconds" table.
+// Each row is one quoted fact a skeptical reader can verify in the source or
+// GitHub Releases.  `valueRaw` is rendered as-is (mixed locale fragments like
+// version + date); plain `value` is an i18n key that goes through t().
+const tldrRows = [
+  { label: "tldr.version",         valueRaw: `${releaseTag} · ${releaseDate} · MIT` },
+  { label: "tldr.bundled_agents",  value:    "tldr.bundled_agents.value" },
+  { label: "tldr.price",        value: "tldr.price.value" },
+  { label: "tldr.platforms",    value: "tldr.platforms.value" },
+  { label: "tldr.size",         value: "tldr.size.value" },
+  { label: "tldr.memory",       value: "tldr.memory.value" },
+  { label: "tldr.languages",    value: "tldr.languages.value" },
+  { label: "tldr.surfaces",     value: "tldr.surfaces.value" },
+  { label: "tldr.engine",       value: "tldr.engine.value" },
+  { label: "tldr.privacy",      value: "tldr.privacy.value" },
+  { label: "tldr.engine_stack", value: "tldr.engine_stack.value" },
+];
+
+// "Where Unterm stands out" — 3 strongest differentiators with version chips.
+// SoloMD does the same after the comparison table; we mirror it here as a
+// confidence section after Features.
+const standouts = [
+  { v: "v0.18", icon: "🤖", title: "stand.agents.title",   body: "stand.agents.body" },
+  { v: "v0.17", icon: "🪟", title: "stand.split.title",    body: "stand.split.body" },
+  { v: "v0.16", icon: "👁️", title: "stand.audit.title",    body: "stand.audit.body" },
+];
+
+// Quality-of-life touches — minor but delightful features. Pure 4-column grid
+// of icon + short title + 1-sentence body. SoloMD has the same band after
+// its main feature grid for non-headline polish.
+// Mouse flow — the right-click copy/paste gesture band. Three steps,
+// one gesture; macOS Ctrl+click is the same gesture per platform
+// convention. Verified end-to-end on macOS (v0.57.1).
+const mouseFlow = [
+  { icon: "🖱️", title: "mouse.copy.title",  body: "mouse.copy.body" },
+  { icon: "📥", title: "mouse.paste.title", body: "mouse.paste.body" },
+  { icon: "⌃",  title: "mouse.ctrl.title",  body: "mouse.ctrl.body" },
+];
+
+const qol = [
+  { icon: "👻", title: "qol.ghost.title",      body: "qol.ghost.body" },
+  { icon: "✨", title: "qol.suggest.title",    body: "qol.suggest.body" },
+  { icon: "📋", title: "qol.copy.title",       body: "qol.copy.body" },
+  { icon: "🎨", title: "qol.themes.title",     body: "qol.themes.body" },
+  { icon: "📁", title: "qol.finder.title",     body: "qol.finder.body" },
+  { icon: "🪪", title: "qol.profiles.title",   body: "qol.profiles.body" },
+  { icon: "🚦", title: "qol.proxy.title",      body: "qol.proxy.body" },
+  { icon: "🌐", title: "qol.headers.title",    body: "qol.headers.body" },
+];
+
+// Sponsor methods — mirrors SoloMD's "Support" band at the page bottom.
+// Three named channels: GitHub Sponsors (international), PayPal (Chinese-
+// diaspora-friendly worldwide one-tap), and a QR pair (Alipay / WeChat Pay)
+// rendered later as a single card holding both images.
+const sponsors = [
+  { icon: "♥",  title: "sponsor.gh.title",     body: "sponsor.gh.body",     cta: "sponsor.gh.cta",     href: "https://github.com/sponsors/zhitongblog" },
+  { icon: "💸", title: "sponsor.paypal.title", body: "sponsor.paypal.body", cta: "sponsor.paypal.cta", href: "https://paypal.me/solomdapp" },
+];
+
+const features = [
+  { icon: "🔌", title: "features.mcp.title",    body: "features.mcp.body" },
+  { icon: "⚡", title: "features.cli.title",    body: "features.cli.body" },
+  { icon: "🖥️", title: "features.web.title",    body: "features.web.body" },
+  { icon: "🌍", title: "features.i18n.title",   body: "features.i18n.body" },
+  { icon: "🎬", title: "features.rec.title",    body: "features.rec.body" },
+  { icon: "📸", title: "features.shot.title",   body: "features.shot.body" },
+  { icon: "🌐", title: "features.proxy.title",  body: "features.proxy.body" },
+  { icon: "⚙️", title: "features.engine.title", body: "features.engine.body" },
+];
+
+// Comparison matrix. Columns now grouped by lane: Unterm (agent-first),
+// a native baseline (macOS Terminal.app / Windows Terminal), the paid AI
+// terminal (Warp), and two free power terminals (iTerm2, Ghostty). The
+// rows lead with the agent-control differentiators (top of the table)
+// before the table-stakes rendering / platform rows. `native` is the new
+// column; values are rendered raw except the `unterm` cell which goes
+// through t() so "✗ (by design)" can be localized.
+const cmpRows = [
+  { row: "cmp.r.mcp",      unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.cli",      unterm: "✓",        native: "✗",     warp: "✗",          iterm: "Python API", ghostty: "✗" },
+  { row: "cmp.r.agents",   unterm: "✓ ×7",     native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.autowire", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.cockpit",  unterm: "✓",        native: "✗",     warp: "~ cloud",    iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.identity", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.instance", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.rec",      unterm: "✓ md",     native: "✗",     warp: "~",          iterm: "✓",          ghostty: "✗" },
+  { row: "cmp.r.capture",  unterm: "✓",        native: "✗",     warp: "✗",          iterm: "~",          ghostty: "✗" },
+  { row: "cmp.r.rightclick", unterm: "✓ gesture", native: "menu", warp: "menu",      iterm: "menu",       ghostty: "menu" },
+  { row: "cmp.r.proxy",    unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.local",    unterm: "✓",        native: "✓",     warp: "✗",          iterm: "✓",          ghostty: "✓" },
+  { row: "cmp.r.ai",       unterm: "cmp.intentional", native: "✗", warp: "✓ (cloud)", iterm: "plugin",  ghostty: "✗" },
+  { row: "cmp.r.gpu",      unterm: "✓",        native: "✗",     warp: "✓",          iterm: "✓",          ghostty: "✓" },
+  { row: "cmp.r.cross",    unterm: "✓",        native: "✗",     warp: "✓",          iterm: "macOS",      ghostty: "mac+Linux" },
+  { row: "cmp.r.oss",      unterm: "✓ MIT",    native: "✗",     warp: "✗",          iterm: "✓ GPL",      ghostty: "✓ MIT" },
+  { row: "cmp.r.i18n",     unterm: "✓ ×9",     native: "OS",    warp: "en",         iterm: "en",         ghostty: "en" },
+  { row: "cmp.r.price",    unterm: "$0",       native: "$0",    warp: "cmp.freemium", iterm: "$0",       ghostty: "$0" },
+];
+
+// Complete capability catalog — every MCP namespace + the CLI surface,
+// grouped into families. `meta` is the language-neutral count chip;
+// `items` are method/command names (never translated). title + body
+// are i18n keys. This is the "what does it actually expose" section the
+// thin 8-card Features grid only gestures at.
+const capStats = [
+  { n: "151", label: "cap.stat.methods" },
+  { n: "30", label: "cap.stat.namespaces" },
+  { n: "37", label: "cap.stat.cli" },
+  { n: "4",  label: "cap.stat.surfaces" },
+  { n: "22ms", label: "cap.stat.startup" },
+  { n: "~12k", label: "cap.stat.kernel" },
+];
+const capabilities = [
+  { icon: "🛩️", title: "cap.cockpit.title", body: "cap.cockpit.body", meta: "cockpit · fleet.* · review.* · 11", items: "agent.status · cockpit.inbox · fleet.launch · fleet.retry · review.verify · review.diff · review.merge · review.rollback", wide: true },
+  { icon: "🪟", title: "cap.session.title",  body: "cap.session.body",  meta: "session.* · 27", items: "create · split · focus · resize · input · destroy · history · idle · cwd" },
+  { icon: "👁️", title: "cap.screen.title",   body: "cap.screen.body",   meta: "screen.* · 8",   items: "text · scrollback_text · search · cursor · detect_errors · scroll" },
+  { icon: "▶️", title: "cap.exec.title",     body: "cap.exec.body",     meta: "exec.* · 5",     items: "run · run_wait · send · status · cancel · signal.send" },
+  { icon: "🤖", title: "cap.agents.title",   body: "cap.agents.body",   meta: "agent · 7 CLIs", items: "install · auth · launch · config · mcp-stdio bridge" },
+  { icon: "🪪", title: "cap.identity.title", body: "cap.identity.body", meta: "profile · 7 sniffers", items: "list · current · create · switch · delete" },
+  { icon: "🛰️", title: "cap.instance.title", body: "cap.instance.body", meta: "instance.* · 8", items: "list · info · focus · set_title" },
+  { icon: "🎬", title: "cap.rec.title",      body: "cap.rec.body",      meta: "recording · asciicast", items: "recording_start · stop · status · list · read · export_markdown" },
+  { icon: "📸", title: "cap.capture.title",  body: "cap.capture.body",  meta: "capture.* · 6 + upload", items: "screen · window · select · clipboard · scrollback · window_scroll · upload.file" },
+  { icon: "🌐", title: "cap.proxy.title",    body: "cap.proxy.body",    meta: "proxy.* · 12",   items: "status · switch · nodes · speedtest · configure · disable · env" },
+  { icon: "🛡️", title: "cap.gov.title",      body: "cap.gov.body",      meta: "governance · 9", items: "audit_log · policy.check/set · agent.identify · selftest.run · server.health" },
+  { icon: "💾", title: "cap.workspace.title",body: "cap.workspace.body",meta: "workspace.* · 3",items: "save · restore · list" },
+  { icon: "📖", title: "cap.meta.title",     body: "cap.meta.body",     meta: "meta.surface", items: "reference · show-keys · settings · theme · lang" },
+];
+
+---
+
+<section class="pt-16 pb-6">
+  <div class="max-w-4xl mx-auto px-6 text-center">
+    <h1 class="text-4xl sm:text-5xl font-bold tracking-tight text-zinc-50 text-balance">{t("features.page.title")}</h1>
+    <p class="mt-4 text-lg text-notion-muted text-balance">{t("features.page.sub")}</p>
+    <p class="mt-6 text-sm"><a href={pathPrefix + "/guide"} class="text-notion-teal hover:underline">{t("home.more.cta")} →</a></p>
+  </div>
+</section>
+
+<!-- ============== TL;DR ============== -->
+<!-- A scannable 2-column specs table.  Mirrors SoloMD's "TL;DR — what X
+     is, in 60 seconds" band.  Every value is a fact a skeptical visitor
+     can verify (in the source, on GitHub Releases, or in the running app).
+     Sits between hero and tagline so a fast reader gets the elevator
+     pitch before the long prose. -->
+<section class="py-16 border-t border-notion-border">
+  <div class="max-w-4xl mx-auto px-6">
+    <div class="flex items-baseline gap-3 mb-6">
+      <h2 class="text-xl font-semibold tracking-tight text-notion-ink">{t("tldr.title")}</h2>
+      <span class="text-xs text-notion-faint font-mono">{t("tldr.subtitle")}</span>
+    </div>
+    <div class="rounded-xl border border-notion-border bg-notion-surface/30 overflow-hidden">
+      <dl class="divide-y divide-zinc-800/60">
+        {tldrRows.map((r) => (
+          <div class="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-x-6 gap-y-1 px-5 py-3">
+            <dt class="text-xs sm:text-sm text-notion-faint font-mono">{t(r.label)}</dt>
+            <dd class="text-sm text-notion-ink leading-relaxed" set:html={r.valueRaw ?? t(r.value)}></dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  </div>
+</section>
+
+<!-- ============== AGENT LAUNCHER (v0.18 hero section) ==============
+     Sits right after TL;DR so visitors who scroll past the hero see the
+     v0.18 story before any of the older v0.16/v0.17 angles. Mirrors the
+     SoloMD pattern of "feature-grid card with screenshot on the right"
+     so the page rhythm stays consistent. -->
+<section id="agents" class="py-20 border-t border-notion-border bg-gradient-to-b from-notion-bg/20 via-notion-bg to-notion-bg">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-900/25 border border-amber-800/40 text-xs text-notion-teal mb-4">
+      <span class="inline-block h-1.5 w-1.5 rounded-full bg-notion-teal animate-pulse"></span>
+      <span set:html={t("agents.tag")}></span>
+    </div>
+    <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink leading-tight max-w-3xl">{t("agents.title")}</h2>
+    <p class="mt-4 text-lg text-notion-muted leading-relaxed max-w-3xl" set:html={t("agents.subtitle")}></p>
+
+    <!-- Five agent cards in a horizontal strip. Each shows vendor name, the
+         install command, and an auth-mode summary. Pure HTML, no JS. -->
+    <!-- Five agent cards. We hard-code dot color classes per agent because
+         Tailwind's JIT scanner can't see `bg-${a.color}-400` interpolated
+         strings — it only picks up classes that appear literally somewhere
+         in the source. Listed verbatim below: bg-amber-400 bg-notion-teal
+         bg-sky-400 bg-violet-400 bg-rose-400. -->
+    <div class="mt-10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {[
+        { id: "claude-code", name: "Claude Code",  vendor: "Anthropic",    dot: "bg-amber-400",   modes: "OAuth · BYO key · gateway" },
+        { id: "codex-cli",   name: "Codex CLI",    vendor: "OpenAI",       dot: "bg-notion-teal", modes: "ChatGPT OAuth · BYO key · gateway" },
+        { id: "gemini-cli",  name: "Gemini CLI",   vendor: "Google",       dot: "bg-sky-400",     modes: "Google OAuth · BYO key · Vertex" },
+        { id: "opencode",    name: "OpenCode",     vendor: "SST",          dot: "bg-violet-400",  modes: "BYO key · local" },
+        { id: "aider",       name: "Aider",        vendor: "Open-source",  dot: "bg-rose-400",    modes: "BYO key · local" },
+      ].map((a) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-4 hover:border-notion-borderStrong transition">
+          <div class="flex items-center gap-2 mb-2">
+            <span class={`inline-block h-2 w-2 rounded-full ${a.dot}`}></span>
+            <div class="text-sm font-semibold text-notion-ink">{a.name}</div>
+          </div>
+          <div class="text-xs text-notion-faint mb-3">{a.vendor}</div>
+          <div class="text-[11px] text-notion-muted font-mono leading-snug">{a.modes}</div>
+        </div>
+      ))}
+    </div>
+
+    <!-- 3 bullet "what you get" cards underneath -->
+    <div class="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="rounded-xl border border-notion-border bg-notion-surface/40 p-5">
+        <div class="text-notion-teal text-xs font-mono mb-2">01 · one click</div>
+        <h3 class="text-base font-semibold text-notion-ink mb-1">{t("agents.card.install.title")}</h3>
+        <p class="text-sm text-notion-muted leading-relaxed" set:html={t("agents.card.install.body")}></p>
+      </div>
+      <div class="rounded-xl border border-notion-border bg-notion-surface/40 p-5">
+        <div class="text-notion-teal text-xs font-mono mb-2">02 · subscription-safe</div>
+        <h3 class="text-base font-semibold text-notion-ink mb-1">{t("agents.card.auth.title")}</h3>
+        <p class="text-sm text-notion-muted leading-relaxed" set:html={t("agents.card.auth.body")}></p>
+      </div>
+      <div class="rounded-xl border border-notion-border bg-notion-surface/40 p-5">
+        <div class="text-notion-teal text-xs font-mono mb-2">03 · signed catalog</div>
+        <h3 class="text-base font-semibold text-notion-ink mb-1">{t("agents.card.signed.title")}</h3>
+        <p class="text-sm text-notion-muted leading-relaxed" set:html={t("agents.card.signed.body")}></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== TAGLINE ============== -->
+<section class="py-20 border-t border-notion-border">
+  <div class="max-w-3xl mx-auto px-6 text-center">
+    <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink leading-tight">{t("tagline.title")}</h2>
+    <p class="mt-6 text-lg text-notion-muted leading-relaxed" set:html={t("tagline.body")}></p>
+  </div>
+</section>
+
+<!-- ============== DEMO ============== -->
+<section id="demo" class="py-20 border-t border-notion-border bg-notion-bg">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-notion-surface/80 border border-notion-border text-xs text-notion-muted">
+      <span class="w-1.5 h-1.5 rounded-full bg-notion-teal"></span>
+      <span>{t("demo.badge")}</span>
+    </div>
+    <div class="mt-8 grid lg:grid-cols-2 gap-10 lg:gap-12 items-start">
+      <div>
+        <h2 class="text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink leading-tight max-w-xl">
+          {t("demo.title")}
+        </h2>
+        <p class="mt-5 text-lg text-notion-muted leading-relaxed max-w-2xl">
+          {t("demo.subtitle")}
+        </p>
+        <div class="mt-8 grid gap-4">
+          {demoFlow.map((step) => (
+            <div class="bg-notion-surface/50 border border-notion-border rounded-xl p-5">
+              <div class="text-xs font-mono text-notion-green">{step.n}</div>
+              <div class="mt-2 font-semibold text-notion-ink">{t(step.title)}</div>
+              <p class="mt-2 text-sm text-notion-muted leading-relaxed">{t(step.body)}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div class="relative">
+        <div class="absolute -inset-4 bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-amber-500/10 blur-2xl rounded-2xl"></div>
+        <div class="relative rounded-xl overflow-hidden border border-notion-border bg-notion-bg shadow-2xl shadow-black/50">
+          <div class="flex items-center justify-between gap-3 px-4 py-2.5 bg-notion-surface/80 border-b border-notion-border">
+            <div class="text-xs font-mono text-notion-muted">outer agent → inner agent</div>
+            <div class="text-xs font-mono text-notion-faint">demo</div>
+          </div>
+          <div class="px-4 py-4 font-mono text-[12.5px] leading-relaxed bg-notion-bg space-y-1.5 min-h-[320px]">
+            <div class="text-notion-faint"><span class="text-notion-green">→</span> open /work/auth-service in a new tab and start a coding agent</div>
+            <div class="text-notion-ink"><span class="text-amber-400">unterm</span> session.create <span class="text-notion-faint">{`{ cwd: "/work/auth-service" }`}</span></div>
+            <div class="text-notion-faint">     → <span class="text-notion-green">{`{ session_id: "7", pid: 41208 }`}</span></div>
+            <div class="text-notion-ink"><span class="text-amber-400">unterm</span> exec.run <span class="text-notion-faint">{`{ id: "7", command: "claude" }`}</span></div>
+            <div class="text-notion-faint">     → <span class="text-notion-ink">inner agent ready</span></div>
+            <div class="text-notion-ink"><span class="text-amber-400">unterm</span> exec.run <span class="text-notion-faint">{`{ id: "7", command: "cargo test" }`}</span></div>
+            <div class="text-notion-faint">     <span class="text-notion-muted">running 142 tests</span></div>
+            <div class="text-notion-faint">     <span class="text-notion-green">test result: ok. 142 passed; 0 failed</span></div>
+            <div class="text-notion-ink"><span class="text-amber-400">unterm</span> screen.scrollback_text <span class="text-notion-faint">{`{ id: "7" }`}</span></div>
+            <div class="text-notion-faint">     → <span class="text-notion-ink">{`{ text: "…build is green, commit the fix", row_count: 142 }`}</span></div>
+            <div class="flex items-center gap-1 mt-2">
+              <span class="text-notion-green">$</span>
+              <span class="inline-block w-2 h-4 bg-notion-teal animate-pulse"></span>
+            </div>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 text-[11px] font-mono text-notion-muted bg-notion-surface/60 border-t border-notion-border px-3 py-1.5">
+            <span>zsh</span>
+            <span class="text-zinc-700">·</span>
+            <span class="text-notion-green">~/work/auth-service</span>
+            <span class="text-zinc-700">·</span>
+            <span>80×24</span>
+            <span class="text-zinc-700">·</span>
+            <span class="text-amber-300">mcp:4</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== PERSONAS ============== -->
+<!-- Three persona cards in a single grid. Each card mirrors the
+     "header + 50-80 word body + 4 bullets" shape SoloMD uses for its
+     Writers / Researchers / Developers section, adapted to our
+     audience: AI engineers, DevOps, OSS hackers. -->
+<section class="py-20 border-t border-notion-border bg-notion-bg">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("persona.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto">{t("persona.subtitle")}</p>
+    <div class="mt-12 grid md:grid-cols-3 gap-5">
+      {personas.map((p) => (
+        <div class="bg-notion-surface/40 border border-notion-border rounded-xl p-6 flex flex-col">
+          <div class="text-3xl">{p.icon}</div>
+          <div class="mt-3 text-lg font-semibold text-notion-ink">{t(p.title)}</div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed" set:html={t(p.body)}></p>
+          <ul class="mt-4 space-y-1.5 text-sm text-notion-ink">
+            {p.bullets.map((b) => (
+              <li class="flex items-start gap-2">
+                <span class="mt-1 w-1 h-1 rounded-full bg-notion-teal shrink-0"></span>
+                <span>{t(b)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== FEATURES ============== -->
+<section id="features" class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("features.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto">{t("features.subtitle")}</p>
+    <div class="mt-12 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {features.map((f) => (
+        <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5">
+          <div class="text-2xl">{f.icon}</div>
+          <div class="mt-3 font-semibold">{t(f.title)}</div>
+          <p class="mt-2 text-sm text-notion-muted" set:html={t(f.body)}></p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== COMPLETE CAPABILITY MAP ============== -->
+<!-- The full control surface, grouped by family. The thin Features grid
+     above names the four surfaces; this section enumerates what those
+     surfaces actually expose: 151 MCP methods across 30 namespaces + 37
+     CLI commands. Each card is one namespace/feature family with its
+     method count chip and representative call names (never translated). -->
+<section id="capabilities" class="py-20 border-t border-notion-border bg-gradient-to-b from-notion-bg via-notion-bg/10 to-notion-bg">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="text-center max-w-2xl mx-auto">
+      <h2 class="text-3xl font-semibold tracking-tight text-notion-ink">{t("cap.title")}</h2>
+      <p class="mt-3 text-notion-muted">{t("cap.subtitle")}</p>
+    </div>
+
+    <!-- Headline stat strip — the numbers a skeptic can verify with
+         `unterm-cli reference` or one `meta.surface` MCP call. -->
+    <div class="mt-10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      {capStats.map((s) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/40 px-4 py-5 text-center">
+          <div class="text-3xl font-bold text-notion-teal tabular-nums">{s.n}</div>
+          <div class="mt-1 text-xs text-notion-faint uppercase tracking-wider">{t(s.label)}</div>
+        </div>
+      ))}
+    </div>
+
+    <div class="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {capabilities.map((c) => (
+        <div class={"rounded-xl border border-notion-border bg-notion-surface/40 p-5 hover:border-notion-borderStrong transition flex flex-col" + (c.wide ? " sm:col-span-2 lg:col-span-3" : "")}>
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xl">{c.icon}</span>
+              <span class="font-semibold text-notion-ink">{t(c.title)}</span>
+            </div>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60 whitespace-nowrap">{c.meta}</span>
+          </div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed flex-1" set:html={t(c.body)}></p>
+          <div class="mt-3 text-[11px] font-mono text-notion-faint leading-relaxed border-t border-notion-border/60 pt-2">{c.items}</div>
+        </div>
+      ))}
+    </div>
+
+    <p class="mt-6 text-center text-sm text-notion-faint" set:html={t("cap.surfaces.note")}></p>
+  </div>
+</section>
+
+<!-- ============== WHERE UNTERM STANDS OUT ============== -->
+<!-- Three biggest differentiators with version chips. Sits between the
+     Features grid and What's-new so a skim-reader hits the strongest
+     claims before the long version-history band. Mirrors SoloMD's
+     "Where SoloMD stands out" trio. -->
+<section class="py-20 border-t border-notion-border bg-notion-bg">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("stand.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto">{t("stand.subtitle")}</p>
+    <div class="mt-12 grid md:grid-cols-3 gap-4">
+      {standouts.map((s) => (
+        <div class="bg-notion-surface/40 border border-notion-border rounded-xl p-6 flex flex-col">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">{s.icon}</span>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60">{s.v}</span>
+          </div>
+          <div class="mt-3 text-lg font-semibold text-notion-ink">{t(s.title)}</div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed" set:html={t(s.body)}></p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== QUALITY-OF-LIFE TOUCHES ============== -->
+<!-- 4-column grid of minor delights. Same pattern SoloMD uses to surface
+     features that don't headline but make daily use nicer. -->
+<section class="py-20 border-t border-notion-border">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-notion-surface/80 border border-notion-border text-[11px] uppercase tracking-wider text-notion-faint font-mono mb-6">{t("qol.badge")}</div>
+    <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("qol.title")}</h2>
+    <p class="mt-2 text-notion-muted max-w-2xl">{t("qol.subtitle")}</p>
+    <div class="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {qol.map((q) => (
+        <div class="bg-notion-surface/40 border border-notion-border rounded-lg p-4">
+          <div class="text-xl">{q.icon}</div>
+          <div class="mt-2 text-sm font-semibold text-notion-ink">{t(q.title)}</div>
+          <p class="mt-1 text-xs text-notion-muted leading-relaxed" set:html={t(q.body)}></p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== MOUSE FLOW (right-click copy/paste) ============== -->
+<section id="mouse" class="py-20 border-t border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <div class="flex items-center justify-center gap-2">
+      <span class="text-xs font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60">v0.71.6</span>
+      <span class="text-xs text-notion-faint font-mono uppercase tracking-widest">{t("mouse.kicker")}</span>
+    </div>
+    <h2 class="mt-3 text-3xl font-semibold tracking-tight text-center">{t("mouse.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-3xl mx-auto" set:html={t("mouse.subtitle")}></p>
+    <div class="mt-12 grid md:grid-cols-3 gap-4">
+      {mouseFlow.map((m) => (
+        <div class="bg-notion-surface/40 border border-notion-border rounded-xl p-6">
+          <div class="text-2xl">{m.icon}</div>
+          <div class="mt-3 font-semibold text-notion-ink">{t(m.title)}</div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed" set:html={t(m.body)}></p>
+        </div>
+      ))}
+    </div>
+    <p class="mt-6 text-center text-sm text-notion-faint" set:html={t("mouse.note")}></p>
+  </div>
+</section>
+
+<!-- ============== AGENT COCKPIT (v0.55 headline) ============== -->
+<section id="cockpit" class="py-20 border-t border-notion-border bg-gradient-to-b from-notion-bg via-notion-bg to-notion-bg/20">
+  <div class="max-w-5xl mx-auto px-6">
+    <div class="flex items-center justify-center gap-2">
+      <span class="text-xs font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60">since v0.55</span>
+      <span class="text-xs text-notion-faint font-mono uppercase tracking-widest">{t("cockpit.kicker")}</span>
+    </div>
+    <h2 class="mt-3 text-3xl font-semibold tracking-tight text-center">{t("cockpit.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-3xl mx-auto">{t("cockpit.subtitle")}</p>
+    <img src="/assets/shots/inbox-macos.webp" srcset="/assets/shots/inbox-macos-1000.webp 1000w, /assets/shots/inbox-macos.webp 2000w"
+         sizes="(min-width: 1024px) 976px, 100vw" width="2000" height="1360" loading="lazy"
+         alt={t("home.cockpit.alt.inbox")}
+         class="mt-10 w-full h-auto rounded-xl ring-1 ring-white/10 shadow-2xl" />
+    <div class="mt-12 grid md:grid-cols-2 gap-4">
+      {cockpit.map((c) => (
+        <div class={"bg-notion-surface/40 border border-notion-border rounded-xl p-6" + (c.wide ? " md:col-span-2" : "")}>
+          <div class="flex items-center gap-2">
+            <span class="text-lg">{c.icon}</span>
+            <span class="font-semibold">{t(c.title)}</span>
+          </div>
+          <p class="mt-3 text-sm text-notion-muted leading-relaxed" set:html={t(c.body)}></p>
+        </div>
+      ))}
+    </div>
+    <p class="mt-6 text-center text-sm">
+      <a href="/docs/agent-cockpit" class="text-notion-teal hover:underline">{t("cockpit.docs_link")} →</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============== WHAT'S NEW ============== -->
+<!-- Mirrors SoloMD's "v3.0 sync, encryption, search" highlight band.
+     Anchors recent shipping work to specific tagged releases so the
+     page reads as actively maintained, not a static brochure. The
+     version chip on each card is the tag the change first shipped in. -->
+<section class="py-20 border-t border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("whatsnew.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto">{t("whatsnew.subtitle")}</p>
+    <div class="mt-12 grid md:grid-cols-2 gap-4">
+      {whatsnew.map((w) => (
+        <div class="bg-notion-surface/40 border border-notion-border rounded-xl p-6">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-notion-bg/60 text-notion-teal border border-amber-900/60">{w.v}</span>
+            <span class="font-semibold">{t(w.title)}</span>
+          </div>
+          <p class="mt-3 text-sm text-notion-muted leading-relaxed" set:html={t(w.body)}></p>
+        </div>
+      ))}
+    </div>
+    <p class="mt-6 text-center text-xs text-notion-faint">
+      <a href="https://github.com/zhitongblog/unterm/releases" target="_blank" rel="noopener" class="hover:text-notion-ink">View all releases on GitHub →</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============== PRINCIPLES ============== -->
+<section id="principles" class="py-20 border-t border-notion-border bg-notion-bg">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("principles.title")}</h2>
+    <div class="mt-12 grid md:grid-cols-2 gap-4">
+      {principles.map((p) => (
+        <div class={"bg-notion-surface/40 border border-notion-border rounded-xl p-6" + (p.wide ? " md:col-span-2" : "")}>
+          <div class="text-notion-green font-mono text-xs">{p.n}</div>
+          <div class="mt-2 font-semibold">{t(p.title)}</div>
+          <p class="mt-2 text-sm text-notion-muted">{t(p.body)}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== MANIFESTO: why drivable beats embedded ============== -->
+<section id="why" class="py-20 border-t border-notion-border bg-notion-bg">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-3xl md:text-4xl font-semibold tracking-tight text-center leading-tight" set:html={t("why.title")} />
+    <p class="mt-4 text-center text-notion-muted max-w-2xl mx-auto">{t("why.subtitle")}</p>
+    <div class="mt-12 grid md:grid-cols-3 gap-4">
+      {["lifespan", "agents", "surface"].map((k) => (
+        <div class="bg-notion-surface/40 border border-notion-border rounded-xl p-6">
+          <div class="font-semibold">{t(`why.${k}.title`)}</div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed">{t(`why.${k}.body`)}</p>
+        </div>
+      ))}
+    </div>
+    <div class="mt-8 grid md:grid-cols-2 gap-4">
+      <div class="border border-notion-border rounded-xl p-6 bg-notion-surface/20">
+        <div class="font-semibold text-notion-faint">{t("why.warp.title")}</div>
+        <ul class="mt-3 space-y-2 text-sm text-notion-muted list-disc list-inside">
+          <li>{t("why.warp.b1")}</li>
+          <li>{t("why.warp.b2")}</li>
+          <li>{t("why.warp.b3")}</li>
+        </ul>
+      </div>
+      <div class="border border-notion-green/40 rounded-xl p-6 bg-notion-surface/40">
+        <div class="font-semibold text-notion-green">{t("why.unterm.title")}</div>
+        <ul class="mt-3 space-y-2 text-sm text-notion-ink list-disc list-inside">
+          <li>{t("why.unterm.b1")}</li>
+          <li>{t("why.unterm.b2")}</li>
+          <li>{t("why.unterm.b3")}</li>
+        </ul>
+      </div>
+    </div>
+    <p class="mt-10 text-center text-notion-muted italic max-w-2xl mx-auto">{t("why.closing")}</p>
+  </div>
+</section>
+
+<!-- ============== COMPARISON ============== -->
+<section id="compare" class="py-20 border-t border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("cmp.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto">{t("cmp.subtitle")}</p>
+    <div class="mt-10 overflow-x-auto rounded-xl border border-notion-border">
+      <table class="w-full text-sm">
+        <thead class="bg-notion-surface/80 text-notion-muted">
+          <tr>
+            <th class="text-left px-4 pt-3 pb-1 font-medium align-bottom" rowspan="2">{t("cmp.h.feature")}</th>
+            <th class="px-3 pt-3 pb-0.5 font-semibold text-notion-green border-l border-notion-border">Unterm</th>
+            <th class="px-3 pt-3 pb-0.5 font-medium border-l border-notion-border">Terminal.app</th>
+            <th class="px-3 pt-3 pb-0.5 font-medium border-l border-notion-border">Warp</th>
+            <th class="px-3 pt-3 pb-0.5 font-medium border-l border-notion-border">iTerm2</th>
+            <th class="px-3 pt-3 pb-0.5 font-medium border-l border-notion-border">Ghostty</th>
+          </tr>
+          <tr class="text-[10px] uppercase tracking-wider">
+            <th class="px-3 pb-2 font-mono text-notion-green/80 border-l border-notion-border">{t("cmp.cat.agentfirst")}</th>
+            <th class="px-3 pb-2 font-mono text-notion-faint border-l border-notion-border">{t("cmp.cat.native")}</th>
+            <th class="px-3 pb-2 font-mono text-amber-500/70 border-l border-notion-border">{t("cmp.cat.paid")}</th>
+            <th class="px-3 pb-2 font-mono text-notion-faint border-l border-notion-border">{t("cmp.cat.free")}</th>
+            <th class="px-3 pb-2 font-mono text-notion-faint border-l border-notion-border">{t("cmp.cat.free")}</th>
+          </tr>
+        </thead>
+        <tbody class="text-notion-ink">
+          {cmpRows.map((r) => (
+            <tr class="border-t border-notion-border">
+              <td class="px-4 py-3">{t(r.row)}</td>
+              <td class="text-center text-notion-green font-medium border-l border-notion-border/60 bg-notion-bg/10">{t(r.unterm)}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{r.native}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{t(r.warp)}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{r.iterm}</td>
+              <td class="text-center text-notion-muted border-l border-notion-border/60">{r.ghostty}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-4 text-xs text-notion-faint text-center" set:html={t("cmp.legend")}></p>
+    <p class="mt-2 text-xs text-notion-faint text-center">{t("cmp.note")}</p>
+    <div class="mt-8 text-center">
+      <p class="text-sm text-notion-muted">{t("cmp.fullcompare")}</p>
+      <div class="mt-3 flex flex-wrap justify-center gap-2">
+        {COMPETITORS.map((c) => (
+          <a href={pathPrefix + "/compare/" + c.slug}
+             class="text-sm px-3 py-1.5 rounded-lg border border-notion-border text-notion-ink hover:border-notion-borderStrong hover:text-notion-teal transition">
+            Unterm vs {c.name}
+          </a>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== FAQ ============== -->
+<section id="faq" class="py-20 border-t border-notion-border">
+  <div class="max-w-3xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("faq.title")}</h2>
+    <div class="mt-10 divide-y divide-zinc-800 border border-notion-border rounded-xl bg-notion-surface/40">
+      {faq.map((q) => (
+        <details class="group">
+          <summary class="cursor-pointer flex items-center justify-between px-5 py-4 hover:bg-notion-surface select-none">
+            <span class="font-medium pr-4">{t(q.q)}</span>
+            <svg class="w-4 h-4 shrink-0 text-notion-faint group-open:rotate-180 transition" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </summary>
+          <p class="px-5 pb-5 text-sm text-notion-muted leading-relaxed" set:html={t(q.a)}></p>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== SPONSOR ============== -->
+<!-- One developer, one project. Sponsor card cluster mirrors SoloMD's
+     "Support" band — two named channels (GitHub Sponsors for monthly
+     international, PayPal for one-tap worldwide) inline. Heavier "scan
+     a QR code" payment paths (Alipay / WeChat Pay) intentionally not
+     embedded — those are reserved for SoloMD (a higher-volume product)
+     and would dilute the page for terminal-first audience here. -->
+<section id="sponsor" class="py-20 border-t border-notion-border">
+  <div class="max-w-4xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("sponsor.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto" set:html={t("sponsor.subtitle")}></p>
+    <div class="mt-10 grid md:grid-cols-2 gap-4">
+      {sponsors.map((s) => (
+        <a href={s.href} target="_blank" rel="noopener"
+           class="group block bg-notion-surface/40 hover:bg-notion-surface border border-notion-border hover:border-notion-borderStrong rounded-xl p-6 transition">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl text-rose-400">{s.icon}</span>
+            <span class="text-lg font-semibold text-notion-ink">{t(s.title)}</span>
+          </div>
+          <p class="mt-2 text-sm text-notion-muted leading-relaxed">{t(s.body)}</p>
+          <div class="mt-3 text-xs text-notion-green group-hover:text-notion-teal font-mono">{t(s.cta)} →</div>
+        </a>
+      ))}
+    </div>
+    <p class="mt-6 text-center text-xs text-notion-faint" set:html={t("sponsor.note")}></p>
+  </div>
+</section>
+
+<!-- ============== COMMUNITY ============== -->
+<!-- Three contact channels in one row. SoloMD ends its long page with
+     a similar "Support / contact" cluster; we adapt it as routing
+     guidance: which channel for which type of question. The email is
+     spelled out in the dict so user keeps it scrapeable but the
+     surrounding copy frames it as last-resort. -->
+<section id="community" class="py-20 border-t border-notion-border bg-notion-bg">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-3xl font-semibold tracking-tight text-center">{t("community.title")}</h2>
+    <p class="mt-3 text-center text-notion-muted max-w-2xl mx-auto">{t("community.subtitle")}</p>
+    <div class="mt-12 grid md:grid-cols-3 gap-4">
+      <a href="https://github.com/zhitongblog/unterm/issues" target="_blank" rel="noopener"
+         class="group block bg-notion-surface/40 hover:bg-notion-surface border border-notion-border hover:border-notion-borderStrong rounded-xl p-6 transition">
+        <div class="text-xl font-semibold">{t("community.github.title")}</div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">{t("community.github.body")}</p>
+        <div class="mt-3 text-xs text-notion-green group-hover:text-notion-teal font-mono">{t("community.github.cta")} →</div>
+      </a>
+      <a href="https://github.com/zhitongblog/unterm/discussions" target="_blank" rel="noopener"
+         class="group block bg-notion-surface/40 hover:bg-notion-surface border border-notion-border hover:border-notion-borderStrong rounded-xl p-6 transition">
+        <div class="text-xl font-semibold">{t("community.discussions.title")}</div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">{t("community.discussions.body")}</p>
+        <div class="mt-3 text-xs text-notion-green group-hover:text-notion-teal font-mono">{t("community.discussions.cta")} →</div>
+      </a>
+      <a href={`mailto:${t("community.email.cta")}`}
+         class="group block bg-notion-surface/40 hover:bg-notion-surface border border-notion-border hover:border-notion-borderStrong rounded-xl p-6 transition">
+        <div class="text-xl font-semibold">{t("community.email.title")}</div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">{t("community.email.body")}</p>
+        <div class="mt-3 text-xs text-notion-green group-hover:text-notion-teal font-mono">{t("community.email.cta")} →</div>
+      </a>
+    </div>
+  </div>
+</section>
+

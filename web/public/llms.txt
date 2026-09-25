@@ -5,7 +5,7 @@
 ## What it does
 
 - **Four control surfaces, one engine.** Every window starts a local MCP server (line-delimited JSON-RPC over TCP, bound to 127.0.0.1, auth-token gated), an HTTP Web Settings server, a CLI (`unterm-cli`), and the GUI — all read/write the same JSON state.
-- **103 authenticated MCP methods plus `auth.login`** and the product CLI families. An agent calls `meta.surface` (or runs `unterm-cli reference`) once to receive the entire API live: every method with param schemas, every CLI subcommand, and every currently-bound keybinding.
+- **151 MCP methods plus `auth.login`** and the product CLI families. An agent calls `meta.surface` (or runs `unterm-cli reference`) once to receive the entire API live: every method with param schemas, every CLI subcommand, and every currently-bound keybinding.
 - **Agent Cockpit (v0.55).** Live per-pane agent state (working / needs-you / done / idle) for Claude Code, Codex CLI, Gemini CLI, Aider and others — zero-config via title/OSC parsing and process detection, exact via official lifecycle hooks that `unterm-cli agent enable-hooks` wires up. Tab-badge dots, a cross-window tally chip, and an Agent Inbox (`Ctrl+Shift+A`) sorted waiting-first with jump-to-pane.
 - **Fleet.** One task × N agents × N isolated git worktrees (`unterm-cli fleet launch --agents claude,claude,codex -- <task>`): each member gets its own worktree, branch, tab, and state badge. Crew presets include `claude+codex+gemini` for cross-model comparison of the same task.
 - **Review.** The moment an agent starts working in a repo, Unterm takes a non-invasive checkpoint (dangling commit; HEAD/index/files untouched). The Review page shows line-level diffs including agent-created untracked files, squash-merges a chosen take into the repo as staged changes (the commit stays with the user), discards rejects, rolls back to any checkpoint, and compares two members side by side.
@@ -25,6 +25,8 @@
 
 ## Docs
 
+- [Advanced guide](https://unterm.app/guide): tested recipes — the agent inbox from scripts, fleets across git worktrees (launch, diff, verify, merge), scripting panes, recordings, workspaces, per-project identities, raw MCP over TCP, the Windows administrator window.
+- [All features](https://unterm.app/features): every surface and capability.
 - [Agent Cockpit](https://unterm.app/docs/agent-cockpit): live agent state, the Inbox, fleets in isolated worktrees, checkpoints and review.
 - [MCP reference](https://unterm.app/docs/mcp-reference): every MCP method, namespace, and param schema.
 - [CLI reference](https://unterm.app/docs/cli-reference): the `unterm-cli` command surface.

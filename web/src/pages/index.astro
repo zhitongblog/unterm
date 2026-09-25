@@ -1,6 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
-import Page from "../components/Page.astro";
+import Home from "../components/Home.astro";
 import dict from "../i18n/en-US.json";
 import { LOCALES, alternates } from "../i18n/locales";
 import { fetchStats } from "../lib/stats";
@@ -8,12 +8,6 @@ import { fetchStats } from "../lib/stats";
 const stats = await fetchStats();
 ---
 
-<Base
-  lang="en-US"
-  dict={dict}
-  alternates={alternates()}
-  locales={LOCALES}
-  pathPrefix=""
->
-  <Page dict={dict} pathPrefix="" stats={stats} />
+<Base lang="en-US" dict={dict} alternates={alternates()} locales={LOCALES} pathPrefix="">
+  <Home dict={dict} pathPrefix="" stats={stats} />
 </Base>
