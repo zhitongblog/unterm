@@ -210,6 +210,24 @@ if ($micaHwnd -eq [IntPtr]::Zero) {
     [U]::SetForegroundWindow($micaHwnd) | Out-Null
     Start-Sleep 2
     Shot "06-mica-requested"
+    # And after a maximise: a style the window drops for Mica must stay dropped.
+    $mr = New-Object U+RECT
+    [U]::GetWindowRect($micaHwnd, [ref]$mr) | Out-Null
+    $mcodes = HitRow $micaHwnd ($mr.T + 12) ($mr.R - 220) ($mr.R - 1)
+    $mmax = @(for ($i = 0; $i -lt $mcodes.Count; $i++) { if ($mcodes[$i] -eq 9) { $mr.R - 220 + $i } })
+    if ($mmax.Count -ge 20) {
+        [U]::SetCursorPos([int](($mmax[0] + $mmax[-1]) / 2), $mr.T + 12) | Out-Null
+        Start-Sleep -Milliseconds 400
+        [U]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 120
+        [U]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep 2
+        [U]::SetCursorPos(400, 400) | Out-Null
+        Start-Sleep 1
+        Shot "07-mica-maximised"
+    } else {
+        $failures.Add("with Mica the maximise button does not answer HTMAXBUTTON")
+    }
     $mica.Refresh()
     "with backdrop = mica: exited=$($mica.HasExited)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
     "windows build: $([Environment]::OSVersion.Version)" | Tee-Object -Append (Join-Path $OutDir "report.txt")
