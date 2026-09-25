@@ -388,7 +388,7 @@ fn label_for(tab: &TabInfo) -> String {
     }
     // A shell sitting at its prompt is known by where it is. Three rows all
     // reading "zsh" said nothing at all.
-    if is_a_shell_name(&tab.title) {
+    if is_a_shell_name(&tab.title) || is_prompt_title(&tab.title) {
         if let Some(cwd) = tab.cwd.as_deref() {
             let name = if is_home(cwd) { "~".to_string() } else { leaf(cwd) };
             if !name.is_empty() {
@@ -442,6 +442,24 @@ fn subtitle_for(tab: &TabInfo, grouped: bool) -> Option<String> {
 }
 
 /// Whether a tab title is only a shell's name.
+/// `user@host: ~/code/api` -- the title bash and zsh set at their prompt on
+/// most Linux systems. It says where the shell is, not what it is doing.
+pub fn is_prompt_title(title: &str) -> bool {
+    let Some((who, _)) = title.trim().split_once(':') else {
+        return false;
+    };
+    let Some((user, host)) = who.split_once('@') else {
+        return false;
+    };
+    let word = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    word(user) && word(host)
+}
+
 fn is_a_shell_name(title: &str) -> bool {
     let stem = title
         .trim()
@@ -477,6 +495,7 @@ pub fn task_from_title(title: &str, agent: Option<&str>, program: &str) -> Optio
         || is_name(program)
         || lower == "claude code"
         || is_a_shell_name(trimmed)
+        || is_prompt_title(title)
         || looks_like_a_path(title.trim())
     {
         return None;
@@ -1103,6 +1122,10 @@ mod tests {
         assert_eq!(task_from_title("~/code/api", None, "zsh"), None);
         assert_eq!(task_from_title("C:\\Program Files\\Git\\bin\\bash.exe", None, "bash"), None);
         assert_eq!(task_from_title("src/app.rs", None, "vim"), None);
+        assert_eq!(task_from_title("runner@ci-box: ~/code/api", None, "bash"), None);
+        assert_eq!(task_from_title("me@laptop:~", None, "zsh"), None);
+        assert!(!is_prompt_title("Fix login: handle expired tokens"));
+        assert!(!is_prompt_title("email a@b.c: done"));
         assert_eq!(
             task_from_title("\u{2834} Add rate limiting to /v1/charge", Some("claude"), "claude"),
             Some("Add rate limiting to /v1/charge".to_string())

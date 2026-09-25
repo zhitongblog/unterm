@@ -119,7 +119,26 @@ mod imp {
             if !set_u32(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TABBEDWINDOW) {
                 return false;
             }
-            winapi::um::dwmapi::DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0
+            if winapi::um::dwmapi::DwmExtendFrameIntoClientArea(hwnd, &margins) < 0 {
+                return false;
+            }
+            // With the frame extended over the client area, DWM draws its own
+            // caption, icon and minimise/maximise/close into it -- behind the
+            // bar we leave transparent for the backdrop, so every button showed
+            // twice. Ask it to draw none of them; the window keeps the styles
+            // that give it Snap, maximise and the system menu's keys.
+            let mut options = winapi::um::uxtheme::WTA_OPTIONS {
+                dwFlags: winapi::um::uxtheme::WTNCA_NODRAWCAPTION
+                    | winapi::um::uxtheme::WTNCA_NODRAWICON
+                    | winapi::um::uxtheme::WTNCA_NOSYSMENU,
+                dwMask: winapi::um::uxtheme::WTNCA_VALIDBITS,
+            };
+            winapi::um::uxtheme::SetWindowThemeAttribute(
+                hwnd,
+                winapi::um::uxtheme::WTA_NONCLIENT,
+                &mut options as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<winapi::um::uxtheme::WTA_OPTIONS>() as u32,
+            ) >= 0
         }
     }
 

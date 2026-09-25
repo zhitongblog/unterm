@@ -10034,6 +10034,7 @@ impl App {
         let program = if rendered.trim().is_empty()
             || crate::sidebar::same_program(rendered.trim(), &process_path)
             || is_a_shell(rendered.trim())
+            || crate::sidebar::is_prompt_title(&pane_title)
         {
             None
         } else {
