@@ -415,6 +415,9 @@ fn finish_startup(
     #[cfg(target_os = "macos")]
     macos_open::keep_finder_extension_enabled();
     mcp_host::install_waker(event_loop.create_proxy());
+    // `unterm-cli quit` reaches every window this way, the administrator
+    // window and one parked in the tray included.
+    unterm_services::process_lifetime::listen_for_quit(engine_backend::request_external_quit);
     let mut app = window::App::new(config)?;
     startup_trace::mark("app.created");
     // A plain launch reopens where the last one closed; naming a directory

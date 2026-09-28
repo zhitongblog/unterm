@@ -238,6 +238,16 @@ pub fn install_waker(proxy: winit::event_loop::EventLoopProxy<()>) {
     let _ = WAKER.set(std::sync::Mutex::new(proxy));
 }
 
+/// Wake the event loop from any thread, so it runs `about_to_wait` and reads
+/// whatever request was left for it. A no-op before the loop exists.
+pub fn wake_loop() {
+    if let Some(waker) = WAKER.get() {
+        if let Ok(waker) = waker.lock() {
+            let _ = waker.send_event(());
+        }
+    }
+}
+
 /// On the loop's thread: pass on a repaint another thread asked for.
 pub fn deliver_repaint() {
     if REPAINT.swap(false, std::sync::atomic::Ordering::AcqRel) {
