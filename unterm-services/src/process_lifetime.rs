@@ -15,7 +15,7 @@
 //!   -- to quit the ordinary way.
 //!
 //! Off Windows the job is a no-op, the watch falls back to `kill(pid, 0)`,
-//! and quitting is asked with SIGTERM.
+//! and quitting is asked with SIGTERM, which a window hears the same way.
 
 /// Which Unterm executable a process is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -59,9 +59,84 @@ pub fn executable_path(pid: u32) -> Option<std::path::PathBuf> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn executable_path(pid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    // There is no /proc here; `--this-install` compared every process's
+    // directory against `None` and so matched nothing at all.
+    let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let len = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            buffer.as_mut_ptr() as *mut libc::c_void,
+            buffer.len() as u32,
+        )
+    };
+    if len <= 0 {
+        return None;
+    }
+    buffer.truncate(len as usize);
+    Some(std::ffi::OsString::from_vec(buffer).into())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn executable_path(pid: u32) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+/// The process that started `pid`, as the system records it now.
+#[cfg(windows)]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    process_edges()
+        .into_iter()
+        .find(|&(_, child)| child == pid)
+        .map(|(parent, _)| parent)
+}
+
+#[cfg(target_os = "macos")]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
+    (got == size).then_some(info.pbi_ppid)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `pid (comm) state ppid ...`, where comm may itself hold spaces and
+    // parentheses: the fields resume after the last `)`.
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+/// This process's ancestors, parent first, up to the root.
+///
+/// `unterm-cli quit` typed into an Unterm tab runs below the very Core it is
+/// about to stop; this is how it finds out.
+pub fn current_ancestors() -> Vec<u32> {
+    let mut found = Vec::new();
+    let mut pid = std::process::id();
+    while let Some(parent) = parent_pid(pid) {
+        if parent == 0 || parent == pid || found.contains(&parent) || found.len() > 256 {
+            break;
+        }
+        found.push(parent);
+        pid = parent;
+    }
+    found
 }
 
 /// Classify an executable file name. Case-insensitive, with or without the
@@ -367,11 +442,69 @@ pub fn listen_for_quit(on_quit: impl FnOnce() + Send + 'static) -> bool {
         .is_ok()
 }
 
-#[cfg(not(windows))]
-pub fn listen_for_quit(_on_quit: impl FnOnce() + Send + 'static) -> bool {
-    // SIGTERM is the request off Windows; the default action already ends
-    // the process.
-    false
+/// Off Windows the request is SIGTERM. Its default action ended a window on
+/// the spot: no session saved for the next launch, and no word to the Core,
+/// which then sat waiting on its orphan watchdog. The handler only writes a
+/// byte to a pipe -- about all a signal handler may do -- and a thread
+/// waiting on the other end runs `on_quit` like any other request.
+#[cfg(unix)]
+pub fn listen_for_quit(on_quit: impl FnOnce() + Send + 'static) -> bool {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    static WRITE_END: AtomicI32 = AtomicI32::new(-1);
+
+    extern "C" fn on_sigterm(_: libc::c_int) {
+        let fd = WRITE_END.load(Ordering::Relaxed);
+        if fd >= 0 {
+            let byte = 1u8;
+            unsafe {
+                libc::write(fd, &byte as *const u8 as *const libc::c_void, 1);
+            }
+        }
+    }
+
+    let mut fds = [0 as libc::c_int; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        log::warn!(
+            "could not set up the quit listener: {}",
+            std::io::Error::last_os_error()
+        );
+        return false;
+    }
+    let [read_end, write_end] = fds;
+    unsafe {
+        for fd in fds {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        // A second SIGTERM while the first is being handled must not block
+        // the handler on a full pipe.
+        let flags = libc::fcntl(write_end, libc::F_GETFL);
+        libc::fcntl(write_end, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
+    WRITE_END.store(write_end, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new()
+        .name("quit-listener".into())
+        .spawn(move || {
+            let mut byte = 0u8;
+            loop {
+                let read =
+                    unsafe { libc::read(read_end, &mut byte as *mut u8 as *mut libc::c_void, 1) };
+                if read == 1 {
+                    on_quit();
+                    return;
+                }
+                if read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return;
+            }
+        })
+        .is_ok();
+    if spawned {
+        unsafe {
+            libc::signal(libc::SIGTERM, on_sigterm as *const () as libc::sighandler_t);
+        }
+    }
+    spawned
 }
 
 #[cfg(windows)]
@@ -539,8 +672,9 @@ pub fn terminate(pid: u32) -> bool {
 /// process itself. For a Core too old to hold a session job: terminating it
 /// alone would orphan its conpty hosts and shells, which is the very thing
 /// being cleaned up. Returns whether the root was terminated.
+/// Every (parent, child) pair in the system process table.
 #[cfg(windows)]
-pub fn terminate_tree(pid: u32) -> bool {
+fn process_edges() -> Vec<(u32, u32)> {
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
     use winapi::um::tlhelp32::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -560,9 +694,18 @@ pub fn terminate_tree(pid: u32) -> bool {
             CloseHandle(snapshot);
         }
     }
-    let descendants = descendants_of(pid, &edges);
+    edges
+}
+
+/// The caller is spared: `unterm-cli quit` run from an Unterm tab is itself
+/// below the Core it terminates, and killing itself first left everything
+/// after it in the list running.
+#[cfg(windows)]
+pub fn terminate_tree(pid: u32) -> bool {
+    let own = std::process::id();
+    let descendants = descendants_of(pid, &process_edges());
     let root = terminate(pid);
-    for child in descendants {
+    for child in descendants.into_iter().filter(|&child| child != own) {
         terminate(child);
     }
     root
@@ -646,15 +789,23 @@ pub fn running_unterm_processes() -> Vec<UntermProcess> {
 
 /// Off Windows: the windows the instance registry knows about. The Core is
 /// found through its discovery record by the caller.
+///
+/// A record outlives a window that crashed, and its pid can by now belong to
+/// anything; asking that to quit is sending SIGTERM to a stranger. So a pid is
+/// taken only while the executable behind it is still an Unterm window.
 #[cfg(not(windows))]
 pub fn running_unterm_processes() -> Vec<UntermProcess> {
     crate::server_info::list_live_instances()
         .into_iter()
         .filter(|instance| instance.pid != std::process::id())
-        .map(|instance| UntermProcess {
-            pid: instance.pid,
-            kind: UntermProcessKind::Gui,
-            path: executable_path(instance.pid),
+        .filter_map(|instance| {
+            let path = executable_path(instance.pid)?;
+            let kind = classify_executable(&path.file_name()?.to_string_lossy())?;
+            (kind == UntermProcessKind::Gui).then(|| UntermProcess {
+                pid: instance.pid,
+                kind,
+                path: Some(path),
+            })
         })
         .collect()
 }
@@ -713,6 +864,24 @@ mod tests {
         child.wait().unwrap();
         // It may have exited before we opened it; either way it is not alive.
         assert!(watch.map(|watch| !watch.is_alive()).unwrap_or(true));
+    }
+
+    #[test]
+    fn a_process_knows_its_own_executable_and_parent() {
+        let own = executable_path(std::process::id()).expect("own executable");
+        assert_eq!(own.canonicalize().ok(), std::env::current_exe().unwrap().canonicalize().ok());
+        let ancestors = current_ancestors();
+        assert!(!ancestors.is_empty(), "a test process has a parent");
+        assert!(!ancestors.contains(&std::process::id()));
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("cmd").args(["/C", "ping -n 3 127.0.0.1 >NUL"]).spawn()
+        } else {
+            std::process::Command::new("sleep").arg("2").spawn()
+        }
+        .expect("spawn a child");
+        assert_eq!(parent_pid(child.id()), Some(std::process::id()));
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[cfg(windows)]

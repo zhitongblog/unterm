@@ -17,6 +17,11 @@
 //!    job would otherwise leave its shells behind).
 //!
 //! Exits non-zero if anything it targeted is still running at the end.
+//!
+//! Typed into an Unterm tab, the command runs below the Core it stops: the
+//! tab closes under it halfway, and on Windows the Core's job would take it
+//! along. So in that case the work is handed to a detached copy of itself,
+//! whose report this one prints if it is still there to print it.
 
 use anyhow::Result;
 use clap::Args;
@@ -103,9 +108,85 @@ struct Report {
     terminated: Vec<u32>,
 }
 
+/// Set on the detached copy: where to write its report.
+const HANDOFF_ENV: &str = "UNTERM_QUIT_HANDOFF";
+
+/// Longest `--wait` honoured. A larger number means "as long as it takes",
+/// and `Instant + Duration` panics on overflow rather than saturating.
+const LONGEST_WAIT_SECS: u64 = 24 * 60 * 60;
+
+/// Whether this process sits below one of `pids` -- in a tab of that window,
+/// or a session of that Core.
+fn runs_inside(pids: &[u32]) -> bool {
+    let ancestors = process_lifetime::current_ancestors();
+    pids.iter().any(|pid| ancestors.contains(pid))
+}
+
+/// Run the same command again, detached from this terminal and (on Windows)
+/// out of the Core's job, and relay its report while this process lasts.
+fn hand_off(json_out: bool) -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let report = std::env::temp_dir().join(format!("unterm-quit-{}.txt", std::process::id()));
+    let file = std::fs::File::create(&report)?;
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(std::env::args_os().skip(1))
+        .env(HANDOFF_ENV, &report)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(file.try_clone()?))
+        .stderr(Stdio::from(file));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // A session of its own: the tab's hangup does not reach it.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    let mut child = {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        // Out of the Core's kill-on-close job, which allows breakaway. A Core
+        // too old to allow it refuses; a detached copy still outlives the tab.
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        match command.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+                command.spawn()?
+            }
+        }
+    };
+    #[cfg(unix)]
+    let mut child = command.spawn()?;
+    if !json_out {
+        println!(
+            "running inside Unterm: this tab will close as it quits. \
+             Handed off to pid {}; its report is in {}",
+            child.id(),
+            report.display()
+        );
+    }
+    let status = child.wait()?;
+    let text = std::fs::read_to_string(&report).unwrap_or_default();
+    print!("{text}");
+    let _ = std::fs::remove_file(&report);
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
 pub fn run(cmd: QuitCommand, json_out: bool) -> Result<()> {
     let started = Instant::now();
-    let deadline = started + Duration::from_secs(cmd.wait);
+    let deadline = started + Duration::from_secs(cmd.wait.min(LONGEST_WAIT_SECS));
     let mut report = Report::default();
     let install_dir = std::env::current_exe()
         .ok()
@@ -130,6 +211,14 @@ pub fn run(cmd: QuitCommand, json_out: bool) -> Result<()> {
                 .map(normalized)
                 == install_dir
     });
+
+    if std::env::var_os(HANDOFF_ENV).is_none() {
+        let mut stopping: Vec<u32> = processes.iter().map(|process| process.pid).collect();
+        stopping.extend(core.as_ref().map(|core| core.pid));
+        if runs_inside(&stopping) {
+            return hand_off(json_out);
+        }
+    }
 
     // 1. Windows.
     let mut windows = Vec::new();
@@ -246,7 +335,11 @@ pub fn run(cmd: QuitCommand, json_out: bool) -> Result<()> {
         }));
     } else {
         if report.asked.is_empty() && report.left.is_empty() && targets.is_empty() {
-            println!("no Unterm process is running");
+            if cmd.this_install {
+                println!("no Unterm process from this install is running");
+            } else {
+                println!("no Unterm process is running");
+            }
         }
         for (pid, kind) in &report.asked {
             let state = if pid_alive(*pid) {

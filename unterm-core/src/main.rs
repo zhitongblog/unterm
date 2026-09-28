@@ -122,16 +122,25 @@ fn main() -> Result<()> {
     // that has to be heard: it owns the sessions and the task store, so it is
     // the process whose sudden death costs something.
     unterm_services::power::install();
+    let running = server.running_flag();
     std::thread::Builder::new()
         .name("core-power-watch".into())
-        .spawn(|| loop {
+        .spawn(move || loop {
             if let Some(reason) = unterm_services::power::should_stop() {
                 // Seconds, not minutes. Say why we are going, take the
                 // discovery record with us so nobody connects to a corpse,
-                // and leave. Finishing work here is how a process gets killed
-                // halfway through finishing it.
+                // and leave the way every other stop leaves: `run` returns,
+                // the sessions are closed and the job is disarmed below. An
+                // exit from here skipped both, so Ctrl-C on a headless Core
+                // took down what the user had launched from its shells to
+                // keep. If that path is not done in two seconds, go anyway:
+                // finishing work here is how a process gets killed halfway
+                // through finishing it.
                 eprintln!("unterm-core stopping: {reason}");
                 let _ = clear_discovery();
+                running.store(false, std::sync::atomic::Ordering::Release);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                eprintln!("unterm-core: orderly stop overran, exiting");
                 std::process::exit(0);
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
