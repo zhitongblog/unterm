@@ -32,6 +32,14 @@ const FALLBACK_FAMILIES: &[&str] = &[
     "SimSun",
     "DengXian",
     "PingFang SC",
+    // Chinese faces every macOS carries. PingFang is downloaded on demand and
+    // a fresh system may not have it yet; without these the next CJK face was
+    // Japanese Hiragino, which has no 页, 贴, 话, 标 or 签, and the chrome
+    // printed "新建标签页" as "新建".
+    "Hiragino Sans GB",
+    "Heiti SC",
+    "STHeiti",
+    "Songti SC",
     "Noto Sans CJK SC",
     "Noto Sans Mono CJK SC",
     "Source Han Sans SC",
