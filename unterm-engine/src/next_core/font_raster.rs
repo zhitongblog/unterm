@@ -80,7 +80,8 @@ struct Library {
 /// Deliberately not `Sync`: FreeType's library is not thread-safe, and saying
 /// otherwise to make a type parameter fit is how an intermittent access
 /// violation gets written. One was.
-pub struct LibraryHandle(#[allow(dead_code)] std::sync::Arc<Library>);
+/// Holds a memory face's bytes too: HarfBuzz reads glyphs through the face.
+pub struct LibraryHandle(#[allow(dead_code)] std::sync::Arc<Library>, #[allow(dead_code)] Option<Arc<[u8]>>);
 
 // SAFETY: the raw handle is never handed out, and every method that touches it
 // takes `&mut`, so no two threads can be inside FreeType at the same time.
@@ -296,7 +297,7 @@ impl FontFace {
     /// face in it regardless, so without this a shaper outliving its face
     /// would call into freed memory when it was itself dropped.
     pub(crate) fn library(&self) -> LibraryHandle {
-        LibraryHandle(self._library.clone())
+        LibraryHandle(self._library.clone(), self._bytes.clone())
     }
 
     /// The underlying FreeType face.
@@ -678,7 +679,10 @@ mod tests {
 
         let glyph = face.rasterize('M').expect("rasterize M after the file is gone");
         assert!(glyph.width > 0 && glyph.advance_x > 0);
-        drop(twin);
+        // A shaper outlives the faces it was built from; the bytes must too.
+        let mut shaper = crate::next_core::font_shaper::Shaper::new(&twin).expect("shaper");
+        drop((face, twin));
+        assert!(!shaper.shape("Mi").expect("shape after the faces are gone").is_empty());
         let _ = std::fs::remove_dir(&dir);
     }
 

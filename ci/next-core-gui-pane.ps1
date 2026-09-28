@@ -19,7 +19,7 @@ $Suites = @(
         Name = "font rasterization"
         Package = "unterm-engine"
         Filter = "next_core::font_raster::tests::"
-        ExpectedCount = 6
+        ExpectedCount = 7
         RequiredTests = @(
             # A glyph only a colour face carries must come out as
             # itself. Loaded the wrong way round it renders as its own

@@ -48,7 +48,13 @@
     # and leaving the alternate screen fits the saved main screen to the
     # current size. Measured 13858 after trimming the comments to their
     # essentials; recalibrated to measured plus the usual headroom.
-    [int]$MaxCoreSourceLines = 13960,
+    # 13960 -> 14080 (2026-09-28): bundled fonts open from memory so an
+    # installer can replace them under a running copy (the upgrade that
+    # left assets\fonts empty), with the bytes kept alive for as long as a
+    # shaper reads through the face; numbered OSC 9 subcommands stop being
+    # taken for notifications; a project's .unterm/ tells git to look away.
+    # Measured 13970; recalibrated to measured plus the usual headroom.
+    [int]$MaxCoreSourceLines = 14080,
     [int]$MaxProbeSourceLines = 2800,
     [int]$MaxDirectDependencies = 10,
     # A debug binary carries its debug info, so this tracks the toolchain and
