@@ -1,4 +1,5 @@
 use anyhow::Result;
+use unterm_core::lifetime::{self, CoreMode};
 use unterm_core::{clear_discovery, try_acquire_instance_lock, write_discovery, CoreServer};
 
 fn main() -> Result<()> {
@@ -20,6 +21,45 @@ fn main() -> Result<()> {
         eprintln!("unterm-core already running for this user; exiting");
         return Ok(());
     };
+    // Whose Core this is decides when it ends; see `lifetime`. A window
+    // that started us passes its pid, and we hold a handle on it so a
+    // recycled pid cannot keep us alive.
+    let mode = if args.headless || args.gui_pid.is_none() {
+        CoreMode::Headless
+    } else {
+        CoreMode::GuiOwned
+    };
+    lifetime::set_mode(mode);
+    let spawner = args
+        .gui_pid
+        .and_then(unterm_services::process_lifetime::ProcessWatch::open);
+
+    // Every session's process tree -- conpty host, shell, and what the shell
+    // started -- joins this job by inheritance, and the kernel kills the job
+    // when this process ends however it ends. Before this a killed Core left
+    // OpenConsole and every shell running with nothing to show them.
+    static SESSION_JOB: std::sync::OnceLock<unterm_services::process_lifetime::SessionJob> =
+        std::sync::OnceLock::new();
+    let session_job = match unterm_services::process_lifetime::SessionJob::adopt_current_process() {
+        Ok(job) => {
+            let job = SESSION_JOB.get_or_init(|| job);
+            // A shell Windows starts in a job of its own (a Store app) does
+            // not inherit ours; this catches it as it is spawned.
+            #[cfg(windows)]
+            portable_pty::win::set_spawn_observer(move |process| job.contain(process));
+            Some(job)
+        }
+        Err(err) => {
+            if cfg!(windows) {
+                eprintln!(
+                    "unterm-core: could not create the session job ({err}); \
+                     sessions will not end if this process is killed"
+                );
+            }
+            None
+        }
+    };
+
     let token =
         std::env::var("UNTERM_CORE_TOKEN").unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
     let server = CoreServer::bind(("127.0.0.1", 0), &token)?;
@@ -98,14 +138,56 @@ fn main() -> Result<()> {
         })
         .ok();
 
+    if mode == CoreMode::GuiOwned {
+        let running = server.running_flag();
+        let draining_to_exit = server.exit_when_idle_flag();
+        std::thread::Builder::new()
+            .name("core-orphan-watchdog".into())
+            .spawn(move || {
+                let mut watchdog = lifetime::Watchdog::new();
+                while running.load(std::sync::atomic::Ordering::Acquire) {
+                    let front_end_alive = !unterm_core::host_channel().attached_pids().is_empty()
+                        || spawner.as_ref().is_some_and(|watch| watch.is_alive());
+                    let verdict = watchdog.tick(
+                        std::time::Instant::now(),
+                        lifetime::WatchdogInput {
+                            mode,
+                            front_end_alive,
+                            draining_to_exit: draining_to_exit
+                                .load(std::sync::atomic::Ordering::Acquire),
+                        },
+                    );
+                    if let lifetime::Verdict::Exit(reason) = verdict {
+                        eprintln!("unterm-core stopping: {reason}");
+                        running.store(false, std::sync::atomic::Ordering::Release);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            })
+            .ok();
+    }
+
     let result = server.run();
+    // However `run` ended -- `core.shutdown`, a finished drain, the orphan
+    // watchdog -- the sessions end with it, the ordinary way.
+    unterm_core::destroy_all_sessions();
     let _ = clear_discovery();
+    // An orderly exit: every session has been closed. What is left in the job
+    // is what the user launched from a shell to keep (an editor window), and
+    // quitting the terminal must not take it along.
+    if let Some(job) = session_job {
+        job.disarm();
+    }
     result
 }
 
 struct CoreArgs {
     help: bool,
     version: bool,
+    headless: bool,
+    /// The window that spawned this Core, if one did.
+    gui_pid: Option<u32>,
 }
 
 impl CoreArgs {
@@ -113,12 +195,26 @@ impl CoreArgs {
         let mut parsed = Self {
             help: false,
             version: false,
+            headless: false,
+            gui_pid: None,
         };
-        for argument in arguments {
+        let mut arguments = arguments.into_iter();
+        while let Some(argument) = arguments.next() {
             match argument.to_string_lossy().as_ref() {
                 "--help" | "-h" => parsed.help = true,
                 "--version" | "-V" => parsed.version = true,
-                "--headless" => {}
+                "--headless" => parsed.headless = true,
+                "--gui-pid" => {
+                    let value = arguments
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--gui-pid needs a process id"))?;
+                    parsed.gui_pid = Some(
+                        value
+                            .to_string_lossy()
+                            .parse()
+                            .map_err(|_| anyhow::anyhow!("--gui-pid {value:?} is not a pid"))?,
+                    );
+                }
                 other => anyhow::bail!("unknown unterm-core argument {other:?}"),
             }
         }
@@ -128,7 +224,7 @@ impl CoreArgs {
 
 fn print_help() {
     println!(
-        "unterm-core {}\n\nUSAGE:\n    unterm-core [--headless]\n\nOPTIONS:\n    --headless    Run without creating any GUI window (the default for unterm-core)\n    -V, --version Print version and exit before initialization\n    -h, --help    Print help and exit before initialization",
+        "unterm-core {}\n\nUSAGE:\n    unterm-core [--headless | --gui-pid <pid>]\n\nOPTIONS:\n    --headless    Run without any window, until told to stop (the default)\n    --gui-pid <pid>\n                  Started by that Unterm window: exit once no window has been\n                  attached for 30s\n    -V, --version Print version and exit before initialization\n    -h, --help    Print help and exit before initialization",
         unterm_protocol::PRODUCT_VERSION
     );
 }
