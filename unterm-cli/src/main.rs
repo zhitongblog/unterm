@@ -25,6 +25,7 @@ mod provider;
 mod records;
 mod profile;
 mod proxy;
+mod quit;
 mod reference;
 mod review;
 mod screenshot;
@@ -49,6 +50,7 @@ use provider::ProviderCommand;
 use records::{ArtifactCommand, EvidenceCommand, ScopeCommand, SystemCommand};
 use profile::ProfileCommand;
 use proxy::ProxyCommand;
+use quit::QuitCommand;
 use reference::ReferenceCommand;
 use review::ReviewCommand;
 use scrollback::ScrollbackCommand;
@@ -290,6 +292,13 @@ enum SubCommand {
     )]
     McpStdio,
 
+    #[command(
+        name = "quit",
+        about = "Quit every Unterm window and the Core (ending its sessions), \
+                 wait until they are gone, and exit non-zero if anything survived"
+    )]
+    Quit(QuitCommand),
+
     #[command(name = "cli", about = "Legacy mux compatibility command")]
     Cli(LegacyCommand),
 
@@ -391,6 +400,7 @@ fn main() -> Result<()> {
         SubCommand::Server(cmd) => run_server(cmd, opts.json),
         SubCommand::SetupAi(cmd) => run_setup_ai(cmd, opts.json),
         SubCommand::McpStdio => run_mcp_stdio(),
+        SubCommand::Quit(cmd) => quit::run(cmd, opts.json),
         SubCommand::Cli(cmd) => legacy::run_cli(cmd, opts.json),
         SubCommand::ShowKeys => legacy::run_show_keys(opts.json),
         SubCommand::LsFonts => legacy::run_ls_fonts(opts.json),
