@@ -13574,7 +13574,6 @@ fn command_label_key(action: crate::keys::Action) -> Option<&'static str> {
         Action::DecreaseFontSize => Some("command.font_smaller"),
         Action::ResetFontSize => Some("command.font_reset"),
         Action::ToggleFullScreen => Some("command.full_screen"),
-        _ => None,
     }
 }
 
