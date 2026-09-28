@@ -632,6 +632,33 @@ Once you know the id, target that window explicitly:
 $ unterm-cli --instance bravo session create --cwd ~/src/app -- 'cargo test; exec zsh'
 ```
 
+## quit
+
+End every Unterm process of this user, the orderly way, and check that they are gone. Useful before an upgrade, at the end of a scripted run, or when an installer says Unterm is still running.
+
+```text
+unterm-cli quit [--all] [--this-install] [--wait <secs>]
+```
+
+1. Every window is asked to quit, as if its own close button had been pressed: the tabs are saved for the next launch and nobody is asked to confirm. That includes a window parked in the tray and the administrator window. Windows get the request through a per-process event; macOS and Linux get SIGTERM.
+2. The Core named by this state directory is sent `core.shutdown`, and it ends every session. A Core started with `--headless` is left running, since you started it to outlive windows.
+3. The command waits up to `--wait` seconds (default 10) and exits non-zero if anything it targeted is still running.
+
+| Flag | Effect |
+|---|---|
+| `--all` | Also stop a `--headless` Core and Cores from other state directories, and terminate whatever did not quit when asked, together with everything below it. |
+| `--this-install` | Only processes started from the same directory as this `unterm-cli`, so a development build and an installed Unterm can be quit separately. |
+| `--wait <secs>` | How long to wait before reporting. Values above a day are treated as a day. |
+
+```sh
+$ unterm-cli quit
+asked window 4812 to quit: gone
+asked core 4790 to quit: gone
+done in 0.6s
+```
+
+Typed into an Unterm tab, the command runs inside the Core it is stopping. It hands the work to a detached copy of itself first, so the quit still finishes when the tab closes around it. If the copy's report can still be shown, it is printed there. `--json` returns `asked`, `left_running`, `terminated`, `survivors` and `ok`.
+
 ## agent
 
 Install, authenticate, configure, launch, or run AI coding-agent CLIs through Unterm's profile and MCP wiring. `agent launch` opens the vendor CLI interactively; `agent run` uses the vendor's non-interactive mode and waits for the task to finish. Since v0.55 this family also carries the Agent Cockpit state surface: `status`, `inbox`, `signal`, and `enable-hooks`.
