@@ -120,11 +120,20 @@ pub const CHROME_SCROLLBAR_TRACK_ALPHA: f32 = 0.16;
 /// Thumb opacity for theme-provided scrollbar colors.
 pub const CHROME_SCROLLBAR_THUMB_ALPHA: f32 = 0.74;
 
-/// Left tab bar geometry, in points: 186pt is 248px at 96dpi, Warp's
-/// vertical-tab width, and 150pt its 200px minimum. Room for a task on the
-/// first line and where-and-which-branch on the second.
-pub const LEFT_TAB_BAR_WIDTH: f32 = 186.0;
-pub const LEFT_TAB_BAR_MIN_WIDTH: f32 = 150.0;
+/// Left tab bar geometry, in points: 168pt is 224px at 96dpi and 144pt its
+/// 192px minimum, both on Fluent's 8px grid. 248px (Warp's width, a Mac
+/// app's) took a quarter of a laptop-sized window for one tab; the rows keep
+/// their two lines at 224, and a long branch is cut once in the middle.
+pub const LEFT_TAB_BAR_WIDTH: f32 = 168.0;
+pub const LEFT_TAB_BAR_MIN_WIDTH: f32 = 144.0;
+/// The strip folded to a column of icons: 36pt, 48px at 96dpi -- Fluent's
+/// compact navigation pane, and Edge's collapsed vertical tabs.
+pub const LEFT_TAB_BAR_RAIL_WIDTH: f32 = 36.0;
+/// Windows narrower than this (logical px) start with the strip on its rail.
+pub const LEFT_TAB_BAR_RAIL_BELOW: f32 = 900.0;
+/// The mark beside the row in front: Fluent's selection pill, 3px by 16px.
+pub const SELECTION_PILL_WIDTH: f32 = 2.25;
+pub const SELECTION_PILL_HEIGHT: f32 = 12.0;
 /// Max width as a fraction of the window width.
 pub const LEFT_TAB_BAR_MAX_RATIO: f32 = 0.30;
 /// Width of the resize grip on the bar's right edge.

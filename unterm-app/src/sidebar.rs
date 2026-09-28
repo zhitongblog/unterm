@@ -39,6 +39,183 @@ pub fn width(
     (points * pt).round()
 }
 
+/// How many rows, counted back from the last, fit in `room` -- at least one,
+/// and all of them when there is no list. Rows are as tall as what they
+/// hold, so this is the count the strip shows when scrolled to its end.
+pub fn rows_that_fit_at_end(extents: &[f32], room: f32) -> usize {
+    let mut used = 0.0;
+    let mut count = 0;
+    for extent in extents.iter().rev() {
+        if used + extent > room {
+            break;
+        }
+        used += extent;
+        count += 1;
+    }
+    count.max(1)
+}
+
+/// The hues a project can wear: muted, and clear of the amber the chrome
+/// keeps for "needs you".
+const PROJECT_HUES: [[u8; 3]; 8] = [
+    [0x6c, 0x9f, 0xd8], // blue
+    [0x4d, 0xb6, 0xac], // teal
+    [0x8b, 0xc3, 0x7e], // green
+    [0x9f, 0x86, 0xd4], // violet
+    [0xe0, 0x7a, 0xa4], // rose
+    [0xe8, 0x8c, 0x6c], // coral
+    [0x5f, 0xb8, 0xd9], // cyan
+    [0xc9, 0xa2, 0xd8], // lilac
+];
+
+/// The hue a project prefers: hashed from its key (its directory), so it is
+/// the same every run and in every window. FNV-1a, stable across runs and
+/// platforms, unlike the std hasher.
+fn preferred_hue(key: &str) -> usize {
+    let hash = key
+        .bytes()
+        .fold(0x811c_9dc5_u32, |hash, byte| (hash ^ byte as u32).wrapping_mul(0x0100_0193));
+    (hash % PROJECT_HUES.len() as u32) as usize
+}
+
+/// Each project's colour, for the projects in `rows`.
+///
+/// The rail has no room for names, and a rule between runs of identical
+/// terminal icons told nobody which run was which project. A project wears
+/// the hue its key hashes to unless a project above it already does; then it
+/// takes the next free one. Eight hues hashed blindly put two of three
+/// projects in the same rose, which is no way to tell them apart.
+pub fn project_colors(rows: &[Row], is_light: bool) -> HashMap<String, [f32; 4]> {
+    let mut taken = [false; PROJECT_HUES.len()];
+    let mut colors = HashMap::new();
+    for row in rows {
+        let Row::Group { key, .. } = row else {
+            continue;
+        };
+        if colors.contains_key(key) {
+            continue;
+        }
+        let preferred = preferred_hue(key);
+        let hue = (0..PROJECT_HUES.len())
+            .map(|step| (preferred + step) % PROJECT_HUES.len())
+            .find(|hue| !taken[*hue])
+            .unwrap_or(preferred);
+        taken[hue] = true;
+        let [r, g, b] = PROJECT_HUES[hue];
+        let color = crate::chrome::srgb(r, g, b);
+        let color = if is_light {
+            // The same hue, dark enough to carry white on a light surface.
+            crate::chrome::mix(color, [0.0, 0.0, 0.0, 1.0], 0.35)
+        } else {
+            color
+        };
+        colors.insert(key.clone(), color);
+    }
+    colors
+}
+
+/// The letter a project goes by on the rail: the first letter or digit of
+/// its name, capitalised.
+pub fn project_initial(label: &str) -> String {
+    label
+        .chars()
+        .find(|ch| ch.is_alphanumeric())
+        .map(|ch| ch.to_uppercase().collect())
+        .unwrap_or_else(|| "~".to_string())
+}
+
+/// The strip folded to its rail: one column of icons, Fluent's compact
+/// navigation pane (48px at 100%).
+pub fn rail_width(scale: f32) -> f32 {
+    (crate::ui_tokens::LEFT_TAB_BAR_RAIL_WIDTH * crate::chrome_font::point(scale)).round()
+}
+
+/// Whether a window this wide (in logical pixels) starts with the strip on
+/// its rail. Fluent's navigation pane goes compact below 1008 epx; a terminal
+/// has less to spare than a settings page, so ours folds a little earlier.
+pub fn rail_by_default(logical_window_width: f32) -> bool {
+    logical_window_width < crate::ui_tokens::LEFT_TAB_BAR_RAIL_BELOW
+}
+
+/// Whether the grip, let go at `points` from the left edge, means "fold to
+/// the rail" rather than "this wide". Past the minimum width the strip cannot
+/// be narrower anyway, so well short of it is a request to get out of the way.
+pub fn snaps_to_rail(points: f32) -> bool {
+    points < crate::ui_tokens::LEFT_TAB_BAR_MIN_WIDTH * 0.6
+}
+
+/// What the strip remembers between runs: how wide it was dragged, and
+/// whether it was folded to its rail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Prefs {
+    pub points: Option<f32>,
+    #[serde(default)]
+    pub rail: bool,
+}
+
+impl Prefs {
+    fn path() -> Option<std::path::PathBuf> {
+        unterm_protocol::state_path("sidebar.json")
+    }
+
+    /// The saved preference, or the defaults when there is none or it does
+    /// not parse -- a strip that will not open over a bad file is worse than
+    /// one that forgot its width.
+    pub fn load() -> Self {
+        Self::path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let Some(path) = Self::path() else {
+            return;
+        };
+        if let Ok(text) = serde_json::to_string(self) {
+            if let Err(err) = std::fs::write(&path, text) {
+                log::warn!("could not save the sidebar width to {path:?}: {err}");
+            }
+        }
+    }
+}
+
+/// `text` cut in the middle to fit `room`, with one ellipsis.
+///
+/// For a branch name, whose two ends both say which branch it is. The strip
+/// used to receive a name already cut to 28 characters and then cut the end
+/// off that as well: `chore/installe…ampe…`, two ellipses and neither end.
+pub fn fit_middle(text: &str, room: f32, measure: &mut dyn FnMut(&str) -> f32) -> String {
+    if room <= 0.0 {
+        return String::new();
+    }
+    if measure(text) <= room {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let ellipsis = measure("\u{2026}");
+    // The longest head+tail that fits, head taking the odd character: the
+    // prefix is where the convention lives (`feat/`, `fix/`).
+    let mut best = String::from("\u{2026}");
+    for keep in (1..chars.len()).rev() {
+        let tail = keep / 2;
+        let head = keep - tail;
+        let candidate: String = chars[..head]
+            .iter()
+            .chain(std::iter::once(&'\u{2026}'))
+            .chain(chars[chars.len() - tail..].iter())
+            .collect();
+        if measure(&candidate) <= room {
+            best = candidate;
+            break;
+        }
+    }
+    if measure(&best) > room && ellipsis > room {
+        return String::new();
+    }
+    best
+}
+
 /// The previous front end kept a one-tab window compact and only spent the
 /// full sidebar width once the list actually needed it.
 pub fn adaptive_default_width(_tab_count: usize) -> f32 {
@@ -1309,6 +1486,68 @@ mod tests {
     #[test]
     fn a_strip_with_no_room_does_not_scroll() {
         assert_eq!(scroll_to_show(4, 99, 0), 4);
+    }
+
+    /// A branch too long for its row is cut once, in the middle, keeping
+    /// both ends -- never the double cut of `chore/installe…ampe…`.
+    #[test]
+    fn a_long_branch_is_cut_once_in_the_middle() {
+        let mut measure = |text: &str| text.chars().count() as f32;
+        let shown = fit_middle("chore/installer-timestamped-backups", 20.0, &mut measure);
+        assert_eq!(shown.chars().count(), 20, "{shown}");
+        assert_eq!(shown.matches('\u{2026}').count(), 1, "{shown}");
+        assert!(shown.starts_with("chore/"), "{shown}");
+        assert!(shown.ends_with("backups"), "{shown}");
+        assert_eq!(fit_middle("main", 20.0, &mut measure), "main");
+    }
+
+    /// Rows are as tall as what they hold, so what fits is counted from the
+    /// rows themselves: a half-empty strip does not scroll.
+    #[test]
+    fn a_strip_with_room_left_does_not_scroll() {
+        let extents = [40.0, 60.0, 60.0, 40.0, 60.0];
+        assert_eq!(rows_that_fit_at_end(&extents, 1000.0), extents.len());
+        assert_eq!(rows_that_fit_at_end(&extents, 125.0), 2);
+        assert_eq!(rows_that_fit_at_end(&extents, 10.0), 1);
+    }
+
+    /// On the rail a project is a lettered square in its own colour, and two
+    /// projects in one window never share one.
+    #[test]
+    fn projects_on_the_rail_are_told_apart() {
+        let group = |key: &str| Row::Group {
+            key: key.into(),
+            label: key.into(),
+            hint: None,
+            count: 1,
+            collapsed: false,
+            active: false,
+        };
+        let rows: Vec<Row> = (0..8).map(|n| group(&format!("D:/code/p{n}"))).collect();
+        let colors = project_colors(&rows, false);
+        let mut seen: Vec<[u32; 3]> = colors
+            .values()
+            .map(|c| [(c[0] * 255.0) as u32, (c[1] * 255.0) as u32, (c[2] * 255.0) as u32])
+            .collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 8, "eight projects, eight colours");
+        // The same project keeps its colour from one frame to the next.
+        assert_eq!(project_colors(&rows, false), colors);
+        assert_eq!(project_initial("unterm"), "U");
+        assert_eq!(project_initial(".claude"), "C");
+        assert_eq!(project_initial("项目"), "项");
+    }
+
+    /// Letting the grip go well short of the minimum folds the strip to its
+    /// rail; a narrow window starts there.
+    #[test]
+    fn the_strip_folds_to_a_rail() {
+        assert!(snaps_to_rail(crate::ui_tokens::LEFT_TAB_BAR_RAIL_WIDTH));
+        assert!(!snaps_to_rail(crate::ui_tokens::LEFT_TAB_BAR_MIN_WIDTH));
+        assert!(rail_by_default(800.0));
+        assert!(!rail_by_default(1280.0));
+        assert!(rail_width(1.0) < width(true, None, 1, 1600.0, 1.0));
     }
 }
 

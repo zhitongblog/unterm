@@ -944,6 +944,7 @@ impl WindowState {
         chrome_font: TerminalFont,
         picture: Option<crate::background::Image>,
     ) -> Self {
+        let sidebar_prefs = crate::sidebar::Prefs::load();
         Self {
             id,
             picture,
@@ -979,7 +980,9 @@ impl WindowState {
             .map(|mode| mode != "full")
             .unwrap_or(true),
             sidebar_scroll: 0,
-            sidebar_points: None,
+            sidebar_points: sidebar_prefs.points,
+            sidebar_rail: sidebar_prefs.rail,
+            sidebar_unrailed: false,
             dragging_sidebar_width: false,
             dragging_tab: None,
             sidebar_collapsed: Default::default(),
@@ -1217,6 +1220,11 @@ struct WindowState {
     sidebar_scroll: usize,
     /// Its width in points, once somebody has dragged it.
     sidebar_points: Option<f32>,
+    /// Folded to its rail by hand (remembered between runs).
+    sidebar_rail: bool,
+    /// Opened out by hand in a window narrow enough to start on the rail,
+    /// for the rest of this run.
+    sidebar_unrailed: bool,
     /// True while a drag is holding the strip's right edge.
     dragging_sidebar_width: bool,
     /// A held tab row mid-reorder: which tab, and where it is being carried.
@@ -2092,6 +2100,7 @@ impl App {
         let modals = quads.mark();
         self.append_palette(window_width, &mut quads);
         self.append_tooltip(window_width, &mut quads);
+        self.append_rail_tooltip(&mut quads);
         self.append_quick_menu(&mut quads);
         quads.raise_since_modal(modals);
 
@@ -2730,10 +2739,24 @@ impl App {
             return;
         }
         let chrome = self.chrome();
-        let edge = if self.window.focused {
-            crate::chrome::mix(chrome.outer_edge, self.window.colors.foreground, 0.10)
+        // The seam colour is the foreground at a sixth of its strength,
+        // blended by the renderer over the bar. DWM takes an opaque
+        // COLORREF, so it is composited over the surface here first: sent
+        // as-is it lost its alpha and every window wore a near-white
+        // outline -- a frame drawn around the window, not the hairline
+        // Windows 11 gives each window's edge.
+        //
+        // And far quieter than the in-window seam: Windows 11's own dark
+        // border sits a few steps above the surface (#2d2d2d → ~#434343 in
+        // front, ~#363636 behind). The seam's sixth of the foreground, in
+        // linear light, came out #7c7c7c -- still a drawn frame.
+        let seam = chrome.outer_edge;
+        let edge = if seam[3] >= 0.999 {
+            // A theme that names its edge colour gets exactly that.
+            seam
         } else {
-            chrome.outer_edge
+            let lift = if self.window.focused { 0.036 } else { 0.013 };
+            crate::chrome::mix(chrome.surface, self.window.colors.foreground, lift)
         };
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let wanted = (!chrome.is_light, [byte(edge[0]), byte(edge[1]), byte(edge[2])]);
@@ -2832,13 +2855,7 @@ impl App {
         window_width: f32,
         metrics: unterm_render::quads::CellMetrics,
     ) -> f32 {
-        crate::sidebar::width(
-            self.window.sidebar_open,
-            self.window.sidebar_points,
-            self.window.tabs.tab_ids().len(),
-            window_width,
-            self.font_scale(),
-        ) + crate::tree::width(self.window.tree.is_some(), metrics)
+        self.sidebar_width_now(window_width) + crate::tree::width(self.window.tree.is_some(), metrics)
     }
 
     /// The window's inner width, or a plausible stand-in before it exists.
@@ -3152,13 +3169,7 @@ impl App {
         // To the right of the tab strip when both are open, so the two docks
         // do not draw over each other.
         let window_width = self.window.state.as_ref().map(|live| live.width).unwrap_or(800) as f32;
-        let left = crate::sidebar::width(
-            self.window.sidebar_open,
-            self.window.sidebar_points,
-            self.window.tabs.tab_ids().len(),
-            window_width,
-            self.font_scale(),
-        );
+        let left = self.sidebar_width_now(window_width);
         Some((left, top, width, height))
     }
 
@@ -3261,18 +3272,361 @@ impl App {
     ///
     /// One place, so a row is pressed where it is drawn. Sized in points
     /// against the display, not in terminal cells: it is chrome.
-    fn sidebar_dock(&self) -> Option<(f32, f32, f32, f32, f32)> {
-        if !self.window.sidebar_open {
-            return None;
+    /// The fill behind a strip row: the row in front, or the one under the
+    /// pointer. Between the chrome's hover and selected tones, so the pill
+    /// carries the accent and the fill only lifts the row.
+    fn sidebar_selection_fill(&self, active: bool) -> [f32; 4] {
+        let chrome = self.chrome();
+        if active {
+            crate::chrome::mix(chrome.hover_bg, chrome.selected_bg, 0.3)
+        } else {
+            chrome.hover_bg
+        }
+    }
+
+    /// Fluent's selection pill at the leading edge of a row.
+    fn append_selection_pill(
+        &self,
+        tile_left: f32,
+        tile_top: f32,
+        tile_height: f32,
+        quads: &mut unterm_render::quads::FrameQuads,
+    ) {
+        let pt = crate::chrome_font::point(self.window.scale);
+        let wide = (crate::ui_tokens::SELECTION_PILL_WIDTH * pt).round().max(2.0);
+        let tall = (crate::ui_tokens::SELECTION_PILL_HEIGHT * pt)
+            .round()
+            .min((tile_height - 4.0 * pt).max(wide));
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            tile_left,
+            (tile_top + (tile_height - tall) / 2.0).round(),
+            wide,
+            tall,
+            wide / 2.0,
+            self.chrome().focus_rail,
+        ));
+    }
+
+    /// A row's second line fitted to `room`: what comes before the branch cut
+    /// at its end if it must be, the branch cut once in its middle.
+    fn fit_subtitle(&mut self, subtitle: &str, room: f32) -> String {
+        if self.chrome_width(subtitle) <= room {
+            return subtitle.to_string();
+        }
+        const MARK: &str = "\u{e0a0} ";
+        let Some(at) = subtitle.find(MARK) else {
+            return self.chrome_fit(subtitle, room);
+        };
+        let (before, branch) = (&subtitle[..at], &subtitle[at + MARK.len()..]);
+        let mark = self.chrome_width(MARK);
+        // Whatever precedes the branch keeps its words while the branch still
+        // has room for a recognisable few characters; past that it gives way.
+        let floor = self.chrome_width("feat/abc\u{2026}xyz");
+        let before = if self.chrome_width(before) + mark + floor <= room {
+            before.to_string()
+        } else {
+            self.chrome_fit(before, (room * 0.4).max(0.0))
+        };
+        let rest = room - self.chrome_width(&before) - mark;
+        let branch = crate::sidebar::fit_middle(branch, rest, &mut |text| self.chrome_width(text));
+        if branch.is_empty() {
+            return self.chrome_fit(&before, room);
+        }
+        format!("{before}{MARK}{branch}")
+    }
+
+    /// One row of the strip on its rail: the tab's icon centred, its status
+    /// as a dot at the icon's shoulder, and the row in front marked as the
+    /// open strip marks it.
+    #[allow(clippy::too_many_arguments)]
+    fn append_sidebar_rail_row(
+        &mut self,
+        row: &crate::sidebar::Row,
+        project_colors: &std::collections::HashMap<String, [f32; 4]>,
+        left: f32,
+        width: f32,
+        row_top: f32,
+        row_height: f32,
+        spin: u8,
+        quads: &mut unterm_render::quads::FrameQuads,
+    ) {
+        let pt = crate::chrome_font::point(self.window.scale);
+        let radius = crate::ui_tokens::CORNER_RADIUS * pt;
+        let chrome = self.chrome();
+        let foreground = self.chrome_foreground();
+        let line = self.window.chrome_font.metrics().height;
+        let nudge = crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt;
+        match row {
+            crate::sidebar::Row::Group {
+                key,
+                label,
+                collapsed,
+                active,
+                ..
+            } => {
+                // The project, as a lettered square in its own colour: what
+                // tells one run of terminal icons from the next. The project
+                // in front at full strength, the others quieter; a folded one
+                // quieter still, and pressing it opens it.
+                let size = (18.0 * pt).round().min((row_height - 4.0 * pt).max(8.0));
+                let square_left = (left + (width - size) / 2.0).round();
+                let square_top = (row_top + (row_height - size) / 2.0).round();
+                let mut fill = project_colors.get(key).copied().unwrap_or(chrome.dim_text);
+                fill[3] = if *active {
+                    1.0
+                } else if *collapsed {
+                    0.35
+                } else {
+                    0.6
+                };
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    square_left,
+                    square_top,
+                    size,
+                    size,
+                    (4.0 * pt).round(),
+                    fill,
+                ));
+                let letter = crate::sidebar::project_initial(label);
+                let wide = self.chrome_width(&letter);
+                let mut ink = if chrome.is_light {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.08, 0.08, 0.09, 1.0]
+                };
+                ink[3] = fill[3].max(0.7);
+                self.append_chrome(
+                    &letter,
+                    ink,
+                    (
+                        (square_left + (size - wide) / 2.0).round(),
+                        (square_top + (size - line) / 2.0 + nudge).round(),
+                    ),
+                    quads,
+                );
+            }
+            crate::sidebar::Row::Tab {
+                active,
+                icon,
+                badge,
+                indicators,
+                ..
+            } => {
+                let inset = (4.0 * pt).round();
+                let gap = (1.0 * pt).round();
+                let (tile_left, tile_top) = (left + inset, row_top + gap);
+                let (tile_width, tile_height) =
+                    ((width - inset * 2.0).max(1.0), (row_height - gap * 2.0).max(1.0));
+                let hovered = self.window.pointer.0 >= tile_left
+                    && self.window.pointer.0 < tile_left + tile_width
+                    && self.window.pointer.1 >= tile_top
+                    && self.window.pointer.1 < tile_top + tile_height;
+                if *active || hovered {
+                    quads.backgrounds.extend(unterm_render::rounded::panel(
+                        tile_left,
+                        tile_top,
+                        tile_width,
+                        tile_height,
+                        radius,
+                        self.sidebar_selection_fill(*active),
+                    ));
+                }
+                if *active {
+                    self.append_selection_pill(tile_left, tile_top, tile_height, quads);
+                }
+                let glyph = icon.to_string();
+                let wide = self.chrome_width(&glyph);
+                let icon_left = (left + (width - wide) / 2.0).round();
+                let icon_top = (tile_top + (tile_height - line) / 2.0 + nudge).round();
+                let color = if *icon == crate::sidebar::ROBOT {
+                    chrome.focus_rail
+                } else if *active || hovered {
+                    foreground
+                } else {
+                    chrome.dim_text
+                };
+                self.append_chrome(&glyph, color, (icon_left, icon_top), quads);
+
+                // The status the open strip spells out at the row's end, as
+                // a dot; a working agent keeps its spinner.
+                let mark: Option<(String, [f32; 4])> = match badge {
+                    Some(working @ crate::cockpit::Badge::Working) => {
+                        Some((working.glyph(spin).to_string(), working.color()))
+                    }
+                    Some(badge) => Some(("\u{2022}".to_string(), badge.color())),
+                    None if indicators.error => Some(("\u{2022}".to_string(), [0.95, 0.35, 0.35, 1.0])),
+                    None if indicators.unread => {
+                        Some(("\u{2022}".to_string(), crate::cockpit::Badge::NeedsYou.color()))
+                    }
+                    None => None,
+                };
+                if let Some((mark, color)) = mark {
+                    let mark_wide = self.chrome_width(&mark);
+                    self.append_chrome(
+                        &mark,
+                        color,
+                        (
+                            (icon_left + wide - mark_wide * 0.3).round(),
+                            (icon_top - line * 0.35).round(),
+                        ),
+                        quads,
+                    );
+                }
+            }
+        }
+    }
+
+    /// The rail's footer: a new session, one square.
+    fn append_sidebar_rail_footer(
+        &mut self,
+        left: f32,
+        width: f32,
+        footer_top: f32,
+        footer_height: f32,
+        quads: &mut unterm_render::quads::FrameQuads,
+    ) {
+        let pt = crate::chrome_font::point(self.window.scale);
+        let chrome = self.chrome();
+        let inset = (4.0 * pt).round();
+        quads.backgrounds.push(unterm_render::quads::Quad {
+            left: left + inset,
+            top: footer_top,
+            width: (width - inset * 2.0).max(0.0),
+            height: 1.0,
+            color: chrome.inner_highlight,
+        });
+        let hovered = self.window.pointer.0 >= left
+            && self.window.pointer.0 < left + width
+            && self.window.pointer.1 >= footer_top
+            && self.window.pointer.1 < footer_top + footer_height;
+        if hovered {
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left + inset,
+                footer_top + 2.0 * pt,
+                (width - inset * 2.0).max(1.0),
+                footer_height - 4.0 * pt,
+                crate::ui_tokens::CORNER_RADIUS * pt,
+                chrome.hover_bg,
+            ));
+        }
+        let text_top = ((footer_height - self.window.chrome_font.metrics().height) / 2.0
+            + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+            .max(0.0);
+        let wide = self.chrome_width("+");
+        let ink = if hovered { self.chrome_foreground() } else { chrome.dim_text };
+        self.append_chrome(
+            "+",
+            ink,
+            ((left + (width - wide) / 2.0).round(), footer_top + text_top),
+            quads,
+        );
+    }
+
+    /// The name of the rail row under the pointer: the rail shows icons, and
+    /// an icon with no name on hover is a guess.
+    fn append_rail_tooltip(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
+        if !self.sidebar_on_rail() || self.window.dragging_sidebar_width {
+            return;
+        }
+        let Some((left, _top, width, _height, _)) = self.sidebar_dock() else {
+            return;
+        };
+        let (x, y) = self.window.pointer;
+        let Some(at) = self.sidebar_row_at(x, y) else {
+            return;
+        };
+        let label = {
+            let rows = self.sidebar_rows();
+            match rows.get(at) {
+                Some(crate::sidebar::Row::Tab { label, subtitle, .. }) => match subtitle {
+                    Some(subtitle) => format!("{label}  \u{00b7}  {subtitle}"),
+                    None => label.clone(),
+                },
+                Some(crate::sidebar::Row::Group { label, hint, .. }) => match hint {
+                    Some(hint) => format!("{hint}/{label}"),
+                    None => label.clone(),
+                },
+                None => return,
+            }
+        };
+        let Some((row_top, row_height)) = self.sidebar_row_bounds(at) else {
+            return;
+        };
+        let pt = crate::chrome_font::point(self.window.scale);
+        let chrome = self.chrome();
+        let pad = 8.0 * pt;
+        let text = self.chrome_fit(&label, 360.0 * pt);
+        let box_width = self.chrome_width(&text) + pad * 2.0;
+        let box_height = self.chrome_row_height();
+        let box_left = left + width + 4.0 * pt;
+        let box_top = (row_top + (row_height - box_height) / 2.0).round();
+        let mark = quads.mark();
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            box_left,
+            box_top,
+            box_width,
+            box_height,
+            crate::ui_tokens::CORNER_RADIUS * pt,
+            chrome.group_bg,
+        ));
+        let text_top = ((box_height - self.window.chrome_font.metrics().height) / 2.0
+            + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+            .max(0.0);
+        let color = self.window.colors.foreground;
+        self.append_chrome(&text, color, (box_left + pad, box_top + text_top), quads);
+        quads.raise_since(mark);
+    }
+
+    /// Where the strip row at `index` is drawn, if it is on screen.
+    fn sidebar_row_bounds(&self, index: usize) -> Option<(f32, f32)> {
+        let (_left, top, _width, height, _) = self.sidebar_dock()?;
+        let pt = crate::chrome_font::point(self.window.scale);
+        let first = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
+        let visible = self.sidebar_visible_rows()?;
+        let rows = self.sidebar_rows();
+        let scroll = crate::sidebar::clamp_scroll(self.window.sidebar_scroll, rows.len(), visible);
+        let bottom = top + height - self.sidebar_footer_height();
+        self.sidebar_layout(&rows, scroll, first, bottom)
+            .into_iter()
+            .find(|(at, _, _)| *at == index)
+            .map(|(_, row_top, row_height)| (row_top, row_height))
+    }
+
+    /// Whether the strip is folded to its column of icons: by hand, or
+    /// because the window is too narrow to spare it (until opened by hand).
+    fn sidebar_on_rail(&self) -> bool {
+        if self.window.sidebar_rail {
+            return true;
         }
         let window_width = self.window.state.as_ref().map(|live| live.width).unwrap_or(800) as f32;
-        let width = crate::sidebar::width(
+        let logical = window_width / self.window.scale.max(0.1);
+        crate::sidebar::rail_by_default(logical) && !self.window.sidebar_unrailed
+    }
+
+    /// The strip's width in pixels right now: nothing when it is closed, the
+    /// rail when folded, otherwise what it was dragged to or the default.
+    fn sidebar_width_now(&self, window_width: f32) -> f32 {
+        if !self.window.sidebar_open {
+            return 0.0;
+        }
+        if self.sidebar_on_rail() {
+            return crate::sidebar::rail_width(self.font_scale());
+        }
+        crate::sidebar::width(
             true,
             self.window.sidebar_points,
             self.window.tabs.tab_ids().len(),
             window_width,
             self.font_scale(),
-        );
+        )
+    }
+
+    fn sidebar_dock(&self) -> Option<(f32, f32, f32, f32, f32)> {
+        if !self.window.sidebar_open {
+            return None;
+        }
+        let window_width = self.window.state.as_ref().map(|live| live.width).unwrap_or(800) as f32;
+        let width = self.sidebar_width_now(window_width);
         let top = self.terminal_top() - self.chrome_inset();
         let height = self.terminal_height() + self.chrome_inset() * 2.0;
         Some((0.0, top, width, height, self.sidebar_row_height()))
@@ -3296,6 +3650,14 @@ impl App {
     /// between projects were those.
     fn sidebar_row_extent(&self, row: &crate::sidebar::Row) -> f32 {
         let line = self.chrome_row_height();
+        if self.sidebar_on_rail() {
+            // One icon a row, Fluent's 40px item; a project is its lettered
+            // square.
+            return match row {
+                crate::sidebar::Row::Group { .. } => (line * 1.15).round(),
+                crate::sidebar::Row::Tab { .. } => (line * 1.25).round(),
+            };
+        }
         match row {
             crate::sidebar::Row::Group { .. } => (line * 1.2).round(),
             crate::sidebar::Row::Tab { subtitle: Some(_), .. } => (line * 1.55).round(),
@@ -3526,12 +3888,24 @@ impl App {
     /// not a row. Shared so the wheel bounds itself against the same number
     /// the painter and the hit test use -- three copies of this arithmetic
     /// is three chances for the wheel to stop somewhere the eye does not.
+    ///
+    /// Counted from the end of the list with each row's own height: the rows
+    /// that fit when the strip is scrolled as far as it goes, which is the
+    /// number `clamp_scroll` bounds against. Dividing by one nominal row
+    /// height stopped being right when rows took the height of what they
+    /// hold -- a strip half empty still said it overflowed, drew a
+    /// scrollbar, and scrolled its first project out of sight.
     fn sidebar_visible_rows(&self) -> Option<usize> {
-        let (_left, top, _width, height, row_height) = self.sidebar_dock()?;
+        let (_left, top, _width, height, _row_height) = self.sidebar_dock()?;
         let pt = crate::chrome_font::point(self.window.scale);
         let first = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
         let footer_top = top + height - self.sidebar_footer_height();
-        Some((((footer_top - first) / row_height).floor()).max(1.0) as usize)
+        let extents: Vec<f32> = self
+            .sidebar_rows()
+            .iter()
+            .map(|row| self.sidebar_row_extent(row))
+            .collect();
+        Some(crate::sidebar::rows_that_fit_at_end(&extents, footer_top - first))
     }
 
     /// Which strip row a point is over.
@@ -3564,6 +3938,10 @@ impl App {
         let footer_top = top + height - row_height;
         if x < left || x >= left + width || y < footer_top || y >= top + height {
             return None;
+        }
+        // The rail's footer is one square: a new session.
+        if self.sidebar_on_rail() {
+            return Some(0);
         }
         let pt = crate::chrome_font::point(self.window.scale);
         let inset = crate::ui_tokens::CHROME_PANEL_INSET * pt;
@@ -3678,7 +4056,10 @@ impl App {
                 // a second apart, then one on the row below that switched at
                 // once.
                 let arrow_zone = self.chrome_row_height();
-                let on_arrow = self
+                // The rail has no arrow: a project there is a rule, or the
+                // folder of a folded one, and pressing it goes to it.
+                let on_arrow = !self.sidebar_on_rail()
+                    && self
                     .sidebar_dock()
                     .is_some_and(|(left, _, _, _, _)| self.window.pointer.0 < left + arrow_zone);
                 if on_arrow {
@@ -3725,7 +4106,7 @@ impl App {
     /// reads a tab better than a horizontal one: a tab is identified by a
     /// project and a command, which fit along a row rather than across one.
     fn append_sidebar(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
-        let Some((left, top, width, height, row_height)) = self.sidebar_dock() else {
+        let Some((left, top, width, height, _row_height)) = self.sidebar_dock() else {
             return;
         };
         let pt = crate::chrome_font::point(self.window.scale);
@@ -3757,7 +4138,7 @@ impl App {
         let footer_reserve = top + height - footer_height;
         let rows = self.sidebar_rows();
         let first_row = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
-        let visible = (((footer_reserve - first_row) / row_height).floor()).max(1.0) as usize;
+        let visible = self.sidebar_visible_rows().unwrap_or(1);
 
         // Follow the selection. A strip longer than the window that stays put
         // while tabs are switched shows a list with nothing selected in it.
@@ -3774,38 +4155,36 @@ impl App {
         // time one is added.
         let footer_top = footer_reserve;
 
-        // A list longer than the strip says so: a slim track on the right
-        // edge with the visible span as its thumb.
+        // A list longer than the strip says so, the way Fluent's scroll
+        // views do: no track, a hairline thumb at rest that thickens and
+        // darkens while the pointer is over the strip. A full-strength
+        // track and thumb down the edge was the brightest stripe in the
+        // window, standing beside a list with nothing to scroll.
         if rows.len() > visible {
-            let track_left = left + width
-                - (crate::ui_tokens::CHROME_SCROLLBAR_WIDTH * pt)
-                    .max(crate::ui_tokens::CHROME_SCROLLBAR_MIN_WIDTH);
+            let over = self.window.pointer.0 >= left
+                && self.window.pointer.0 < left + width
+                && self.window.pointer.1 >= top
+                && self.window.pointer.1 < top + height;
+            let full = (crate::ui_tokens::CHROME_SCROLLBAR_WIDTH * pt)
+                .max(crate::ui_tokens::CHROME_SCROLLBAR_MIN_WIDTH);
+            let bar = if over { full } else { (full * 0.4).round().max(2.0) };
+            let track_left = left + width - full + (full - bar) / 2.0 - 2.0 * pt;
             let track_height = footer_reserve - first_row;
             let span = visible as f32 / rows.len() as f32;
             let thumb_height =
                 (track_height * span).max(crate::ui_tokens::CHROME_SCROLLBAR_MIN_THUMB_HEIGHT * pt);
             let travel = track_height - thumb_height;
             let progress = scroll as f32 / (rows.len() - visible) as f32;
-            let mut track = chrome.dim_text;
-            track[3] *= crate::ui_tokens::CHROME_SCROLLBAR_TRACK_ALPHA;
             let mut thumb = chrome.dim_text;
-            thumb[3] *= crate::ui_tokens::CHROME_SCROLLBAR_THUMB_ALPHA;
-            quads.backgrounds.push(unterm_render::quads::Quad {
-                left: track_left,
-                top: first_row,
-                width: (crate::ui_tokens::CHROME_SCROLLBAR_WIDTH * pt)
-                    .max(crate::ui_tokens::CHROME_SCROLLBAR_MIN_WIDTH),
-                height: track_height,
-                color: track,
-            });
-            quads.backgrounds.push(unterm_render::quads::Quad {
-                left: track_left,
-                top: first_row + travel * progress,
-                width: (crate::ui_tokens::CHROME_SCROLLBAR_WIDTH * pt)
-                    .max(crate::ui_tokens::CHROME_SCROLLBAR_MIN_WIDTH),
-                height: thumb_height,
-                color: thumb,
-            });
+            thumb[3] *= if over { 0.45 } else { 0.22 };
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                track_left.round(),
+                (first_row + travel * progress).round(),
+                bar,
+                thumb_height.round(),
+                bar / 2.0,
+                thumb,
+            ));
         }
 
         // A working agent's row turns a quarter-circle spinner. Same
@@ -3835,10 +4214,17 @@ impl App {
         let content_left = left + inset;
         let content_width = width - inset * 2.0;
 
+        let on_rail = self.sidebar_on_rail();
+        let project_colors = crate::sidebar::project_colors(&rows, chrome.is_light);
         for (index, row_top, row_height) in self.sidebar_layout(&rows, scroll, first_row, footer_reserve) {
             let row = &rows[index];
+            if on_rail {
+                self.append_sidebar_rail_row(row, &project_colors, left, width, row_top, row_height, spin, quads);
+                continue;
+            }
             match row {
                 crate::sidebar::Row::Group {
+                    key,
                     label,
                     hint,
                     collapsed,
@@ -3865,9 +4251,15 @@ impl App {
                     };
                     pen = self.append_chrome(&arrow.to_string(), chrome.dim_text, (pen, text_top), quads);
                     pen += 3.0 * pt;
+                    // In the project's own colour, the one its square wears
+                    // on the rail, so the two views name a project alike.
+                    let mut folder = project_colors.get(key).copied().unwrap_or(chrome.dim_text);
+                    if !*active {
+                        folder[3] = 0.6;
+                    }
                     pen = self.append_chrome(
                         &crate::sidebar::FOLDER.to_string(),
-                        if *active { chrome.focus_rail } else { chrome.dim_text },
+                        folder,
                         (pen, text_top),
                         quads,
                     );
@@ -3902,9 +4294,11 @@ impl App {
                     let tile_top = row_top + gap;
                     let tile_height = (row_height - gap * 2.0).max(1.0);
 
-                    // One way to say "this is the tab in front": the row is
-                    // filled. It used to be filled *and* carry an accent bar,
-                    // two marks for one fact.
+                    // The tab in front, the way Windows 11 marks the page in
+                    // front of a navigation pane: a quiet fill and the accent
+                    // pill at its leading edge. The solid card it used to be
+                    // was the heaviest shape in the window, and it said
+                    // "selected" no louder than the pill does.
                     let hovered = self.window.pointer.0 >= row_left
                         && self.window.pointer.0 < row_left + row_width
                         && self.window.pointer.1 >= tile_top
@@ -3916,8 +4310,11 @@ impl App {
                             row_width,
                             tile_height,
                             radius,
-                            if *active { chrome.selected_bg } else { chrome.hover_bg },
+                            self.sidebar_selection_fill(*active),
                         ));
+                    }
+                    if *active {
+                        self.append_selection_pill(row_left, tile_top, tile_height, quads);
                     }
 
                     let line = self.window.chrome_font.metrics().height;
@@ -3988,7 +4385,7 @@ impl App {
                     if let (Some(subtitle), Some(second_top)) = (subtitle, second_top) {
                         let mut quiet = chrome.dim_text;
                         quiet[3] *= 0.8;
-                        let shown = self.chrome_fit(subtitle, row_left + row_width - 8.0 * pt - text_left);
+                        let shown = self.fit_subtitle(subtitle, row_left + row_width - 8.0 * pt - text_left);
                         self.append_chrome(&shown, quiet, (text_left, second_top), quads);
                     }
                 }
@@ -4000,6 +4397,10 @@ impl App {
         // browser's new-tab button carries its dropdown) and settings.
         // The tab navigator moved into the chevron menu and the
         // palette — relocated, never dropped.
+        if on_rail {
+            self.append_sidebar_rail_footer(left, width, footer_top, footer_height, quads);
+            return;
+        }
         use unterm_services::i18n::t;
         // The footer is one chrome line, not a two-line list row.
         let row_height = footer_height;
@@ -11507,8 +11908,18 @@ impl ApplicationHandler for App {
                 if self.window.dragging_sidebar_width {
                     // The strip follows the pointer; `sidebar::width` clamps
                     // it between readable and greedy.
+                    // Let go well short of the narrowest it can be, and it
+                    // folds to its rail; drawn back out, it opens again.
                     let pt = self.chrome_pt();
-                    self.window.sidebar_points = Some((self.window.pointer.0 / pt.max(0.001)).max(1.0));
+                    let points = (self.window.pointer.0 / pt.max(0.001)).max(1.0);
+                    if crate::sidebar::snaps_to_rail(points) {
+                        self.window.sidebar_rail = true;
+                        self.window.sidebar_unrailed = false;
+                    } else {
+                        self.window.sidebar_rail = false;
+                        self.window.sidebar_unrailed = true;
+                        self.window.sidebar_points = Some(points);
+                    }
                     self.resize_panes();
                     self.window.drawn_revision = None;
                     if let Some(live) = self.window.state.as_ref() {
@@ -11823,6 +12234,13 @@ impl ApplicationHandler for App {
                 }
                 if state == ElementState::Released && self.window.dragging_sidebar_width {
                     self.window.dragging_sidebar_width = false;
+                    // Remembered: a width dragged by hand that came back at
+                    // the default next launch was a width set every launch.
+                    crate::sidebar::Prefs {
+                        points: self.window.sidebar_points,
+                        rail: self.window.sidebar_rail,
+                    }
+                    .save();
                     return;
                 }
                 if state == ElementState::Pressed && self.pointer_on_scrollbar() {

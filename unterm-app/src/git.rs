@@ -237,7 +237,9 @@ pub fn branch_hint(directory: &std::path::Path) -> Option<String> {
         }
     }
     match known?.1 {
-        Panel::Status(status) if !status.branch.is_empty() => Some(shorten_branch(&status.branch)),
+        // Whole: the strip fits it to the pixels it has, cutting the middle
+        // once. Pre-cut to 28 characters here, it was cut a second time there.
+        Panel::Status(status) if !status.branch.is_empty() => Some(status.branch.clone()),
         _ => None,
     }
 }
