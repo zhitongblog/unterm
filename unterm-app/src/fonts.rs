@@ -120,7 +120,7 @@ pub fn bundled_face(name: &str, pixel_size: u32) -> Option<FontFace> {
         .iter()
         .map(|dir| dir.join(name))
         .find(|path| path.is_file())
-        .and_then(|path| FontFace::open(&path, pixel_size).ok())
+        .and_then(|path| FontFace::open_in_memory(&path, pixel_size).ok())
 }
 
 /// The bundled faces this build can actually find.
@@ -133,7 +133,7 @@ fn bundled_faces(pixel_size: u32) -> Vec<FontFace> {
             .map(|dir| dir.join(name))
             .find(|path| path.is_file());
         match found {
-            Some(path) => match FontFace::open(&path, pixel_size) {
+            Some(path) => match FontFace::open_in_memory(&path, pixel_size) {
                 Ok(face) => faces.push(face),
                 Err(err) => log::warn!("bundled font {path:?} would not open: {err:#}"),
             },
