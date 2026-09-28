@@ -13514,8 +13514,15 @@ fn command_entries() -> Vec<crate::palette::Entry> {
 }
 
 fn command_label(action: crate::keys::Action) -> String {
+    command_label_key(action)
+        .map(unterm_services::i18n::t)
+        .unwrap_or_else(|| action.label().to_string())
+}
+
+/// The catalogue key a palette row's name comes from.
+fn command_label_key(action: crate::keys::Action) -> Option<&'static str> {
     use crate::keys::Action;
-    let key = match action {
+    match action {
         Action::Copy => Some("command.copy"),
         Action::Paste => Some("command.paste"),
         Action::SplitRight => Some("command.split_right"),
@@ -13532,10 +13539,71 @@ fn command_label(action: crate::keys::Action) -> String {
         Action::TreeSidebar => Some("command.file_tree"),
         Action::DirJump => Some("command.directory"),
         Action::Settings => Some("command.settings"),
+        Action::ScrollPageUp => Some("command.scroll_page_up"),
+        Action::ScrollPageDown => Some("command.scroll_page_down"),
+        Action::PreviousPrompt => Some("command.previous_prompt"),
+        Action::NextPrompt => Some("command.next_prompt"),
+        Action::NextTab => Some("command.next_tab"),
+        Action::PreviousTab => Some("command.previous_tab"),
+        Action::CopyMode => Some("command.copy_mode"),
+        Action::QuickSelect => Some("command.quick_select"),
+        Action::Insights => Some("command.insights"),
+        Action::CockpitInbox => Some("command.agent_inbox"),
+        Action::GitPanel => Some("command.git_status"),
+        Action::Composer => Some("command.prompt_queue"),
+        Action::ThemePicker => Some("command.theme"),
+        Action::LeftTabBar => Some("command.left_tab_bar"),
+        Action::ClosePane => Some("command.close_pane"),
+        Action::CharSelect => Some("command.insert_character"),
+        Action::FleetLaunch => Some("command.launch_fleet"),
+        Action::ClearScrollback => Some("command.clear_scrollback"),
+        Action::ClearScreen => Some("command.clear_screen"),
+        Action::SwapPane => Some("command.swap_pane"),
+        Action::FocusPane(crate::keys::Direction::Left) => Some("command.focus_left"),
+        Action::FocusPane(crate::keys::Direction::Right) => Some("command.focus_right"),
+        Action::FocusPane(crate::keys::Direction::Up) => Some("command.focus_up"),
+        Action::FocusPane(crate::keys::Direction::Down) => Some("command.focus_down"),
+        Action::ResizePane(crate::keys::Direction::Left) => Some("command.resize_left"),
+        Action::ResizePane(crate::keys::Direction::Right) => Some("command.resize_right"),
+        Action::ResizePane(crate::keys::Direction::Up) => Some("command.resize_up"),
+        Action::ResizePane(crate::keys::Direction::Down) => Some("command.resize_down"),
+        Action::MoveTab(step) if step < 0 => Some("command.move_tab_left"),
+        Action::MoveTab(_) => Some("command.move_tab_right"),
+        Action::SelectTab(_) => Some("command.select_tab_by_number"),
+        Action::IncreaseFontSize => Some("command.font_bigger"),
+        Action::DecreaseFontSize => Some("command.font_smaller"),
+        Action::ResetFontSize => Some("command.font_reset"),
+        Action::ToggleFullScreen => Some("command.full_screen"),
         _ => None,
-    };
-    key.map(unterm_services::i18n::t)
-        .unwrap_or_else(|| action.label().to_string())
+    }
+}
+
+#[cfg(test)]
+mod palette_label_tests {
+    /// Every command the palette lists is named in every language. One that
+    /// fell back to its English label sat in a Chinese palette as
+    /// “Scroll Page Up” between 复制 and 粘贴.
+    #[test]
+    fn every_palette_command_is_translated_everywhere() {
+        let catalogues = [
+            include_str!("../../unterm-services/src/i18n/locales/en.json"),
+            include_str!("../../unterm-services/src/i18n/locales/zh-CN.json"),
+            include_str!("../../unterm-services/src/i18n/locales/zh-TW.json"),
+            include_str!("../../unterm-services/src/i18n/locales/ja.json"),
+            include_str!("../../unterm-services/src/i18n/locales/ko.json"),
+            include_str!("../../unterm-services/src/i18n/locales/de.json"),
+            include_str!("../../unterm-services/src/i18n/locales/fr.json"),
+            include_str!("../../unterm-services/src/i18n/locales/it.json"),
+            include_str!("../../unterm-services/src/i18n/locales/hi.json"),
+        ];
+        for &action in crate::keys::PALETTE_ACTIONS {
+            let key = super::command_label_key(action)
+                .unwrap_or_else(|| panic!("{:?} has no catalogue key", action));
+            for catalogue in catalogues {
+                assert!(catalogue.contains(&format!("\"{key}\"")), "{key} missing from a catalogue");
+            }
+        }
+    }
 }
 
 /// The saved workspaces: a row reopens each, and the last row saves one.
