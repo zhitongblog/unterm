@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use freetype::{
     FT_Done_Face, FT_Done_FreeType, FT_Face, FT_Get_Char_Index, FT_Init_FreeType, FT_Library,
-    FT_Load_Char, FT_Pixel_Mode, FT_Select_Size, FT_Set_Pixel_Sizes, FT_LOAD_COLOR,
+    FT_Load_Char, FT_New_Memory_Face, FT_Pixel_Mode, FT_Select_Size, FT_Set_Pixel_Sizes, FT_LOAD_COLOR,
     FT_LOAD_RENDER,
 };
 
@@ -103,6 +103,10 @@ pub struct FontFace {
     // library, so dropping the library first would dangle.
     _library: Arc<Library>,
     face: FT_Face,
+    /// The file's bytes, for a face opened with [`FontFace::open_in_memory`].
+    /// FreeType reads from them for as long as the face lives, so they are
+    /// dropped after it -- `Drop` frees the face, then the fields go.
+    _bytes: Option<Arc<[u8]>>,
     pixel_size: u32,
     /// What a rasterized bitmap must be multiplied by to land at
     /// `pixel_size`: 1.0 for a scalable face; a bitmap-only face renders at
@@ -118,7 +122,8 @@ impl Drop for FontFace {
     fn drop(&mut self) {
         // Released before `_library` drops and takes the same lock.
         let _inside = FREETYPE.lock();
-        // SAFETY: `face` came from a successful FT_New_Face and is dropped
+        // SAFETY: `face` came from a successful FT_New_Face or
+        // FT_New_Memory_Face and is dropped
         // exactly once, before the library it borrows from.
         unsafe {
             FT_Done_Face(self.face);
@@ -168,6 +173,27 @@ fn smoothing_exponent() -> f32 {
     }
 }
 
+/// The bytes of a font file, shared by every face opened from it while any
+/// of them is alive.
+fn shared_bytes(path: &Path) -> Result<Arc<[u8]>> {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, Weak};
+    static LOADED: Mutex<Option<HashMap<PathBuf, Weak<[u8]>>>> = Mutex::new(None);
+
+    let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let loaded = loaded.get_or_insert_with(HashMap::new);
+    if let Some(bytes) = loaded.get(path).and_then(Weak::upgrade) {
+        return Ok(bytes);
+    }
+    let bytes: Arc<[u8]> = std::fs::read(path)
+        .with_context(|| format!("reading font file {path:?}"))?
+        .into();
+    loaded.retain(|_, weak| weak.strong_count() > 0);
+    loaded.insert(path.to_path_buf(), Arc::downgrade(&bytes));
+    Ok(bytes)
+}
+
 impl FontFace {
     /// Load `path` and size it to `pixel_size` pixels per em.
     pub fn open(path: &Path, pixel_size: u32) -> Result<Self> {
@@ -201,6 +227,54 @@ impl FontFace {
         let mut face = Self {
             _library: library,
             face,
+            _bytes: None,
+            pixel_size: 0,
+            bitmap_scale: 1.0,
+        };
+        face.set_pixel_size(pixel_size)?;
+        Ok(face)
+    }
+
+    /// Load `path` into memory and open the face from there, leaving no
+    /// handle on the file.
+    ///
+    /// For the fonts that ship beside the executable. FT_New_Face keeps its
+    /// file open for the face's lifetime, and a file held open cannot be
+    /// replaced: an installer upgrading a running Unterm could only mark the
+    /// bundled fonts for deletion at reboot -- which then deleted the copies
+    /// the new version had just written. System fonts keep using
+    /// [`FontFace::open_indexed`]; nobody replaces those under us, and a CJK
+    /// collection is tens of megabytes better left mapped than copied.
+    ///
+    /// Faces of one file share its bytes: the emoji face is opened at every
+    /// size and in every stack.
+    pub fn open_in_memory(path: &Path, pixel_size: u32) -> Result<Self> {
+        let bytes = shared_bytes(path)?;
+        let library = Arc::new(Library::init()?);
+        let mut face: FT_Face = std::ptr::null_mut();
+        // SAFETY: `library.raw` is live, `bytes` outlives the face (it is
+        // stored beside it and dropped after it), and `face` is a valid
+        // out-pointer.
+        let err = {
+            let _inside = FREETYPE.lock();
+            unsafe {
+                FT_New_Memory_Face(
+                    library.raw,
+                    bytes.as_ptr(),
+                    bytes.len() as _,
+                    0,
+                    &mut face,
+                )
+            }
+        };
+        if err != 0 {
+            return Err(anyhow!("FT_New_Memory_Face({path:?}) failed with error {err}"));
+        }
+
+        let mut face = Self {
+            _library: library,
+            face,
+            _bytes: Some(bytes),
             pixel_size: 0,
             bitmap_scale: 1.0,
         };
@@ -583,6 +657,29 @@ mod tests {
             .iter()
             .map(std::path::PathBuf::from)
             .find(|path| path.exists())
+    }
+
+    /// A face opened in memory leaves its file free to be replaced -- the
+    /// thing an installer upgrading a running copy needs -- and still draws.
+    #[test]
+    fn a_face_in_memory_does_not_hold_its_file() {
+        let Some(path) = test_font() else {
+            eprintln!("no system font found; skipping");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("unterm-font-mem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let copy = dir.join("face.ttf");
+        std::fs::copy(&path, &copy).expect("copy the font");
+
+        let mut face = FontFace::open_in_memory(&copy, 24).expect("open in memory");
+        let twin = FontFace::open_in_memory(&copy, 12).expect("open again");
+        std::fs::remove_file(&copy).expect("the file is not held open by the face");
+
+        let glyph = face.rasterize('M').expect("rasterize M after the file is gone");
+        assert!(glyph.width > 0 && glyph.advance_x > 0);
+        drop(twin);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

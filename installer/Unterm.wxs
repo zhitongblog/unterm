@@ -13,7 +13,19 @@
       Description="Unterm terminal"
       Manufacturer="Alex" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Unterm is already installed." />
+    <!-- Install the new version first, remove the old one after. The default
+         (afterInstallValidate) removed the old product before anything else
+         ran, before CloseApplication below had stopped Unterm, so every
+         file a running Unterm held (the bundled fonts, which FreeType keeps
+         open) could only be marked "delete at reboot". The new install then
+         wrote fresh copies to the same paths, and the reboot deleted them:
+         0.71.11 to 0.71.14 left assets\fonts empty and every chrome icon
+         blank. Afterwards, the old product's removal only drops its reference
+         to components the new one shares (every GUID below is fixed), so it
+         deletes nothing the new version installed. -->
+    <MajorUpgrade
+      Schedule="afterInstallExecute"
+      DowngradeErrorMessage="A newer version of Unterm is already installed." />
     <!-- Force every file in the package onto disk, whatever is there already.
          The WezTerm-era releases stamped unterm.exe as FILEVERSION 1.0.0.0;
          next-core stamps the real 0.x. To Windows Installer 1.0.0.0 is the
