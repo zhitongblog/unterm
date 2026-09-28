@@ -8811,6 +8811,10 @@ impl App {
                 }
             }
             crate::palette::Command::DrainThenExit => {
+                // The Core was asked to stop once its sessions end; quitting
+                // must not then stop it at once. Its orphan watchdog caps how
+                // long "once its sessions end" may take with no window left.
+                crate::engine_backend::set_quit_intent(crate::engine_backend::QuitIntent::Drain);
                 // Off this thread: draining waits on shells that may take
                 // their time (or forever), and the one thread that must
                 // never wait on anything is the one under the pointer.
@@ -8831,19 +8835,15 @@ impl App {
                 self.perform_close(CloseOutcome::KeepSessions, Leaving::Process);
             }
             crate::palette::Command::CancelAndExit => {
-                if let crate::engine_backend::AppEngine::Core { client, .. } = &self.engine {
-                    let client = client.clone();
-                    std::thread::spawn(move || {
-                        if let Err(err) = client.shutdown() {
-                            log::warn!("could not stop the core: {err:#}");
-                        }
-                    });
-                }
+                // Everything goes: this window's sessions here, and the Core
+                // with whatever else it holds as the process leaves -- other
+                // windows attached or not. Only a `--headless` Core stays,
+                // since nobody started it to live and die with a window.
+                crate::engine_backend::set_quit_intent(
+                    crate::engine_backend::QuitIntent::Everything,
+                );
                 self.window.close_confirmed = true;
-                // `core.shutdown` ends everything it holds, which is more
-                // thorough than destroying the sessions one at a time from
-                // here -- and racing it would only make the log confusing.
-                self.perform_close(CloseOutcome::KeepSessions, Leaving::Process);
+                self.perform_close(CloseOutcome::EndSessions, Leaving::Process);
             }
             crate::palette::Command::OpenTabRename { index } => self.open_tab_rename(index),
             crate::palette::Command::SelectCaptureRegion => self.start_system_capture(false),
@@ -12109,6 +12109,23 @@ impl ApplicationHandler for App {
         } else if unterm_engine::window_requests_pending() {
             crate::tray::request_wake();
         }
+        // `unterm-cli quit` asked, from outside. Whatever state the window
+        // is in -- up, parked in the tray, mid-prompt -- it leaves the way a
+        // confirmed close does, without asking anyone: the question was
+        // answered at the prompt the command was typed at.
+        if !self.window.closing && crate::engine_backend::take_external_quit() {
+            log::info!("quit requested from outside; leaving");
+            self.window.tray = None;
+            self.window.close_confirmed = true;
+            // In-process sessions (the administrator window) end with the
+            // process; the Core's are the Core's, and `perform_close` asks it
+            // to stop on the way out.
+            let outcome = match &self.engine {
+                crate::engine_backend::AppEngine::Local(_) => CloseOutcome::EndSessions,
+                crate::engine_backend::AppEngine::Core { .. } => CloseOutcome::KeepSessions,
+            };
+            self.perform_close(outcome, Leaving::Process);
+        }
         if self.window.closing {
             // The close button was pressed. There is no native title bar to
             // do this for us any more.
@@ -12130,15 +12147,11 @@ impl ApplicationHandler for App {
                 }
                 Some(crate::tray::Action::QuitAll) => {
                     // The same irreversible action the close prompt's last
-                    // row performs, reached from the only surface left.
-                    if let crate::engine_backend::AppEngine::Core { client, .. } = &self.engine {
-                        let client = client.clone();
-                        std::thread::spawn(move || {
-                            if let Err(err) = client.shutdown() {
-                                log::warn!("could not stop the core: {err:#}");
-                            }
-                        });
-                    }
+                    // row performs, reached from the only surface left. The
+                    // Core is stopped by `perform_close` on the way out.
+                    crate::engine_backend::set_quit_intent(
+                        crate::engine_backend::QuitIntent::Everything,
+                    );
                     self.window.tray = None;
                     self.window.close_confirmed = true;
                     // It stopped the Core and then kept the process, with no

@@ -115,22 +115,79 @@ pub enum Backend {
     Core,
 }
 
-/// Set when this process is the one that started the Core.
+/// What the user chose when they quit, which decides what becomes of the Core.
 ///
-/// Only the front end that started it may stop it: a Core that was already
-/// up belongs to whoever started it, which may be a `--headless` one the
-/// user launched on purpose.
-static STARTED_THE_CORE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Set by the quit path just before it runs; read once by
+/// [`stop_core_if_ours`]. The default is the plain quit -- the last window
+/// closing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuitIntent {
+    /// This front end is leaving. The Core goes too unless another front end
+    /// is still attached to it, or it was started `--headless`.
+    Release = 0,
+    /// "Cancel and exit", "Quit all": end everything, whoever else is
+    /// attached. A headless Core is still left running -- it is not a
+    /// window's to end; `unterm-cli quit --all` is.
+    Everything = 1,
+    /// "Drain, then exit": the Core was asked to stop once its sessions end,
+    /// so stopping it now would be the opposite of what was chosen. Its
+    /// orphan watchdog puts a ceiling on how long that can take.
+    Drain = 2,
+}
 
-/// Stop the Core, if this process started it and nobody else is using it.
+static QUIT_INTENT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn set_quit_intent(intent: QuitIntent) {
+    QUIT_INTENT.store(intent as u8, std::sync::atomic::Ordering::Release);
+}
+
+fn quit_intent() -> QuitIntent {
+    match QUIT_INTENT.load(std::sync::atomic::Ordering::Acquire) {
+        1 => QuitIntent::Everything,
+        2 => QuitIntent::Drain,
+        _ => QuitIntent::Release,
+    }
+}
+
+/// Set when something outside the window -- `unterm-cli quit` -- asked this
+/// process to quit. The event loop reads it; see [`request_external_quit`].
+static EXTERNAL_QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the event loop to quit the ordinary way, from any thread.
+///
+/// A fuse follows: a loop that cannot get to the request within ten seconds
+/// is not going to, and the caller asked for the process to be gone.
+pub fn request_external_quit() {
+    EXTERNAL_QUIT.store(true, std::sync::atomic::Ordering::Release);
+    crate::mcp_host::wake_loop();
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        log::warn!("quit request not handled in 10s; exiting");
+        stop_core_if_ours();
+        std::process::exit(0);
+    });
+}
+
+/// Take an external quit request, if there is one.
+pub fn take_external_quit() -> bool {
+    EXTERNAL_QUIT.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
+/// Stop the Core as this process quits, if the quit calls for it.
 ///
 /// The Core is spawned detached so that closing a window does not end the
 /// shells behind it. That is right for a window, and wrong for the process
-/// ending: nothing else ever stops it, so every quit leaves one behind. They
-/// accumulate invisibly on macOS, and on Windows they hold `unterm-core.exe`
+/// ending: nothing else ever stopped it, so every quit left one behind. They
+/// accumulated invisibly on macOS, and on Windows they held `unterm-core.exe`
 /// open, which is what made an installer ask the user to close a program that
 /// has no window.
+///
+/// The Core makes the decision, not this process: it knows whether it was
+/// started `--headless` and which front ends are attached *right now*. This
+/// used to be decided here from the instance registry, where a window that
+/// had been killed stayed listed and vetoed every later quit -- the Core was
+/// left running with nobody to end it. An attachment is an open socket, which
+/// the kernel closes when its process dies, however it dies.
 ///
 /// The user has already been asked about live sessions by this point --
 /// `close_needs_confirmation` counts them before the last window closes -- so
@@ -145,9 +202,6 @@ pub fn stop_core_if_ours() {
     // that outlives us -- unless it already knows we are leaving.
     unterm_core::begin_shutdown();
 
-    if !STARTED_THE_CORE.load(Ordering::Acquire) {
-        return;
-    }
     // Two paths reach a quit -- winit's `exiting`, and the explicit teardown
     // that ends this process with `exit` -- and which one runs depends on how
     // the user left. Both call this; only the first may act.
@@ -156,21 +210,24 @@ pub fn stop_core_if_ours() {
     if ALREADY_STOPPED.swap(true, Ordering::AcqRel) {
         return;
     }
-    // Another window of another process is still talking to this Core. Ours
-    // is going away; the Core is not ours alone to end.
-    let others = unterm_services::server_info::list_live_instances()
-        .into_iter()
-        .filter(|instance| instance.pid != std::process::id())
-        .count();
-    if others > 0 {
-        log::info!("leaving unterm-core running for {others} other front end(s)");
-        return;
-    }
     let Some(shared) = CORE_SHARED.get() else {
         return;
     };
-    match shared.client.shutdown() {
-        Ok(()) => log::info!("stopped the unterm-core this process started"),
+    let intent = quit_intent();
+    if intent == QuitIntent::Drain {
+        log::info!("leaving unterm-core to drain; it exits once its sessions end");
+        return;
+    }
+    let request = unterm_core::lifetime::ShutdownRequest {
+        requester_pid: Some(std::process::id()),
+        unless_shared: intent == QuitIntent::Release,
+        unless_headless: true,
+    };
+    match shared.client.shutdown_when(request) {
+        Ok(answer) => match answer.get("status").and_then(|status| status.as_str()) {
+            Some("stopping") => log::info!("stopped unterm-core on quit"),
+            _ => log::info!("left unterm-core running: {answer}"),
+        },
         // Worth a line but not a failure: the Core may have exited already,
         // and there is nothing left to do about it either way.
         Err(err) => log::warn!("could not stop unterm-core on exit: {err:#}"),
@@ -178,10 +235,7 @@ pub fn stop_core_if_ours() {
 }
 
 fn connect_core_shared() -> Result<()> {
-    let (info, arrival) = unterm_core::ensure_running_reporting_arrival()?;
-    if arrival == unterm_core::CoreArrival::Started {
-        STARTED_THE_CORE.store(true, std::sync::atomic::Ordering::Release);
-    }
+    let info = unterm_core::ensure_running()?;
     let client = CoreEngineClient::connect(&info.endpoint, info.token.clone())?;
     // The config file is this process's to read; the Core just
     // applies whatever the connecting client was configured with.

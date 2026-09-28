@@ -28,6 +28,8 @@ use unterm_engine::{
 };
 use unterm_protocol::{BuildHandshake, ProcessRole};
 
+pub mod lifetime;
+
 /// Discovery record other processes read to find and authenticate to
 /// the running Core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +53,12 @@ pub struct DiscoveryInfo {
     /// alive; a GUI's own MCP server keeps `server.json` untouched.
     #[serde(default)]
     pub mcp_port: Option<u16>,
+    /// Whether this Core runs without windows on purpose (`--headless`).
+    /// A headless Core is left running when windows quit and is never ended
+    /// by the orphan watchdog; `unterm-cli quit` stops it only with `--all`.
+    /// Absent in records from older Cores, which read as window-owned.
+    #[serde(default)]
+    pub headless: bool,
 }
 
 /// Where this Core keeps its discovery record and instance lock.
@@ -104,6 +112,7 @@ pub fn write_discovery(
         process_role: ProcessRole::Core,
         started_at: started_at.into(),
         mcp_port,
+        headless: lifetime::mode() == lifetime::CoreMode::Headless,
     };
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(&info)?)?;
@@ -339,6 +348,9 @@ pub struct HostChannel {
 struct HostAttachment {
     id: u64,
     sender: std::sync::mpsc::Sender<String>,
+    /// The front end's process id, when it said (every front end since the
+    /// one-shot-quit change does).
+    pid: Option<u32>,
 }
 
 pub fn host_channel() -> &'static Arc<HostChannel> {
@@ -364,16 +376,30 @@ impl HostChannel {
     /// Older windows stay in the stack. If the current window closes,
     /// Core can fall back to the previous live one instead of becoming
     /// headless while another Unterm window is still open.
-    fn attach(&self, sender: std::sync::mpsc::Sender<String>) -> u64 {
+    fn attach(&self, sender: std::sync::mpsc::Sender<String>, pid: Option<u32>) -> u64 {
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.attachments
             .lock()
             .expect("host channel lock poisoned")
-            .push(HostAttachment { id, sender });
+            .push(HostAttachment { id, sender, pid });
         self.fail_pending();
         id
+    }
+
+    /// The process ids of the front ends attached right now (`None` for one
+    /// too old to have said).
+    ///
+    /// This is the liveness answer the quit path and the orphan watchdog
+    /// trust, instead of the instance registry: an attachment is an open
+    /// socket, and the kernel closes a process's sockets when it dies, however
+    /// it dies. A registry file outlives a killed window; this does not.
+    pub fn attached_pids(&self) -> Vec<Option<u32>> {
+        self.attachments
+            .lock()
+            .map(|attachments| attachments.iter().map(|attachment| attachment.pid).collect())
+            .unwrap_or_default()
     }
 
     /// Forget every front end and every waiter.
@@ -534,7 +560,7 @@ impl HostChannel {
 /// queued calls, and this thread reads replies. Sharing one thread would
 /// mean a call could not be sent while a reply was being awaited, which
 /// is exactly the situation the channel exists to serve.
-fn serve_host_channel(stream: TcpStream, running: &AtomicBool) -> Result<()> {
+fn serve_host_channel(stream: TcpStream, running: &AtomicBool, pid: Option<u32>) -> Result<()> {
     let channel = host_channel().clone();
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let mut writer = stream.try_clone().context("clone host channel stream")?;
@@ -551,7 +577,7 @@ fn serve_host_channel(stream: TcpStream, running: &AtomicBool) -> Result<()> {
         })
         .context("spawn host channel writer")?;
 
-    let attachment_id = channel.attach(tx);
+    let attachment_id = channel.attach(tx, pid);
     // Ask the new window who it is -- on another thread, because the
     // answer comes back through the read loop below. Asking from here
     // would block the only thread that could deliver the reply.
@@ -721,6 +747,17 @@ impl CoreServer {
         &self.started_at
     }
 
+    /// Clearing this stops `run` within a poll interval. For the orphan
+    /// watchdog, which decides from outside the connection loop.
+    pub fn running_flag(&self) -> Arc<AtomicBool> {
+        self.running.clone()
+    }
+
+    /// Set while a `core.drain {exit_when_idle: true}` is in progress.
+    pub fn exit_when_idle_flag(&self) -> Arc<AtomicBool> {
+        self.exit_when_idle.clone()
+    }
+
     pub fn run(&self) -> Result<()> {
         let watcher = {
             let hub = self.events.clone();
@@ -853,9 +890,54 @@ fn handle_stream(
                 ))?
             )?;
             stream.flush()?;
-            return serve_host_channel(stream, running);
+            let pid = request
+                .params
+                .get("pid")
+                .and_then(|v| v.as_u64())
+                .and_then(|v| u32::try_from(v).ok());
+            return serve_host_channel(stream, running, pid);
         }
-        let should_stop = request.method == "core.shutdown";
+        if request.method == "core.shutdown" {
+            // Decided here rather than in `dispatch`: whether to stop is
+            // this connection loop's business, and a conditional request
+            // that is declined must not stop anything.
+            let asked = lifetime::ShutdownRequest::from_params(&request.params);
+            let decision = lifetime::decide_shutdown(
+                asked,
+                lifetime::mode(),
+                &host_channel().attached_pids(),
+            );
+            let body = match decision {
+                Ok(()) => serde_json::json!({"status": "stopping"}),
+                Err(kept) => {
+                    let others = match kept {
+                        lifetime::Kept::OtherFrontEnds(count) => count,
+                        lifetime::Kept::Headless => 0,
+                    };
+                    serde_json::json!({
+                        "status": "kept",
+                        "reason": kept.reason(),
+                        "other_front_ends": others,
+                    })
+                }
+            };
+            writeln!(
+                stream,
+                "{}",
+                serde_json::to_string(&response_ok(request.id, body))?
+            )?;
+            stream.flush()?;
+            if decision.is_ok() {
+                // Every session ends here, explicitly, before the process
+                // does: a shell whose pseudoconsole is closed is told to go
+                // the ordinary way, which does not depend on how the
+                // process then exits.
+                destroy_all_sessions();
+                running.store(false, Ordering::Release);
+                break;
+            }
+            continue;
+        }
         let creates_session =
             matches!(request.method.as_str(), "session.create" | "session.split");
         if creates_session && draining.load(Ordering::Acquire) {
@@ -874,10 +956,6 @@ fn handle_stream(
         let response = dispatch(request, started_at, draining, exit_when_idle);
         writeln!(stream, "{response}")?;
         stream.flush()?;
-        if should_stop {
-            running.store(false, Ordering::Release);
-            break;
-        }
     }
     Ok(())
 }
@@ -926,6 +1004,11 @@ fn dispatch_inner(
                     "draining": is_draining,
                     "active_session_count": active_session_count,
                     "drained": is_draining && active_session_count == 0,
+                    "mode": match lifetime::mode() {
+                        lifetime::CoreMode::Headless => "headless",
+                        lifetime::CoreMode::GuiOwned => "gui_owned",
+                    },
+                    "front_ends": host_channel().attached_pids().len(),
                 }),
             ))?
         }
@@ -970,9 +1053,12 @@ fn dispatch_inner(
                 }),
             ))?
         }
-        "core.shutdown" => serde_json::to_string(&response_ok(
+        // Answered by the connection loop in `handle_stream`, which owns
+        // the decision to stop; reaching here would mean nothing stopped.
+        "core.shutdown" => serde_json::to_string(&response_error::<()>(
             id,
-            serde_json::json!({"status":"stopping"}),
+            "internal_error",
+            "core.shutdown is handled by the connection loop",
         ))?,
         "session.create" => {
             let (cols, rows) = parse_dimensions(&request.params);
@@ -2025,7 +2111,10 @@ impl HostChannelClient {
     ) -> Result<Self> {
         let token = token.into();
         let mut client = CoreClient::connect(address, token)?;
-        let _: Response<serde_json::Value> = client.request("core.host")?;
+        let _: Response<serde_json::Value> = client.request_with_params(
+            "core.host",
+            serde_json::json!({"pid": std::process::id()}),
+        )?;
         let stream = client.into_stream();
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
@@ -2312,6 +2401,21 @@ impl CoreEngineClient {
     /// Stop the Core now, ending every session it holds.
     pub fn shutdown(&self) -> Result<()> {
         self.call_unit("core.shutdown", serde_json::Value::Null)
+    }
+
+    /// A conditional `core.shutdown`: the Core decides, from what it can
+    /// see (its mode, the front ends attached right now), whether to stop.
+    /// Returns its answer -- `{"status":"stopping"}`, or `{"status":"kept",
+    /// "reason":...}`.
+    pub fn shutdown_when(&self, request: lifetime::ShutdownRequest) -> Result<serde_json::Value> {
+        self.call(
+            "core.shutdown",
+            serde_json::json!({
+                "requester_pid": request.requester_pid,
+                "unless_shared": request.unless_shared,
+                "unless_headless": request.unless_headless,
+            }),
+        )
     }
 
     /// Set the scrollback capacity for sessions the Core creates from
@@ -2968,6 +3072,24 @@ pub fn is_shutting_down() -> bool {
     SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// End every session this process holds, explicitly.
+///
+/// What a stopping Core does before it exits, whichever way it was told to
+/// stop. Ending them one by one closes each pseudoconsole the ordinary way,
+/// so the shells behind them are told to go instead of being orphaned or
+/// torn down by process exit.
+pub fn destroy_all_sessions() {
+    let engine = unterm_engine::next_core();
+    let Ok(sessions) = engine.list_sessions() else {
+        return;
+    };
+    for session in sessions {
+        if let Err(err) = engine.destroy_session(session.id) {
+            log::warn!("could not end session {} on shutdown: {err:#}", session.id);
+        }
+    }
+}
+
 /// Ensure the per-user Core process is available and return its
 /// discovery record. GUI, CLI and MCP entry points share this path.
 pub fn ensure_running() -> Result<DiscoveryInfo> {
@@ -3004,7 +3126,12 @@ pub fn ensure_running_reporting_arrival() -> Result<(DiscoveryInfo, CoreArrival)
     };
     let core_path = current.with_file_name(core_name);
     let mut command = std::process::Command::new(&core_path);
+    // The Core this starts belongs to windows: it ends when the last one
+    // is gone. The pid is how it tells, for the stretch before this
+    // process has attached a window of its own.
     command
+        .arg("--gui-pid")
+        .arg(std::process::id().to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

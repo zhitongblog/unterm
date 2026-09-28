@@ -172,6 +172,7 @@ impl PsuedoCon {
         // we do this simply by making it owned
         let _main_thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) };
         let proc = unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) };
+        super::notify_spawned(proc.as_raw_handle());
 
         Ok(WinChild {
             proc: Mutex::new(proc),

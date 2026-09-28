@@ -78,6 +78,7 @@ pub mod window_capture;
 /// agents. Read from the crate rather than from a config, which is where it
 /// used to live for no reason other than history.
 pub const VERSION: &str = unterm_protocol::PRODUCT_VERSION;
+pub mod process_lifetime;
 pub mod process_stats;
 pub mod supervisor;
 pub mod upgrade;

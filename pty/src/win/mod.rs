@@ -17,6 +17,26 @@ mod psuedocon;
 
 use filedescriptor::OwnedHandle;
 
+/// Called with the process handle of every program spawned into a
+/// pseudoconsole, right after it is created.
+type SpawnObserver = Box<dyn Fn(RawHandle) + Send + Sync>;
+
+static SPAWN_OBSERVER: std::sync::OnceLock<SpawnObserver> = std::sync::OnceLock::new();
+
+/// Install, once per process, a hook that sees every spawned session
+/// process. The embedding application uses it to put the process in a job
+/// object of its own choosing; the handle is only borrowed for the call.
+/// Returns false if one was already installed.
+pub fn set_spawn_observer(observer: impl Fn(RawHandle) + Send + Sync + 'static) -> bool {
+    SPAWN_OBSERVER.set(Box::new(observer)).is_ok()
+}
+
+pub(crate) fn notify_spawned(process: RawHandle) {
+    if let Some(observer) = SPAWN_OBSERVER.get() {
+        observer(process);
+    }
+}
+
 #[derive(Debug)]
 pub struct WinChild {
     proc: Mutex<OwnedHandle>,
