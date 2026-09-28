@@ -2103,6 +2103,14 @@ pub struct HostChannelClient {
 }
 
 impl HostChannelClient {
+    /// Whether the channel is still serving. It stops when the Core closes
+    /// the connection -- the Core died or was replaced -- and a stopped
+    /// channel leaves this front end invisible to the Core's count of who
+    /// is still using it.
+    pub fn is_alive(&self) -> bool {
+        self.worker.as_ref().is_some_and(|worker| !worker.is_finished())
+    }
+
     /// Register this process as the Core's front end and start serving.
     pub fn attach<A: ToSocketAddrs>(
         address: A,

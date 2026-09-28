@@ -981,8 +981,10 @@ impl WindowState {
             .unwrap_or(true),
             sidebar_scroll: 0,
             sidebar_points: sidebar_prefs.points,
-            sidebar_rail: sidebar_prefs.rail,
-            sidebar_unrailed: false,
+            sidebar_rail: sidebar_prefs.rail_choice,
+            sidebar_saved: sidebar_prefs,
+            sidebar_followed: None,
+            sidebar_hues: crate::sidebar::ProjectHues::default(),
             dragging_sidebar_width: false,
             dragging_tab: None,
             sidebar_collapsed: Default::default(),
@@ -1218,13 +1220,19 @@ struct WindowState {
     top_bar_quiet: bool,
     /// The strip's first visible row, for lists longer than the window.
     sidebar_scroll: usize,
+    /// The active row the strip last scrolled to show.
+    sidebar_followed: Option<usize>,
+    /// Which colour each project on the strip wears, kept so one project
+    /// opening or closing does not repaint the others.
+    sidebar_hues: crate::sidebar::ProjectHues,
     /// Its width in points, once somebody has dragged it.
     sidebar_points: Option<f32>,
-    /// Folded to its rail by hand (remembered between runs).
-    sidebar_rail: bool,
-    /// Opened out by hand in a window narrow enough to start on the rail,
-    /// for the rest of this run.
-    sidebar_unrailed: bool,
+    /// Folded (`true`) or opened (`false`) by hand, remembered between runs;
+    /// `None` leaves it to the window's width.
+    sidebar_rail: Option<bool>,
+    /// What `sidebar.json` holds, so letting go of the grip writes only a
+    /// change.
+    sidebar_saved: crate::sidebar::Prefs,
     /// True while a drag is holding the strip's right edge.
     dragging_sidebar_width: bool,
     /// A held tab row mid-reorder: which tab, and where it is being carried.
@@ -3595,12 +3603,17 @@ impl App {
     /// Whether the strip is folded to its column of icons: by hand, or
     /// because the window is too narrow to spare it (until opened by hand).
     fn sidebar_on_rail(&self) -> bool {
-        if self.window.sidebar_rail {
-            return true;
-        }
         let window_width = self.window.state.as_ref().map(|live| live.width).unwrap_or(800) as f32;
-        let logical = window_width / self.window.scale.max(0.1);
-        crate::sidebar::rail_by_default(logical) && !self.window.sidebar_unrailed
+        self.sidebar_on_rail_at(window_width)
+    }
+
+    /// The same, for a window of `window_width` pixels -- which `start` knows
+    /// before the window's state does. Asked without it, the first shell was
+    /// sized for the 800px fallback: on the rail, and 22 columns too wide.
+    fn sidebar_on_rail_at(&self, window_width: f32) -> bool {
+        self.window.sidebar_rail.unwrap_or_else(|| {
+            crate::sidebar::rail_by_default(window_width / self.window.scale.max(0.1))
+        })
     }
 
     /// The strip's width in pixels right now: nothing when it is closed, the
@@ -3609,7 +3622,7 @@ impl App {
         if !self.window.sidebar_open {
             return 0.0;
         }
-        if self.sidebar_on_rail() {
+        if self.sidebar_on_rail_at(window_width) {
             return crate::sidebar::rail_width(self.font_scale());
         }
         crate::sidebar::width(
@@ -4140,16 +4153,30 @@ impl App {
         let first_row = top + crate::ui_tokens::CHROME_SECTION_GAP * pt;
         let visible = self.sidebar_visible_rows().unwrap_or(1);
 
-        // Follow the selection. A strip longer than the window that stays put
-        // while tabs are switched shows a list with nothing selected in it.
+        // Follow the selection when it moves. A strip longer than the window
+        // that stays put while tabs are switched shows a list with nothing
+        // selected in it; one that snaps back on every frame will not let
+        // the wheel look anywhere else. And the answer is kept: the clicks
+        // and the rail's tooltips read the saved scroll, and a painter that
+        // scrolled only for itself had them naming the wrong row.
         let mut scroll = self.window.sidebar_scroll;
-        if let Some(active) = rows
+        let active = rows
             .iter()
-            .position(|row| matches!(row, crate::sidebar::Row::Tab { active: true, .. }))
-        {
-            scroll = crate::sidebar::scroll_to_show(scroll, active, visible);
+            .position(|row| matches!(row, crate::sidebar::Row::Tab { active: true, .. }));
+        if active != self.window.sidebar_followed {
+            if let Some(active) = active {
+                let extents: Vec<f32> = rows.iter().map(|row| self.sidebar_row_extent(row)).collect();
+                scroll = crate::sidebar::scroll_to_show_extents(
+                    scroll,
+                    active,
+                    &extents,
+                    footer_reserve - first_row,
+                );
+            }
+            self.window.sidebar_followed = active;
         }
         let scroll = crate::sidebar::clamp_scroll(scroll, rows.len(), visible);
+        self.window.sidebar_scroll = scroll;
         // The actions are pinned to the bottom edge: controls that
         // wander with the list length have to be found again every
         // time one is added.
@@ -4215,7 +4242,7 @@ impl App {
         let content_width = width - inset * 2.0;
 
         let on_rail = self.sidebar_on_rail();
-        let project_colors = crate::sidebar::project_colors(&rows, chrome.is_light);
+        let project_colors = self.window.sidebar_hues.colors(&rows, chrome.is_light);
         for (index, row_top, row_height) in self.sidebar_layout(&rows, scroll, first_row, footer_reserve) {
             let row = &rows[index];
             if on_rail {
@@ -9498,6 +9525,7 @@ impl App {
     /// to restart the application.
     fn recover_from_replaced_core(&mut self) {
         log::warn!("unterm-core was replaced; rebuilding this window's sessions");
+        crate::engine_backend::keep_host_channel();
         self.sync_tabs();
         let has_session = unterm_engine::SessionEngine::list_sessions(&self.engine)
             .map(|sessions| sessions.iter().any(|session| !session.is_dead))
@@ -11124,6 +11152,7 @@ impl App {
             self.update_window_title();
             self.keep_last_session_current();
             self.sync_frame();
+            crate::engine_backend::keep_host_channel();
         }
         // The composer is checked every tick while it is open, because it is
         // waiting for a pane to go idle and a prompt held back for a quarter of
@@ -11912,12 +11941,14 @@ impl ApplicationHandler for App {
                     // folds to its rail; drawn back out, it opens again.
                     let pt = self.chrome_pt();
                     let points = (self.window.pointer.0 / pt.max(0.001)).max(1.0);
-                    if crate::sidebar::snaps_to_rail(points) {
-                        self.window.sidebar_rail = true;
-                        self.window.sidebar_unrailed = false;
-                    } else {
-                        self.window.sidebar_rail = false;
-                        self.window.sidebar_unrailed = true;
+                    let folded = crate::sidebar::snaps_to_rail(points);
+                    // A choice only when it differs from what the window would
+                    // do by itself: a grip nudged on a narrow window's rail is
+                    // not the user folding every window from now on.
+                    let width = self.window.state.as_ref().map(|live| live.width).unwrap_or(800) as f32;
+                    let automatic = crate::sidebar::rail_by_default(width / self.window.scale.max(0.1));
+                    self.window.sidebar_rail = (folded != automatic).then_some(folded);
+                    if !folded {
                         self.window.sidebar_points = Some(points);
                     }
                     self.resize_panes();
@@ -12236,11 +12267,14 @@ impl ApplicationHandler for App {
                     self.window.dragging_sidebar_width = false;
                     // Remembered: a width dragged by hand that came back at
                     // the default next launch was a width set every launch.
-                    crate::sidebar::Prefs {
-                        points: self.window.sidebar_points,
-                        rail: self.window.sidebar_rail,
+                    let prefs = crate::sidebar::Prefs::new(
+                        self.window.sidebar_points,
+                        self.window.sidebar_rail,
+                    );
+                    if prefs != self.window.sidebar_saved {
+                        prefs.save();
+                        self.window.sidebar_saved = prefs;
                     }
-                    .save();
                     return;
                 }
                 if state == ElementState::Pressed && self.pointer_on_scrollbar() {

@@ -279,7 +279,10 @@ pub fn attach_host_channel() {
     // attaches. The channel it would replace is the one still carrying this
     // process's answers, so a second connection would gain nothing and cost
     // the Core a detach it has to reason about.
-    if HOST_CHANNEL.lock().is_ok_and(|held| held.is_some()) {
+    if HOST_CHANNEL
+        .lock()
+        .is_ok_and(|held| held.as_ref().is_some_and(|channel| channel.is_alive()))
+    {
         return;
     }
     match unterm_core::HostChannelClient::attach(
@@ -296,6 +299,63 @@ pub fn attach_host_channel() {
         Err(err) => {
             eprintln!("unterm: could not attach to unterm-core ({err:#}); it stays headless");
         }
+    }
+}
+
+/// Keep this window attached to whichever Core is running now.
+///
+/// The channel ends when its Core does. A Core that crashed and was replaced
+/// has a new port and token, and nothing reattached: the new Core counted no
+/// front end here, so another window quitting -- or its orphan watchdog --
+/// stopped it and every session this window had rebuilt on it. A first attach
+/// that failed left the window just as invisible. Checked from the event
+/// loop's housekeeping; the reattach itself runs off it, because dropping a
+/// channel waits for its thread, and that thread may be waiting for the loop.
+pub fn keep_host_channel() {
+    static TRYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if CORE_SHARED.get().is_none()
+        || unterm_core::is_shutting_down()
+        || HOST_CHANNEL
+            .lock()
+            .is_ok_and(|held| held.as_ref().is_some_and(|channel| channel.is_alive()))
+        || TRYING.swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("core-host-reattach".into())
+        .spawn(|| {
+            let stale = HOST_CHANNEL.lock().ok().and_then(|mut held| {
+                if held.as_ref().is_some_and(|channel| channel.is_alive()) {
+                    None
+                } else {
+                    held.take()
+                }
+            });
+            drop(stale);
+            match unterm_core::read_discovery() {
+                Ok(Some(info)) => match unterm_core::HostChannelClient::attach(
+                    &info.endpoint,
+                    info.token.clone(),
+                    std::sync::Arc::new(crate::mcp_host::AppHostResponder),
+                ) {
+                    Ok(channel) => {
+                        if let Ok(mut held) = HOST_CHANNEL.lock() {
+                            if held.is_none() {
+                                *held = Some(channel);
+                                log::info!("reattached to unterm-core as its front end");
+                            }
+                        }
+                    }
+                    Err(err) => log::debug!("could not reattach to unterm-core yet: {err:#}"),
+                },
+                Ok(None) => {}
+                Err(err) => log::debug!("no unterm-core to reattach to: {err:#}"),
+            }
+            TRYING.store(false, std::sync::atomic::Ordering::Release);
+        });
+    if spawned.is_err() {
+        TRYING.store(false, std::sync::atomic::Ordering::Release);
     }
 }
 

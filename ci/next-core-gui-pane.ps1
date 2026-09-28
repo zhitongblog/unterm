@@ -531,8 +531,12 @@ $Suites = @(
         # 33 since the strip folds to a rail where each project is a lettered
         # square in its own colour, cuts a long branch once in the middle,
         # and counts what fits from each row's own height.
-        ExpectedCount = 33
+        # 35 since a row picked from the keyboard is brought into view by its
+        # own height, and a project keeps its colour while others come and go.
+        ExpectedCount = 35
         RequiredTests = @(
+            "sidebar::tests::a_tall_row_is_followed_by_its_own_height",
+            "sidebar::tests::a_project_keeps_its_colour_as_others_come_and_go",
             "sidebar::tests::projects_on_the_rail_are_told_apart",
             "sidebar::tests::a_long_branch_is_cut_once_in_the_middle",
             "sidebar::tests::a_strip_with_room_left_does_not_scroll",

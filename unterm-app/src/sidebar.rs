@@ -55,6 +55,30 @@ pub fn rows_that_fit_at_end(extents: &[f32], room: f32) -> usize {
     count.max(1)
 }
 
+/// The first row to show so that `row` is on screen, measured in the rows'
+/// own heights: unchanged when it already is, `row` itself when it is above,
+/// and otherwise as far back from it as `room` allows. A count of rows that
+/// fit is not enough once rows differ in height -- counted from the list's
+/// short end, it let a tall row at the other end scroll out of sight.
+pub fn scroll_to_show_extents(scroll_top: usize, row: usize, extents: &[f32], room: f32) -> usize {
+    if row >= extents.len() {
+        return scroll_top;
+    }
+    if row < scroll_top {
+        return row;
+    }
+    if extents[scroll_top..=row].iter().sum::<f32>() <= room {
+        return scroll_top;
+    }
+    let mut start = row;
+    let mut used = extents[row];
+    while start > 0 && used + extents[start - 1] <= room {
+        start -= 1;
+        used += extents[start];
+    }
+    start
+}
+
 /// The hues a project can wear: muted, and clear of the amber the chrome
 /// keeps for "needs you".
 const PROJECT_HUES: [[u8; 3]; 8] = [
@@ -78,40 +102,77 @@ fn preferred_hue(key: &str) -> usize {
     (hash % PROJECT_HUES.len() as u32) as usize
 }
 
-/// Each project's colour, for the projects in `rows`.
+/// Each project's colour, remembered across frames.
 ///
 /// The rail has no room for names, and a rule between runs of identical
 /// terminal icons told nobody which run was which project. A project wears
-/// the hue its key hashes to unless a project above it already does; then it
-/// takes the next free one. Eight hues hashed blindly put two of three
+/// the hue its key hashes to unless another project on screen already does;
+/// then it takes the next free one. Eight hues hashed blindly put two of three
 /// projects in the same rose, which is no way to tell them apart.
-pub fn project_colors(rows: &[Row], is_light: bool) -> HashMap<String, [f32; 4]> {
-    let mut taken = [false; PROJECT_HUES.len()];
-    let mut colors = HashMap::new();
-    for row in rows {
-        let Row::Group { key, .. } = row else {
-            continue;
-        };
-        if colors.contains_key(key) {
-            continue;
+///
+/// Handing the hues out afresh each frame, in row order, meant a project's
+/// colour hung on its neighbours: opening or closing another project, or
+/// moving a tab, could repaint one that nobody touched. So a hue, once given,
+/// stays with its project for as long as that project is on screen, and a
+/// project coming back asks for the hue it last had before anything else.
+#[derive(Debug, Default, Clone)]
+pub struct ProjectHues {
+    remembered: HashMap<String, usize>,
+    shown: Vec<String>,
+}
+
+impl ProjectHues {
+    pub fn colors(&mut self, rows: &[Row], is_light: bool) -> HashMap<String, [f32; 4]> {
+        let mut keys: Vec<&String> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Group { key, .. } => Some(key),
+                _ => None,
+            })
+            .collect();
+        keys.sort();
+        keys.dedup();
+        // Projects already on screen settle first, so a newcomer never takes
+        // a hue someone is wearing. Within each set, key order, so the answer
+        // does not depend on where the rows happen to sit.
+        let (mut staying, arriving): (Vec<&String>, Vec<&String>) =
+            keys.iter().partition(|key| self.shown.iter().any(|shown| shown == **key));
+        staying.extend(arriving);
+
+        let mut taken = [false; PROJECT_HUES.len()];
+        let mut hues = HashMap::new();
+        for key in staying {
+            let asked = self
+                .remembered
+                .get(key)
+                .copied()
+                .unwrap_or_else(|| preferred_hue(key));
+            let hue = (0..PROJECT_HUES.len())
+                .map(|step| (asked + step) % PROJECT_HUES.len())
+                .find(|hue| !taken[*hue])
+                .unwrap_or(asked);
+            taken[hue] = true;
+            hues.insert(key.clone(), hue);
         }
-        let preferred = preferred_hue(key);
-        let hue = (0..PROJECT_HUES.len())
-            .map(|step| (preferred + step) % PROJECT_HUES.len())
-            .find(|hue| !taken[*hue])
-            .unwrap_or(preferred);
-        taken[hue] = true;
-        let [r, g, b] = PROJECT_HUES[hue];
-        let color = crate::chrome::srgb(r, g, b);
-        let color = if is_light {
-            // The same hue, dark enough to carry white on a light surface.
-            crate::chrome::mix(color, [0.0, 0.0, 0.0, 1.0], 0.35)
-        } else {
-            color
-        };
-        colors.insert(key.clone(), color);
+        for (key, hue) in &hues {
+            self.remembered.insert(key.clone(), *hue);
+        }
+        self.shown = hues.keys().cloned().collect();
+
+        hues.into_iter()
+            .map(|(key, hue)| {
+                let [r, g, b] = PROJECT_HUES[hue];
+                let color = crate::chrome::srgb(r, g, b);
+                let color = if is_light {
+                    // The same hue, dark enough to carry white on a light surface.
+                    crate::chrome::mix(color, [0.0, 0.0, 0.0, 1.0], 0.35)
+                } else {
+                    color
+                };
+                (key, color)
+            })
+            .collect()
     }
-    colors
 }
 
 /// The letter a project goes by on the rail: the first letter or digit of
@@ -145,15 +206,25 @@ pub fn snaps_to_rail(points: f32) -> bool {
 }
 
 /// What the strip remembers between runs: how wide it was dragged, and
-/// whether it was folded to its rail.
+/// whether somebody folded or opened it by hand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Prefs {
     pub points: Option<f32>,
+    /// Folded (`true`) or opened (`false`) by hand; `None` follows the
+    /// window's width. A plain flag could not say "opened by hand in a narrow
+    /// window", and saved a fold the window had made by itself as the user's.
     #[serde(default)]
-    pub rail: bool,
+    pub rail_choice: Option<bool>,
+    /// The first release's flag, read so a fold made then is kept.
+    #[serde(default, rename = "rail", skip_serializing)]
+    legacy_rail: bool,
 }
 
 impl Prefs {
+    pub fn new(points: Option<f32>, rail_choice: Option<bool>) -> Self {
+        Self { points, rail_choice, legacy_rail: false }
+    }
+
     fn path() -> Option<std::path::PathBuf> {
         unterm_protocol::state_path("sidebar.json")
     }
@@ -162,20 +233,30 @@ impl Prefs {
     /// not parse -- a strip that will not open over a bad file is worse than
     /// one that forgot its width.
     pub fn load() -> Self {
-        Self::path()
+        let mut prefs: Self = Self::path()
             .and_then(|path| std::fs::read_to_string(path).ok())
             .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if prefs.rail_choice.is_none() && prefs.legacy_rail {
+            prefs.rail_choice = Some(true);
+        }
+        prefs.legacy_rail = false;
+        prefs
     }
 
+    /// Written whole or not at all: a file cut short by a crash would parse
+    /// as nothing and quietly reset the strip.
     pub fn save(&self) {
         let Some(path) = Self::path() else {
             return;
         };
-        if let Ok(text) = serde_json::to_string(self) {
-            if let Err(err) = std::fs::write(&path, text) {
-                log::warn!("could not save the sidebar width to {path:?}: {err}");
-            }
+        let Ok(text) = serde_json::to_string(self) else {
+            return;
+        };
+        let staged = path.with_extension("json.tmp");
+        let written = std::fs::write(&staged, text).and_then(|()| std::fs::rename(&staged, &path));
+        if let Err(err) = written {
+            log::warn!("could not save the sidebar layout to {path:?}: {err}");
         }
     }
 }
@@ -948,6 +1029,19 @@ mod tests {
     /// tabs came out under beta's header -- a header naming two tabs with
     /// four rows beneath it, none of the last three its own.
     #[test]
+    fn a_tall_row_is_followed_by_its_own_height() {
+        // Twelve tall rows above eight short ones, ten lines of room: from
+        // the short end nine fit, but only six tall ones do.
+        let mut extents = vec![1.55; 12];
+        extents.extend(vec![0.95; 8]);
+        let start = scroll_to_show_extents(0, 9, &extents, 10.0);
+        let shown: f32 = extents[start..=9].iter().sum();
+        assert!(shown <= 10.0 && start <= 9, "row 9 from {start} needs {shown}");
+        assert_eq!(scroll_to_show_extents(4, 6, &extents, 10.0), 4);
+        assert_eq!(scroll_to_show_extents(5, 2, &extents, 10.0), 2);
+    }
+
+    #[test]
     fn a_project_gathers_every_one_of_its_tabs() {
         let tabs = vec![
             tab(0, "one", Some("/work/alpha")),
@@ -1524,7 +1618,8 @@ mod tests {
             active: false,
         };
         let rows: Vec<Row> = (0..8).map(|n| group(&format!("D:/code/p{n}"))).collect();
-        let colors = project_colors(&rows, false);
+        let mut hues = ProjectHues::default();
+        let colors = hues.colors(&rows, false);
         let mut seen: Vec<[u32; 3]> = colors
             .values()
             .map(|c| [(c[0] * 255.0) as u32, (c[1] * 255.0) as u32, (c[2] * 255.0) as u32])
@@ -1533,10 +1628,68 @@ mod tests {
         seen.dedup();
         assert_eq!(seen.len(), 8, "eight projects, eight colours");
         // The same project keeps its colour from one frame to the next.
-        assert_eq!(project_colors(&rows, false), colors);
+        assert_eq!(hues.colors(&rows, false), colors);
         assert_eq!(project_initial("unterm"), "U");
         assert_eq!(project_initial(".claude"), "C");
         assert_eq!(project_initial("项目"), "项");
+    }
+
+    /// A project keeps its colour while others open and close around it, and
+    /// wherever its rows happen to sit.
+    #[test]
+    fn a_project_keeps_its_colour_as_others_come_and_go() {
+        let group = |key: &str| Row::Group {
+            key: key.into(),
+            label: key.into(),
+            hint: None,
+            count: 1,
+            collapsed: false,
+            active: false,
+        };
+        // Find two keys that ask for the same hue, so one of them must move.
+        let keys: Vec<String> = (0..64).map(|n| format!("/code/p{n}")).collect();
+        let (first, clash) = keys
+            .iter()
+            .enumerate()
+            .find_map(|(i, a)| {
+                keys[i + 1..]
+                    .iter()
+                    .find(|b| preferred_hue(b) == preferred_hue(a))
+                    .map(|b| (a.clone(), b.clone()))
+            })
+            .expect("64 keys over 8 hues share one");
+        let (early, late) = if first < clash { (first, clash) } else { (clash, first) };
+        let others: Vec<String> = keys
+            .iter()
+            .filter(|k| **k != early && **k != late)
+            .take(3)
+            .cloned()
+            .collect();
+
+        let mut hues = ProjectHues::default();
+        // The later key is open first and gets the hue both of them want.
+        let alone = hues.colors(&[group(&late)], false)[&late];
+        // The earlier key sorts ahead of it, but arrives later: it moves over.
+        let mut rows = vec![group(&early), group(&late)];
+        let both = hues.colors(&rows, false);
+        assert_eq!(both[&late], alone, "an arrival does not repaint who was there");
+        assert_ne!(both[&early], both[&late]);
+        // More projects open, the rows reorder, and nobody changes.
+        rows.extend(others.iter().map(|k| group(k)));
+        rows.reverse();
+        let crowd = hues.colors(&rows, false);
+        assert_eq!(crowd[&late], alone);
+        assert_eq!(crowd[&early], both[&early]);
+        // A neighbour closes; the rest stay as they were.
+        rows.retain(|row| !matches!(row, Row::Group { key, .. } if *key == others[0]));
+        let fewer = hues.colors(&rows, false);
+        for key in [&early, &late, &others[1], &others[2]] {
+            assert_eq!(fewer[key], crowd[key], "{key} was repainted");
+        }
+        // A project that closes and comes back gets its old colour.
+        hues.colors(&[group(&late)], false);
+        let back = hues.colors(&[group(&late), group(&early)], false);
+        assert_eq!(back[&early], both[&early]);
     }
 
     /// Letting the grip go well short of the minimum folds the strip to its
