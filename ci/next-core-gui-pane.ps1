@@ -528,8 +528,15 @@ $Suites = @(
         # past the end looked right and only showed itself on the way back.
         # 29 since a row leads with what an agent is doing: a task told apart
         # from a name, and the strip's width no longer following the count.
-        ExpectedCount = 29
+        # 33 since the strip folds to a rail where each project is a lettered
+        # square in its own colour, cuts a long branch once in the middle,
+        # and counts what fits from each row's own height.
+        ExpectedCount = 33
         RequiredTests = @(
+            "sidebar::tests::projects_on_the_rail_are_told_apart",
+            "sidebar::tests::a_long_branch_is_cut_once_in_the_middle",
+            "sidebar::tests::a_strip_with_room_left_does_not_scroll",
+            "sidebar::tests::the_strip_folds_to_a_rail",
             # The header's count and the rows beneath it are now the same
             # list, and a row past the ninth leads to its own tab rather than
             # to the last one.
