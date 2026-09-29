@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.71.15 — 2026-09-29
+
+### Added
+
+- **`unterm-cli quit [--all] [--this-install] [--wait <secs>]`** ends every
+  Unterm process of yours the orderly way and checks they are gone: each
+  window quits as if its close button were pressed (tabs saved, the tray and
+  administrator windows included), then the Core ends its sessions. A
+  `--headless` Core is left alone unless `--all`. Typed into an Unterm tab, it
+  hands the work to a detached copy of itself so the quit finishes when the tab
+  closes around it.
+
+- **The sidebar folds to an icon rail**, the way Windows 11's navigation pane
+  does: drag the grip past its minimum, or start in a narrow window. On the
+  rail each project is a lettered square in its own colour, and that colour
+  stays put while other projects open and close.
+
+### Changed
+
+- **Quitting the last window ends the Core too**, unless the window is parked
+  in the tray or the Core was started with `--headless`. A Core whose window
+  died no longer lives on as an orphan with nobody to show its shells.
+
+- **On Windows the Core holds its shells in a job**, so a Core killed from Task
+  Manager takes its shells with it; an orderly quit still leaves what you
+  launched from them (an editor window) running.
+
+- **Chinese text falls back to more system fonts on macOS** (Hiragino Sans GB,
+  Heiti SC, Songti SC) when PingFang is missing, and the command palette is
+  translated in every language.
+
+### Fixed
+
+- **A window stopped counting as open after its Core was replaced**, so the new
+  Core could shut down under it once the window that started it went away.
+
+- **The sidebar remembered a fold nobody asked for** after a nudge of the grip,
+  forgot an expanded strip in a narrow window, sized the first shell for the
+  wrong width, and let a row picked from the keyboard sit off screen.
+
+- **Ctrl-C on a `--headless` Core skipped the orderly stop**, ending sessions by
+  process exit instead of one by one.
+
+- **Upgrading with the MSI** installs the new version before removing the old,
+  and bundled fonts are read into memory so they no longer hold their files
+  open during an upgrade.
+
 ## v0.71.14 — 2026-09-25
 
 ### Changed
