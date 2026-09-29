@@ -9597,6 +9597,17 @@ impl App {
             .chain(self.parked.iter().map(|parked| &parked.state))
             .map(pane_set)
             .collect();
+        // A window whose first shell is still being made has a session in the
+        // Core that is in none of its tabs yet: to everyone else it looks
+        // like an orphan. "New Unterm Window Here" with Unterm parked in the
+        // tray brought the old window back and opened the new one in the same
+        // breath, and the old one took the new window's shell while it was
+        // being made -- one pane in two windows, each drawing it at its own
+        // size, so the two never showed the same thing. Orphans wait until
+        // every window has its own.
+        let adopt_orphans = std::iter::once(&self.window)
+            .chain(self.parked.iter().map(|parked| &parked.state))
+            .all(|state| state.startup_session.is_none());
         let mut changed = false;
         for index in 0..shown.len() {
             let elsewhere: std::collections::HashSet<usize> = shown
@@ -9609,7 +9620,7 @@ impl App {
                 0 => &mut self.window,
                 other => &mut self.parked[other - 1].state,
             };
-            let moved = adopt_sessions_into(state, &sessions, &live_ids, &elsewhere);
+            let moved = adopt_sessions_into(state, &sessions, &live_ids, &elsewhere, adopt_orphans);
             if moved {
                 shown[index] = pane_set(state);
                 // The front window's is settled at the end of this method,
@@ -11223,7 +11234,21 @@ impl App {
         match worker.join() {
             Ok(Ok(session)) => {
                 crate::startup_trace::mark("session.ready");
-                self.window.tab_id = self.window.tabs.create_tab(session.id).ok();
+                // This window asked for the shell; it is this window's. Any
+                // other that picked it up as an orphan before now gives it
+                // back, rather than both drawing it.
+                for parked in &mut self.parked {
+                    if parked.state.tabs.tab_of_pane(session.id).is_some() {
+                        parked.state.tabs.close_pane(session.id);
+                        parked.state.pane_sizes.remove(&session.id);
+                        settle_active_tab(&mut parked.state);
+                    }
+                }
+                self.window.tab_id = self
+                    .window
+                    .tabs
+                    .tab_of_pane(session.id)
+                    .or_else(|| self.window.tabs.create_tab(session.id).ok());
                 self.engine.refresh_cached_frame(session.id);
                 self.window.quiet_since = None;
                 self.window.drawn_revision = None;
@@ -13032,6 +13057,7 @@ fn adopt_sessions_into(
     sessions: &[unterm_engine::SessionSnapshot],
     live_ids: &std::collections::HashSet<usize>,
     shown_elsewhere: &std::collections::HashSet<usize>,
+    adopt_orphans: bool,
 ) -> bool {
     state
         .pane_notices
@@ -13078,7 +13104,7 @@ fn adopt_sessions_into(
         }
     }
 
-    for session in sessions {
+    for session in sessions.iter().filter(|_| adopt_orphans) {
         if !window_should_adopt(
             session.id,
             session.split_from,
