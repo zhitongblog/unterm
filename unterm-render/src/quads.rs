@@ -165,11 +165,36 @@ fn resolve(style: &CellStyle, colors: FrameColors) -> ([f32; 4], [f32; 4]) {
         .map(|color| to_rgba(color, colors.palette))
         .unwrap_or(colors.background);
 
-    if style.inverse {
+    let (foreground, background) = if style.inverse {
         (background, foreground)
     } else {
         (foreground, background)
+    };
+    // SGR 8: the text is there to select and copy, not to see.
+    if style.hidden {
+        return (background, background);
     }
+    // SGR 2. Parsed since the first kernel and never drawn, so everything a
+    // program meant to recede -- Claude Code's suggested prompt and
+    // placeholders, a shell's autosuggestion, a dimmed help line -- came out
+    // exactly as bright as what the user typed next to it. Halfway to the
+    // background, as xterm and most terminals render it; bold and faint
+    // together stay faint, since the brightness is the part being asked for.
+    if style.faint {
+        return (faint_of(foreground, background), background);
+    }
+    (foreground, background)
+}
+
+/// Faint text: the colour halfway to the cell's background.
+fn faint_of(foreground: [f32; 4], background: [f32; 4]) -> [f32; 4] {
+    const SHARE: f32 = 0.5;
+    [
+        background[0] + (foreground[0] - background[0]) * SHARE,
+        background[1] + (foreground[1] - background[1]) * SHARE,
+        background[2] + (foreground[2] - background[2]) * SHARE,
+        foreground[3],
+    ]
 }
 
 /// A cell's colour as the GPU wants it.
@@ -524,6 +549,39 @@ mod tests {
 
         // The narrow cell starts after both columns of the wide one.
         assert_eq!(out.backgrounds[1].left, 20.0);
+    }
+
+    /// SGR 2 recedes: Claude Code's suggested prompt must not look like what
+    /// the user typed beside it. SGR 8 hides the glyph but keeps the cell.
+    #[test]
+    fn faint_text_is_dimmer_and_hidden_text_is_invisible() {
+        let (atlas, slot) = atlas_with_glyph();
+        let draw = |style: CellStyle| {
+            let mut out = FrameQuads::default();
+            build_row(
+                &[cell('a', style)],
+                0.0,
+                0.0,
+                metrics(),
+                colors(),
+                &atlas,
+                |_| Some(slot),
+                &mut out,
+                &Default::default(),
+            );
+            out.glyphs.first().map(|glyph| glyph.quad.color)
+        };
+        let plain = draw(CellStyle::default()).expect("plain glyph");
+        let faint = draw(CellStyle { faint: true, ..CellStyle::default() }).expect("faint glyph");
+        let (fg, bg) = (colors().foreground, colors().background);
+        for channel in 0..3 {
+            let expected = bg[channel] + (fg[channel] - bg[channel]) * 0.5;
+            assert!((faint[channel] - expected).abs() < 1e-6, "{faint:?}");
+        }
+        assert_ne!(faint, plain);
+        if let Some(hidden) = draw(CellStyle { hidden: true, ..CellStyle::default() }) {
+            assert_eq!(&hidden[..3], &bg[..3]);
+        }
     }
 
     #[test]

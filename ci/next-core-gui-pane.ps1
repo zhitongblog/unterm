@@ -230,8 +230,10 @@ $Suites = @(
         Name = "render quads"
         Package = "unterm-render"
         Filter = "quads::tests::"
-        ExpectedCount = 10
+        # 11 since faint (SGR 2) is drawn dimmer instead of at full strength.
+        ExpectedCount = 11
         RequiredTests = @(
+            "quads::tests::faint_text_is_dimmer_and_hidden_text_is_invisible",
             "quads::tests::a_glyph_sits_on_the_baseline_by_its_bearings",
             "quads::tests::texture_coordinates_follow_the_atlas_when_it_grows",
             "quads::tests::a_wide_cell_covers_both_its_columns",

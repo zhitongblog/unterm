@@ -5970,6 +5970,9 @@ impl App {
             return;
         }
         let pane = self.focused_session();
+        if !crate::ghost::pane_takes_predictions(pane as u64) {
+            return;
+        }
         let Some((_input, ghost)) = unterm_services::ghost_text::current_ghost(pane as u64) else {
             return;
         };
@@ -11825,6 +11828,7 @@ impl ApplicationHandler for App {
                     self.window.shift_held,
                     self.window.alt_held,
                 ) && unterm_services::ghost_text::has_pending_ghost(pane as u64)
+                    && crate::ghost::pane_takes_predictions(pane as u64)
                 {
                     if let Some(continuation) = unterm_services::ghost_text::accept(pane as u64) {
                         if let Err(err) = self.engine.write_input(pane, &continuation) {

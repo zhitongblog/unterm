@@ -34,10 +34,34 @@ fn ensure_manifest_flags_loading() {
     });
 }
 
+/// Whether keys typed into `pane_id` are a command line worth predicting.
+///
+/// Not while an agent owns the pane. The predictor only sees keystrokes, so
+/// inside Claude Code's prompt box it recorded every prompt as a "command",
+/// shared it with every other tab, and drew it at the cursor as grey text --
+/// on top of the agent's own suggestion, and sometimes a prompt from another
+/// tab. It read as the agent suggesting something it never saw. The agent has
+/// its own completion; ours is for the shell.
+///
+/// From what the status bar already knows about the pane (the foreground
+/// process, matched against the agent manifests), so a keystroke never waits
+/// on the process table.
+pub fn pane_takes_predictions(pane_id: u64) -> bool {
+    crate::statsbar::known_facts(pane_id as usize)
+        .agent_id
+        .is_none()
+}
+
 /// Feed a key that reached the PTY to the predictor.
 ///
 /// Returns true when the overlay may have changed and therefore needs a frame.
 pub fn observe_key(pane_id: u64, key: &Key, ctrl: bool, alt: bool) -> bool {
+    if !pane_takes_predictions(pane_id) {
+        // Nothing typed here is kept, and nothing half-typed before the
+        // agent started is left hanging at its prompt.
+        unterm_services::ghost_text::cancel_input(pane_id);
+        return false;
+    }
     ensure_manifest_flags_loading();
     match effect_for(key, ctrl, alt) {
         Effect::Events(events) => {
@@ -56,6 +80,10 @@ pub fn observe_key(pane_id: u64, key: &Key, ctrl: bool, alt: bool) -> bool {
 
 /// Feed text committed by an input method to the predictor.
 pub fn observe_text(pane_id: u64, text: &str) -> bool {
+    if !pane_takes_predictions(pane_id) {
+        unterm_services::ghost_text::cancel_input(pane_id);
+        return false;
+    }
     let mut changed = false;
     for ch in text.chars().filter(|ch| !ch.is_control()) {
         unterm_services::ghost_text::observe(pane_id, InputEvent::Char(ch), &[]);
