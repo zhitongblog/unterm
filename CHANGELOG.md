@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.71.16 — 2026-09-30
+
+### Fixed
+
+- **One tab showed up in two windows, and the two never agreed.** A new
+  window's first shell is made on a background thread; for those few
+  milliseconds it was in the Core but in nobody's tabs, and another window of
+  the same Unterm took it in as an orphan. Each window then sized it to its own
+  grid, so the two drew different things. It happened most with "New Unterm
+  Window Here" from Finder, including while Unterm was parked in the tray. If
+  you have such a window now, close one of the two windows (not the tab): its
+  tabs fold into the other and the duplicate goes.
+
 ## v0.71.15 — 2026-09-29
 
 ### Added
