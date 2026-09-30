@@ -9296,10 +9296,30 @@ impl App {
         self.open_tab_with(Some(command), None);
     }
 
-    /// Open a tab, with a shell of its own.
+    /// Open a tab, with a shell of its own, where the focused pane is.
+    ///
+    /// It always started in the home directory. Once the strip grouped tabs
+    /// by project that read as a bug: "+ New session" under a project put the
+    /// tab in a different group, and every new tab had to `cd` back. The same
+    /// directory the strip groups by, so the new tab lands in the project it
+    /// was opened from. A directory that has gone falls back to the default.
     fn new_tab(&mut self) {
         let shell = self.shell.clone();
-        self.open_tab_with(shell, None);
+        let directory = self.focused_directory();
+        self.open_tab_with(shell, directory);
+    }
+
+    /// The focused pane's working directory, as the strip knows it, if it
+    /// still exists.
+    fn focused_directory(&self) -> Option<String> {
+        let pane = self.focused_session();
+        unterm_engine::SessionEngine::list_sessions(&self.engine)
+            .ok()?
+            .into_iter()
+            .find(|session| session.id == pane)?
+            .shell
+            .cwd
+            .filter(|cwd| std::path::Path::new(cwd).is_dir())
     }
 
     fn open_tab_with(
