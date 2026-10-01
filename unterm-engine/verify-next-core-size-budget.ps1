@@ -54,7 +54,13 @@
     # shaper reads through the face; numbered OSC 9 subcommands stop being
     # taken for notifications; a project's .unterm/ tells git to look away.
     # Measured 13970; recalibrated to measured plus the usual headroom.
-    [int]$MaxCoreSourceLines = 14080,
+    # 14080 -> 14780 (2026-10-01): the kernel answers colour queries
+    # (OSC 4/10/11/12) and XTVERSION, tracks OSC 9;4 progress and every OSC
+    # 133 mark with exit status, holds frames for synchronized output
+    # (?2026), keeps the kitty keyboard and modifyOtherKeys modes, and
+    # injects shell integration into the shells it starts. Measured 14664;
+    # recalibrated to measured plus the usual headroom.
+    [int]$MaxCoreSourceLines = 14780,
     [int]$MaxProbeSourceLines = 2800,
     [int]$MaxDirectDependencies = 10,
     # A debug binary carries its debug info, so this tracks the toolchain and

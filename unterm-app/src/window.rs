@@ -475,6 +475,9 @@ struct PaneNotice {
     notifications_seen: u64,
     /// `OSC 9;4` progress the program in this pane last reported.
     progress: Option<unterm_engine::TerminalProgress>,
+    /// How many finished commands (`OSC 133;D`) this pane had the last time
+    /// anyone looked, so each failure is noticed exactly once.
+    commands_seen: u64,
 }
 
 /// The chevron's open dropdown: its rows, and where it sits.
@@ -6301,7 +6304,18 @@ impl App {
             {
                 notice.unread = true;
             }
-            let error = session.is_dead || crate::sidebar::output_looks_like_error(&tail);
+            // With the shell's integration on, a command says how it ended:
+            // a non-zero exit is an error and a clean one is not, whatever
+            // the output looked like. Reading the screen for "error:" stays
+            // for what runs without marks -- and for a long-running command,
+            // an agent among them, while it runs.
+            let marks = pulse.commands;
+            let failed = marks.finished != notice.commands_seen
+                && matches!(marks.last_exit, Some(code) if code != 0);
+            notice.commands_seen = marks.finished;
+            let guessed = (!marks.integrated || marks.running)
+                && crate::sidebar::output_looks_like_error(&tail);
+            let error = session.is_dead || failed || guessed;
             if error {
                 notice.error = true;
             } else if session.id == active_pane {
@@ -14246,6 +14260,104 @@ fn workspace_entries() -> Vec<crate::palette::Entry> {
 ///
 /// Probed rather than listed: offering a shell that is not installed is a row
 /// that opens an empty tab and an error in a log the user will not read.
+/// Git for Windows' bash, wherever Git was installed: the machine-wide and
+/// per-user installers, Scoop, and next to whichever `git.exe` is on PATH.
+#[cfg(windows)]
+fn git_bash() -> Option<std::path::PathBuf> {
+    let env = |key: &str| std::env::var_os(key).map(std::path::PathBuf::from);
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for key in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(dir) = env(key) {
+            roots.push(dir.join("Git"));
+        }
+    }
+    if let Some(local) = env("LOCALAPPDATA") {
+        roots.push(local.join("Programs").join("Git"));
+    }
+    if let Some(home) = env("USERPROFILE") {
+        roots.push(home.join("scoop").join("apps").join("git").join("current"));
+    }
+    // `…\Git\cmd\git.exe` or `…\Git\bin\git.exe`: the install is two up.
+    if let Some(git) = which("git.exe") {
+        if let Some(root) = git.parent().and_then(|dir| dir.parent()) {
+            roots.push(root.to_path_buf());
+        }
+    }
+    roots
+        .into_iter()
+        .map(|root| root.join("bin").join("bash.exe"))
+        .find(|bash| bash.is_file())
+}
+
+/// The WSL distributions registered for this user, by name, from
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
+#[cfg(windows)]
+fn wsl_distributions() -> Vec<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use winapi::shared::minwindef::{DWORD, HKEY};
+    use winapi::shared::winerror::ERROR_SUCCESS;
+    use winapi::um::winnt::KEY_READ;
+    use winapi::um::winreg::{
+        RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, HKEY_CURRENT_USER, RRF_RT_REG_SZ,
+    };
+
+    let wide = |text: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(text).encode_wide().chain(Some(0)).collect()
+    };
+    let mut names = Vec::new();
+    unsafe {
+        let mut lxss: HKEY = std::ptr::null_mut();
+        let path = wide(r"Software\Microsoft\Windows\CurrentVersion\Lxss");
+        if RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut lxss) as u32
+            != ERROR_SUCCESS
+        {
+            return names;
+        }
+        let value = wide("DistributionName");
+        for index in 0.. {
+            let mut key = [0u16; 256];
+            let mut key_len: DWORD = key.len() as DWORD;
+            let status = RegEnumKeyExW(
+                lxss,
+                index,
+                key.as_mut_ptr(),
+                &mut key_len,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            if status as u32 != ERROR_SUCCESS {
+                break;
+            }
+            let mut name = [0u16; 256];
+            let mut name_bytes: DWORD = (name.len() * 2) as DWORD;
+            if RegGetValueW(
+                lxss,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                name.as_mut_ptr() as *mut _,
+                &mut name_bytes,
+            ) as u32
+                == ERROR_SUCCESS
+            {
+                let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+                let text = String::from_utf16_lossy(&name[..len]);
+                // Docker Desktop's own distributions are not shells anyone
+                // means to open.
+                if !text.is_empty() && !text.starts_with("docker-desktop") {
+                    names.push(text);
+                }
+            }
+        }
+        RegCloseKey(lxss);
+    }
+    names.sort();
+    names
+}
+
 fn launcher_entries() -> Vec<crate::palette::Entry> {
     let mut candidates: Vec<(String, String, String, Vec<String>)> = Vec::new();
     let mut add = |label: &str, hint: &str, program: String, args: &[&str]| {
@@ -14275,13 +14387,29 @@ fn launcher_entries() -> Vec<crate::palette::Entry> {
             &["-NoLogo", "-NoProfile"],
         );
         add("Command Prompt", "cmd.exe", "cmd.exe".into(), &[]);
-        add(
-            "Git Bash",
-            "Unix shell via Git",
-            r"C:\Program Files\Git\bin\bash.exe".into(),
-            &["--login"],
-        );
-        add("WSL", "Linux subsystem", "wsl.exe".into(), &[]);
+        if let Some(bash) = git_bash() {
+            add(
+                "Git Bash",
+                "Unix shell via Git",
+                bash.display().to_string(),
+                &["--login"],
+            );
+        }
+        // One row per installed distribution, read from the registry rather
+        // than from `wsl --list`, which can take seconds while WSL itself
+        // starts up -- too long for a menu to wait on.
+        let distributions = wsl_distributions();
+        if distributions.is_empty() {
+            add("WSL", "Linux subsystem", "wsl.exe".into(), &[]);
+        }
+        for name in &distributions {
+            add(
+                &format!("WSL: {name}"),
+                "Linux subsystem",
+                "wsl.exe".into(),
+                &["--distribution", name.as_str(), "--cd", "~"],
+            );
+        }
         add(
             "MSYS2 Bash",
             "MSYS2 environment",

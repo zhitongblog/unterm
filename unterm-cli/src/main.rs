@@ -26,6 +26,7 @@ mod records;
 mod profile;
 mod proxy;
 mod quit;
+mod update;
 mod reference;
 mod review;
 mod screenshot;
@@ -51,6 +52,7 @@ use records::{ArtifactCommand, EvidenceCommand, ScopeCommand, SystemCommand};
 use profile::ProfileCommand;
 use proxy::ProxyCommand;
 use quit::QuitCommand;
+use update::UpdateCommand;
 use reference::ReferenceCommand;
 use review::ReviewCommand;
 use scrollback::ScrollbackCommand;
@@ -299,6 +301,13 @@ enum SubCommand {
     )]
     Quit(QuitCommand),
 
+    #[command(
+        name = "update",
+        about = "Download the latest Unterm, verify it, and restart into it \
+                 (--check only reports)"
+    )]
+    Update(UpdateCommand),
+
     #[command(name = "cli", about = "Legacy mux compatibility command")]
     Cli(LegacyCommand),
 
@@ -401,6 +410,7 @@ fn main() -> Result<()> {
         SubCommand::SetupAi(cmd) => run_setup_ai(cmd, opts.json),
         SubCommand::McpStdio => run_mcp_stdio(),
         SubCommand::Quit(cmd) => quit::run(cmd, opts.json),
+        SubCommand::Update(cmd) => update::run(cmd, opts.json),
         SubCommand::Cli(cmd) => legacy::run_cli(cmd, opts.json),
         SubCommand::ShowKeys => legacy::run_show_keys(opts.json),
         SubCommand::LsFonts => legacy::run_ls_fonts(opts.json),

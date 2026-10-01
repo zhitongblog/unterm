@@ -87,6 +87,7 @@ pub(super) fn prepare_command(
     #[cfg(unix)]
     ensure_locale_env(&mut command);
     ensure_term_env(&mut command);
+    super::shell_integration::apply(&mut command);
     let cwd = command_cwd(&command, None);
     (command, cwd)
 }

@@ -77,6 +77,9 @@ fn main() -> Result<()> {
     unterm_engine::next_core::NextCoreEngine::set_new_session_scrollback_lines(
         unterm_services::settings::scrollback_lines(&config),
     );
+    unterm_engine::next_core::shell_integration::set_enabled(
+        unterm_services::settings::shell_integration(&config),
+    );
 
     // The agent surface lives here, not in any GUI: sessions belong to
     // this process, so the 103-method MCP server drives the local

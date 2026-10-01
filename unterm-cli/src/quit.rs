@@ -117,14 +117,60 @@ const LONGEST_WAIT_SECS: u64 = 24 * 60 * 60;
 
 /// Whether this process sits below one of `pids` -- in a tab of that window,
 /// or a session of that Core.
-fn runs_inside(pids: &[u32]) -> bool {
+/// Whether this process is the detached copy a hand-off started.
+pub(crate) fn handed_off() -> bool {
+    std::env::var_os(HANDOFF_ENV).is_some()
+}
+
+/// Ask exactly these processes to quit -- windows by their quit request, a
+/// Core by `core.shutdown` -- and wait for them. What `update` uses once the
+/// helper is waiting on them.
+pub(crate) fn quit_processes(pids: &[u32], json_out: bool) -> Result<()> {
+    let own = std::process::id();
+    let core = read_core_record().filter(|core| pids.contains(&core.pid));
+    for &pid in pids {
+        if pid == own || core.as_ref().is_some_and(|core| core.pid == pid) {
+            continue;
+        }
+        let _ = process_lifetime::signal_quit(pid);
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let windows: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|pid| *pid != own && core.as_ref().map(|core| core.pid) != Some(*pid))
+        .collect();
+    wait_until_gone(&windows, deadline);
+    // The last window usually takes its Core with it; ask in case it did not.
+    if let Some(core) = &core {
+        if pid_alive(core.pid) && !core.headless {
+            let _ = core_request(core, "core.shutdown");
+        }
+    }
+    let others: Vec<u32> = pids.iter().copied().filter(|pid| *pid != own).collect();
+    wait_until_gone(&others, deadline + Duration::from_secs(10));
+    let survivors: Vec<u32> = others.into_iter().filter(|pid| pid_alive(*pid)).collect();
+    if !json_out {
+        if survivors.is_empty() {
+            println!("Unterm has quit; the update is being installed and Unterm will start again");
+        } else {
+            println!(
+                "still running: {} -- the update installs once they exit",
+                survivors.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn runs_inside(pids: &[u32]) -> bool {
     let ancestors = process_lifetime::current_ancestors();
     pids.iter().any(|pid| ancestors.contains(pid))
 }
 
 /// Run the same command again, detached from this terminal and (on Windows)
 /// out of the Core's job, and relay its report while this process lasts.
-fn hand_off(json_out: bool) -> Result<()> {
+pub(crate) fn hand_off(json_out: bool) -> Result<()> {
     use std::process::{Command, Stdio};
 
     let report = std::env::temp_dir().join(format!("unterm-quit-{}.txt", std::process::id()));

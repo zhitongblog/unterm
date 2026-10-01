@@ -10,6 +10,12 @@ pub(super) enum OscCommand {
     Clipboard(String),
     /// `OSC 133;A`: the shell has started drawing a new prompt.
     PromptStart,
+    /// `OSC 133;B`: the prompt is drawn; what follows is the user's input.
+    InputStart,
+    /// `OSC 133;C`: the command line was accepted and is running.
+    CommandStart,
+    /// `OSC 133;D[;status]`: the command finished.
+    CommandEnd(Option<i32>),
     /// `OSC 9` / `OSC 777;notify`: a program asking for the user's eye.
     Notification(String),
     /// `OSC 9;4;<state>;<percent>`: progress, or `None` when it is cleared.
@@ -23,7 +29,18 @@ pub(super) fn parse(sequence: &str) -> Option<OscCommand> {
         "7" => parse_osc7_cwd(value).map(OscCommand::CurrentDir),
         "8" => parse_osc8_hyperlink(value).map(OscCommand::Hyperlink),
         "52" => parse_osc52_clipboard(value).map(OscCommand::Clipboard),
-        "133" if value.split(';').next() == Some("A") => Some(OscCommand::PromptStart),
+        "133" => {
+            let mut parts = value.split(';');
+            match parts.next()? {
+                "A" => Some(OscCommand::PromptStart),
+                "B" => Some(OscCommand::InputStart),
+                "C" => Some(OscCommand::CommandStart),
+                "D" => Some(OscCommand::CommandEnd(
+                    parts.next().and_then(|code| code.trim().parse().ok()),
+                )),
+                _ => None,
+            }
+        }
         "9" if value.starts_with("4;") || value == "4" => {
             parse_osc9_progress(value).map(OscCommand::Progress)
         }
@@ -164,6 +181,17 @@ fn hex_value(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn osc133_marks_every_stage_of_a_command() {
+        assert_eq!(parse("133;A"), Some(OscCommand::PromptStart));
+        assert_eq!(parse("133;A;cl=m"), Some(OscCommand::PromptStart));
+        assert_eq!(parse("133;B"), Some(OscCommand::InputStart));
+        assert_eq!(parse("133;C"), Some(OscCommand::CommandStart));
+        assert_eq!(parse("133;D;2"), Some(OscCommand::CommandEnd(Some(2))));
+        assert_eq!(parse("133;D"), Some(OscCommand::CommandEnd(None)));
+        assert_eq!(parse("133;Z"), None);
+    }
+
     /// `OSC 9;4` is progress, not a notification: Windows Terminal's
     /// reading of each state, and `0` clears.
     #[test]
@@ -226,10 +254,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_shell_prompt_markers_without_guessing_other_semantic_zones() {
+    fn parses_shell_prompt_markers_and_ignores_unknown_zones() {
         assert_eq!(parse("133;A"), Some(OscCommand::PromptStart));
         assert_eq!(parse("133;A;extra"), Some(OscCommand::PromptStart));
-        assert_eq!(parse("133;B"), None);
+        // B, C and D are read now that Unterm's own integration sends them;
+        // a zone nobody defined is still not guessed at.
+        assert_eq!(parse("133;B"), Some(OscCommand::InputStart));
+        assert_eq!(parse("133;P;k=i"), None);
     }
 
     #[test]

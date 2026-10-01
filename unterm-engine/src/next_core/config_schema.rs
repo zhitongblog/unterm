@@ -98,6 +98,7 @@ pub const SETTINGS: &[&str] = &[
     "status_bar",
     "window_background_image",
     "use_ime",
+    "shell_integration",
 ];
 
 /// Sections whose keys the user invents.

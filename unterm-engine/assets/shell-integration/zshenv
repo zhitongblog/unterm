@@ -1,0 +1,21 @@
+# Unterm shell integration, loaded through ZDOTDIR.
+#
+# Unterm pointed ZDOTDIR here so this file runs first. Put the user's own
+# ZDOTDIR back before anything else reads it, so their .zshenv, .zprofile and
+# .zshrc load exactly as they would anywhere else, then add the hooks.
+if [[ -n "${UNTERM_ORIG_ZDOTDIR+x}" ]]; then
+  if [[ -n "$UNTERM_ORIG_ZDOTDIR" ]]; then
+    ZDOTDIR="$UNTERM_ORIG_ZDOTDIR"
+  else
+    unset ZDOTDIR
+  fi
+  unset UNTERM_ORIG_ZDOTDIR
+else
+  unset ZDOTDIR
+fi
+if [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]]; then
+  builtin source "${ZDOTDIR:-$HOME}/.zshenv"
+fi
+if [[ -o interactive && -n "${UNTERM_SHELL_INTEGRATION_DIR-}" ]]; then
+  builtin source "${UNTERM_SHELL_INTEGRATION_DIR}/unterm.zsh"
+fi

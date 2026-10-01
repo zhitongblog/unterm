@@ -336,6 +336,12 @@ fn resolve_windows_program(program: &str) -> Option<String> {
 ///
 /// An explicit declarative setting wins. Otherwise preserve the previous
 /// product's Web Settings contract by reading `~/.unterm/scrollback.json`.
+/// Whether shells Unterm starts get its integration script (`OSC 133`
+/// prompt and command marks). On unless `shell_integration = false`.
+pub fn shell_integration(config: &Config) -> bool {
+    !matches!(config.bool_of("shell_integration"), Ok(Some(false)))
+}
+
 pub fn scrollback_lines(config: &Config) -> usize {
     if let Ok(Some(value)) = config.int_of("scrollback_lines") {
         if let Ok(value) = usize::try_from(value) {

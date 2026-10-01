@@ -79,6 +79,7 @@ pub mod window_capture;
 /// used to live for no reason other than history.
 pub const VERSION: &str = unterm_protocol::PRODUCT_VERSION;
 pub mod process_lifetime;
+pub mod updater;
 pub mod process_stats;
 pub mod supervisor;
 pub mod upgrade;

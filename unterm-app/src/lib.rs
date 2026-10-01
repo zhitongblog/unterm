@@ -272,6 +272,9 @@ fn run() -> anyhow::Result<()> {
     unterm_engine::next_core::NextCoreEngine::set_new_session_scrollback_lines(
         unterm_services::settings::scrollback_lines(&config),
     );
+    unterm_engine::next_core::shell_integration::set_enabled(
+        unterm_services::settings::shell_integration(&config),
+    );
     // Decide Local vs Core for the whole process -- window, MCP
     // surface and background threads alike -- before the MCP server
     // starts, so every consumer sees the same session world.

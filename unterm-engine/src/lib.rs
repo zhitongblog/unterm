@@ -276,6 +276,10 @@ pub struct PanePulse {
     /// `OSC 9;4` progress a program reported, until it clears it.
     #[serde(default)]
     pub progress: Option<crate::TerminalProgress>,
+    /// `OSC 133` command marks: how many commands finished, the last
+    /// exit status, and whether one is running now.
+    #[serde(default)]
+    pub commands: crate::CommandMarks,
 }
 
 impl PanePulse {
@@ -296,6 +300,7 @@ impl PanePulse {
                 notifications: snapshot.notifications,
                 last_notification: snapshot.last_notification.clone(),
                 progress: snapshot.progress,
+                commands: snapshot.commands,
                 ..Self::default()
             };
         }
@@ -317,6 +322,7 @@ impl PanePulse {
             notifications: snapshot.notifications,
             last_notification: snapshot.last_notification.clone(),
             progress: snapshot.progress,
+            commands: snapshot.commands,
         }
     }
 }
@@ -328,6 +334,24 @@ pub struct TerminalProgress {
     pub state: ProgressState,
     /// 0-100. Meaningless while `Indeterminate`.
     pub percent: u8,
+}
+
+/// What a shell's integration marks (`OSC 133`) say about its commands.
+///
+/// Counts rather than flags, like the bell: a reader compares `finished` with
+/// what it saw last and cannot miss a command that started and ended between
+/// two looks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandMarks {
+    /// Whether the shell has sent any marks at all. Without them the other
+    /// fields say nothing, and a reader falls back to reading the screen.
+    pub integrated: bool,
+    /// A command started (`C`) and has not finished (`D`).
+    pub running: bool,
+    /// Commands that finished, ever.
+    pub finished: u64,
+    /// The exit status of the last one that finished, when the shell said.
+    pub last_exit: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,6 +394,10 @@ pub struct StyledScreenSnapshot {
     /// `OSC 9;4` progress a program reported, until it clears it.
     #[serde(default)]
     pub progress: Option<crate::TerminalProgress>,
+    /// `OSC 133` command marks: how many commands finished, the last
+    /// exit status, and whether one is running now.
+    #[serde(default)]
+    pub commands: crate::CommandMarks,
     /// What the program in this pane wants from the mouse.
     ///
     /// A front end has to ask before deciding what a click means: with
@@ -927,6 +955,10 @@ pub struct ScreenSnapshot {
     /// `OSC 9;4` progress a program reported, until it clears it.
     #[serde(default)]
     pub progress: Option<crate::TerminalProgress>,
+    /// `OSC 133` command marks: how many commands finished, the last
+    /// exit status, and whether one is running now.
+    #[serde(default)]
+    pub commands: crate::CommandMarks,
     /// What the program in this pane wants from the mouse.
     ///
     /// A front end has to ask before deciding what a click means: with
@@ -2018,6 +2050,7 @@ mod tests {
                 notifications: 0,
                 last_notification: None,
                 progress: None,
+                commands: Default::default(),
                 focus_reporting: false,
                 clipboard_request: None,
                 lines: vec![StyledScreenLine {
@@ -2900,6 +2933,7 @@ mod pane_pulse_tests {
             notifications: 3,
             last_notification: Some("something happened".into()),
             progress: None,
+            commands: Default::default(),
             mouse: next_core::mouse_encoding::MouseModes::default(),
             lines: (0..rows)
                 .map(|i| line(i as i64, format!("row {i}")))

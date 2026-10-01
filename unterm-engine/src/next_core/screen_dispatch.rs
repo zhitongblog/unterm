@@ -375,6 +375,7 @@ fn meta(screen: &super::NextCoreScreen) -> ScreenSnapshotMeta {
         notifications: screen.notifications,
         last_notification: screen.last_notification.clone(),
         progress: screen.progress,
+        commands: screen.commands,
         focus_reporting: screen.focus_event_reporting,
         clipboard_request: screen.clipboard_request.clone(),
     }

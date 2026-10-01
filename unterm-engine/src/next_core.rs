@@ -35,6 +35,7 @@ mod history;
 mod input_dispatch;
 mod input_pipeline;
 pub mod key_encoding;
+pub mod shell_integration;
 pub(crate) mod launch;
 pub mod layout;
 mod lifecycle;
@@ -183,6 +184,7 @@ struct NextCoreScreen {
     notifications: u64,
     last_notification: Option<String>,
     progress: Option<crate::TerminalProgress>,
+    commands: crate::CommandMarks,
     /// Text a program asked to put on the system clipboard.
     clipboard_request: Option<String>,
     cursor_blinking: bool,
@@ -411,6 +413,7 @@ impl NextCoreScreen {
             notifications: 0,
             last_notification: None,
             progress: None,
+            commands: Default::default(),
             clipboard_request: None,
             cursor_blinking: true,
             cursor_shape: "Default".to_string(),
@@ -1619,10 +1622,28 @@ impl NextCoreScreen {
             // the sequence.
             Some(osc_params::OscCommand::Clipboard(text)) => self.clipboard_request = Some(text),
             Some(osc_params::OscCommand::Progress(progress)) => self.progress = progress,
+            Some(osc_params::OscCommand::InputStart) => self.commands.integrated = true,
+            Some(osc_params::OscCommand::CommandStart) => {
+                self.commands.integrated = true;
+                self.commands.running = true;
+            }
+            Some(osc_params::OscCommand::CommandEnd(status)) => {
+                self.commands.integrated = true;
+                // A `D` with no `C` before it is the shell closing a prompt
+                // nobody ran anything at (bash without PS0, an empty Enter):
+                // nothing finished.
+                if self.commands.running {
+                    self.commands.running = false;
+                    self.commands.finished = self.commands.finished.wrapping_add(1);
+                    self.commands.last_exit = status;
+                }
+            }
             Some(osc_params::OscCommand::PromptStart) if self.alternate.is_none() => {
                 // A prompt means whatever was running has finished, whether
                 // or not it cleared its progress on the way out.
                 self.progress = None;
+                self.commands.integrated = true;
+                self.commands.running = false;
                 let row = self.history.scrollback_rows() + self.cursor_y;
                 if self.prompt_rows.last() != Some(&row) {
                     self.prompt_rows.push(row);

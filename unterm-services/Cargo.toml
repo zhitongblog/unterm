@@ -33,6 +33,7 @@ unterm-protocol.workspace = true
 unterm-gateway.workspace = true
 unterm-tasks.workspace = true
 sha2.workspace = true
+reqwest.workspace = true
 unterm-brain.workspace = true
 unterm-providers.workspace = true
 
