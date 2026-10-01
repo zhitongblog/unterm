@@ -84,6 +84,5 @@ export const onRequestGet: PagesFunction<Env> = (ctx) => {
   }
   headers.set("Vary", "User-Agent, Sec-CH-UA-Arch");
   headers.set("Cache-Control", "no-store");
-  headers.set("X-Unterm-Arch-Seen", arch ?? "none");
   return new Response(null, { status: 302, headers });
 };
