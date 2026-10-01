@@ -30,6 +30,13 @@ pub struct PaneModesSnapshot {
     pub alt_screen_active: bool,
     pub bracketed_paste: bool,
     pub application_cursor_keys: bool,
+    /// The kitty keyboard flags in force (`CSI > flags u`), masked to the
+    /// ones this terminal implements. 0 is the legacy encoding.
+    #[serde(default)]
+    pub kitty_keyboard: u8,
+    /// xterm's `modifyOtherKeys` level (`CSI > 4 ; level m`): 0, 1 or 2.
+    #[serde(default)]
+    pub modify_other_keys: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -266,6 +273,9 @@ pub struct PanePulse {
     pub bells: u64,
     pub notifications: u64,
     pub last_notification: Option<String>,
+    /// `OSC 9;4` progress a program reported, until it clears it.
+    #[serde(default)]
+    pub progress: Option<crate::TerminalProgress>,
 }
 
 impl PanePulse {
@@ -285,6 +295,7 @@ impl PanePulse {
                 bells: snapshot.bells,
                 notifications: snapshot.notifications,
                 last_notification: snapshot.last_notification.clone(),
+                progress: snapshot.progress,
                 ..Self::default()
             };
         }
@@ -305,9 +316,29 @@ impl PanePulse {
             bells: snapshot.bells,
             notifications: snapshot.notifications,
             last_notification: snapshot.last_notification.clone(),
+            progress: snapshot.progress,
         }
     }
 }
+/// Progress a program reported with `OSC 9;4` (ConEmu's sequence, which
+/// Windows Terminal adopted and build tools, package managers and agents now
+/// emit): how far along it is, and in what state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalProgress {
+    pub state: ProgressState,
+    /// 0-100. Meaningless while `Indeterminate`.
+    pub percent: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressState {
+    Normal,
+    Error,
+    Indeterminate,
+    Paused,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StyledScreenSnapshot {
     /// Text a program asked to be put on the system clipboard.
@@ -336,6 +367,9 @@ pub struct StyledScreenSnapshot {
     /// the newest text so a front end can show it.
     pub notifications: u64,
     pub last_notification: Option<String>,
+    /// `OSC 9;4` progress a program reported, until it clears it.
+    #[serde(default)]
+    pub progress: Option<crate::TerminalProgress>,
     /// What the program in this pane wants from the mouse.
     ///
     /// A front end has to ask before deciding what a click means: with
@@ -890,6 +924,9 @@ pub struct ScreenSnapshot {
     /// the newest text so a front end can show it.
     pub notifications: u64,
     pub last_notification: Option<String>,
+    /// `OSC 9;4` progress a program reported, until it clears it.
+    #[serde(default)]
+    pub progress: Option<crate::TerminalProgress>,
     /// What the program in this pane wants from the mouse.
     ///
     /// A front end has to ask before deciding what a click means: with
@@ -1162,6 +1199,13 @@ pub trait SessionEngine {
     /// number and drop it.
     fn set_split_ratio(&self, _pane_id: usize, _first_ratio: f64) -> Result<()> {
         anyhow::bail!("this engine does not record split ratios")
+    }
+
+    /// Tell the kernel the colours a front end is drawing with, so it can
+    /// answer programs that ask (`OSC 4/10/11/12`). Defaults to refusing,
+    /// like the others: an engine that answers no questions should say so.
+    fn set_terminal_colors(&self, _colors: next_core::color::TerminalColors) -> Result<()> {
+        anyhow::bail!("this engine does not answer colour queries")
     }
 }
 
@@ -1973,6 +2017,7 @@ mod tests {
                 bells: 0,
                 notifications: 0,
                 last_notification: None,
+                progress: None,
                 focus_reporting: false,
                 clipboard_request: None,
                 lines: vec![StyledScreenLine {
@@ -2854,6 +2899,7 @@ mod pane_pulse_tests {
             bells: 1,
             notifications: 3,
             last_notification: Some("something happened".into()),
+            progress: None,
             mouse: next_core::mouse_encoding::MouseModes::default(),
             lines: (0..rows)
                 .map(|i| line(i as i64, format!("row {i}")))

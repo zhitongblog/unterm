@@ -1277,6 +1277,7 @@ mod tests {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         }
@@ -1857,6 +1858,7 @@ mod fallback_fit_tests {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         }
@@ -2109,6 +2111,7 @@ mod missing_glyph_regression {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         };
@@ -2183,6 +2186,7 @@ mod cursor_inversion_tests {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         }
@@ -2539,6 +2543,7 @@ mod focus_cursor_tests {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         }
@@ -2741,6 +2746,7 @@ mod text_blink_tests {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         }

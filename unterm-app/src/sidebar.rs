@@ -465,6 +465,24 @@ pub struct Indicators {
     pub unread: bool,
     pub running: bool,
     pub error: bool,
+    /// `OSC 9;4` progress reported in the tab.
+    pub progress: Option<unterm_engine::TerminalProgress>,
+}
+
+/// How much of a progress bar to fill, and in what colour.
+///
+/// Indeterminate fills the track: there is no fraction to show, only that
+/// something is under way. The colours are the strip's own status language --
+/// amber is waiting, red is wrong -- so a bar means what a badge would.
+pub fn progress_bar(progress: unterm_engine::TerminalProgress) -> (f32, [f32; 4]) {
+    use unterm_engine::ProgressState;
+    let fraction = f32::from(progress.percent.min(100)) / 100.0;
+    match progress.state {
+        ProgressState::Normal => (fraction, crate::cockpit::Badge::Done.color()),
+        ProgressState::Error => (fraction.max(0.02), [0.95, 0.35, 0.35, 1.0]),
+        ProgressState::Paused => (fraction, crate::cockpit::Badge::NeedsYou.color()),
+        ProgressState::Indeterminate => (1.0, crate::cockpit::Badge::Working.color()),
+    }
 }
 
 /// One tab, as the strip needs to know it.
@@ -1324,6 +1342,7 @@ mod tests {
             unread: true,
             running: true,
             error: true,
+            progress: None,
         };
         let rows = rows_of(&[TabInfo {
             indicators,
@@ -1632,6 +1651,19 @@ mod tests {
         assert_eq!(project_initial("unterm"), "U");
         assert_eq!(project_initial(".claude"), "C");
         assert_eq!(project_initial("项目"), "项");
+    }
+
+    /// A progress report fills its share of the bar in the strip's status
+    /// colours; indeterminate fills the track, an error never vanishes.
+    #[test]
+    fn progress_fills_its_share_in_status_colours() {
+        use unterm_engine::{ProgressState, TerminalProgress};
+        let bar = |state, percent| progress_bar(TerminalProgress { state, percent });
+        assert_eq!(bar(ProgressState::Normal, 60).0, 0.6);
+        assert_eq!(bar(ProgressState::Normal, 60).1, crate::cockpit::Badge::Done.color());
+        assert_eq!(bar(ProgressState::Indeterminate, 0).0, 1.0);
+        assert!(bar(ProgressState::Error, 0).0 > 0.0);
+        assert_eq!(bar(ProgressState::Paused, 30).1, crate::cockpit::Badge::NeedsYou.color());
     }
 
     /// A project keeps its colour while others open and close around it, and

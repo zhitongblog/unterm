@@ -544,6 +544,13 @@ impl SessionEngine for AppEngine {
         route!(self, engine => engine.destroy_session(pane_id))
     }
 
+    fn set_terminal_colors(
+        &self,
+        colors: unterm_engine::next_core::color::TerminalColors,
+    ) -> Result<()> {
+        route!(self, engine => engine.set_terminal_colors(colors))
+    }
+
     fn set_split_ratio(&self, pane_id: usize, first_ratio: f64) -> Result<()> {
         route!(self, engine => engine.set_split_ratio(pane_id, first_ratio))
     }
@@ -699,6 +706,13 @@ impl SessionEngine for CoreHostEngine {
 
     fn destroy_session(&self, pane_id: usize) -> Result<()> {
         core_client().destroy_session(pane_id)
+    }
+
+    fn set_terminal_colors(
+        &self,
+        colors: unterm_engine::next_core::color::TerminalColors,
+    ) -> Result<()> {
+        core_client().set_terminal_colors(colors)
     }
 
     fn set_split_ratio(&self, pane_id: usize, first_ratio: f64) -> Result<()> {

@@ -92,6 +92,12 @@ pub const SETTINGS: &[&str] = &[
     "title_button.style",
     "title_button.alignment",
     "title_button.buttons",
+    // Read since before the schema existed, and missing from it: setting any
+    // of them earned an "unknown key" warning for a key that worked.
+    "audible_bell",
+    "status_bar",
+    "window_background_image",
+    "use_ime",
 ];
 
 /// Sections whose keys the user invents.

@@ -473,6 +473,8 @@ struct PaneNotice {
     /// How many `OSC 9`/`777` notifications this pane had raised the last
     /// time anyone looked, so each new one is announced exactly once.
     notifications_seen: u64,
+    /// `OSC 9;4` progress the program in this pane last reported.
+    progress: Option<unterm_engine::TerminalProgress>,
 }
 
 /// The chevron's open dropdown: its rows, and where it sits.
@@ -869,6 +871,8 @@ pub struct App {
     /// The theme in force, so the picker can mark it and the next launch can
     /// restore it.
     theme_id: Option<String>,
+    /// The colours last handed to the kernel for programs that ask, and when.
+    colors_reported: Option<(unterm_engine::next_core::color::TerminalColors, std::time::Instant)>,
     /// Last Web Settings/CLI theme request observed by this window.
     ///
     /// Each native window is an independent observer of the process-local
@@ -1593,6 +1597,7 @@ impl App {
             text_blink_rapid_ms: text_blink.1,
             started: std::time::Instant::now(),
             theme_id: crate::theme::remembered(),
+            colors_reported: None,
             theme_request_seen: 0,
             font_family: family,
             initial_cols: settings.initial_cols,
@@ -2713,6 +2718,43 @@ impl App {
         }
     }
 
+    /// Hand the kernel the colours this window draws with, so a program that
+    /// asks (`OSC 10/11/12/4`) is told the truth -- Claude Code, Codex and
+    /// Neovim pick their light or dark palette from the answer.
+    ///
+    /// On a change, and again every half minute: the Core may have been
+    /// replaced since, and a fresh one starts out knowing only the default.
+    fn report_terminal_colors(&mut self) {
+        use unterm_engine::next_core::color::{Rgb, TerminalColors};
+        let rgb = |color: [f32; 4]| {
+            let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+            Rgb::new(channel(color[0]), channel(color[1]), channel(color[2]))
+        };
+        let colors = TerminalColors {
+            foreground: rgb(self.window.colors.foreground),
+            background: rgb(self.window.colors.background),
+            cursor: rgb(self.theme().cursor),
+            ansi: std::array::from_fn(|index| {
+                rgb(self.window.colors.palette.get(index).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]))
+            }),
+        };
+        let fresh = self.colors_reported.as_ref().is_some_and(|(sent, at)| {
+            *sent == colors && at.elapsed() < std::time::Duration::from_secs(30)
+        });
+        if fresh {
+            return;
+        }
+        match unterm_engine::SessionEngine::set_terminal_colors(&self.engine, colors) {
+            Ok(()) => self.colors_reported = Some((colors, std::time::Instant::now())),
+            // An older Core does not know the method; try again later rather
+            // than every tick.
+            Err(err) => {
+                log::debug!("could not report terminal colours: {err:#}");
+                self.colors_reported = Some((colors, std::time::Instant::now()));
+            }
+        }
+    }
+
     /// The scheme in force, for the colours that are its rather than the
     /// frame's: the divider between panes, the scrollbar, the selection.
     fn theme(&self) -> &'static crate::theme::Theme {
@@ -2949,6 +2991,11 @@ impl App {
                             .as_ref()
                             .map(|facts| !facts.title.is_empty())
                             .unwrap_or(false),
+                    // The first pane of the tab that reports any: a split
+                    // with a build in one half shows the build.
+                    progress: pane_ids.iter().find_map(|pane| {
+                        self.window.pane_notices.get(pane).and_then(|notice| notice.progress)
+                    }),
                 };
                 crate::sidebar::TabInfo {
                     index,
@@ -4389,6 +4436,25 @@ impl App {
                         right -= wide;
                         self.append_chrome(glyph, color, (right, first_top), quads);
                         right -= 6.0 * pt;
+                    }
+                    // `OSC 9;4` progress: a hairline along the foot of the
+                    // row, the way a taskbar button carries it. A build in a
+                    // background tab can be watched without going to it.
+                    if let Some(progress) = indicators.progress {
+                        let (fill, color) = crate::sidebar::progress_bar(progress);
+                        let track_left = row_left + 8.0 * pt;
+                        let track_width = (row_width - 16.0 * pt).max(1.0);
+                        let thickness = (2.0 * pt).round().max(1.0);
+                        let top = tile_top + tile_height - thickness - (2.0 * pt).round();
+                        let mut track = color;
+                        track[3] *= 0.25;
+                        quads.backgrounds.extend(unterm_render::rounded::panel(
+                            track_left, top, track_width, thickness, thickness / 2.0, track,
+                        ));
+                        let width = (track_width * fill).max(thickness);
+                        quads.backgrounds.extend(unterm_render::rounded::panel(
+                            track_left, top, width, thickness, thickness / 2.0, color,
+                        ));
                     }
                     // The command beside the label only when it is not the
                     // shell repeating itself.
@@ -6259,6 +6325,7 @@ impl App {
                 }
             }
             notice.revision = pulse.revision;
+            notice.progress = pulse.progress;
             unterm_services::cockpit::status::on_screen_tail(session.id as u64, &tail);
             unterm_services::cockpit::status::on_title_change(session.id as u64, &session.title);
         }
@@ -11187,6 +11254,7 @@ impl App {
             self.keep_last_session_current();
             self.sync_frame();
             crate::engine_backend::keep_host_channel();
+            self.report_terminal_colors();
         }
         // The composer is checked every tick while it is open, because it is
         // waiting for a pane to go idle and a prompt held back for a quarter of
@@ -11882,7 +11950,17 @@ impl ApplicationHandler for App {
                     ctrl: self.window.ctrl_held,
                     alt: self.window.alt_held,
                 };
-                if let Some(text) = encode(&event.logical_key, held) {
+                let engine = &self.engine;
+                let modes = || {
+                    engine
+                        .pane_modes(pane)
+                        .map(|modes| key_encoding::KeyboardModes {
+                            kitty: modes.kitty_keyboard,
+                            modify_other_keys: modes.modify_other_keys,
+                        })
+                        .unwrap_or_default()
+                };
+                if let Some(text) = encode_with(&event.logical_key, held, modes) {
                     if startup_pending {
                         if self.window.startup_input.len() + text.len() <= 4096 {
                             self.window.startup_input.push_str(&text);
@@ -13224,6 +13302,19 @@ fn missing_mirrored_panes(
 /// and Ctrl+C sent the letter `c` rather than an interrupt, and only a
 /// handful of named keys were mapped at all.
 fn encode(logical: &winit::keyboard::Key, held: crate::mouse::Held) -> Option<String> {
+    encode_with(logical, held, Default::default)
+}
+
+/// `encode`, under the keyboard protocols the pane's program asked for.
+///
+/// `modes` is only called for a key whose bytes depend on them -- Esc, and
+/// Enter/Tab/Backspace or a character with modifiers -- so plain typing never
+/// waits on a question to the Core.
+fn encode_with(
+    logical: &winit::keyboard::Key,
+    held: crate::mouse::Held,
+    modes: impl FnOnce() -> key_encoding::KeyboardModes,
+) -> Option<String> {
     use termwiz::input::{KeyCode, Modifiers};
     use winit::keyboard::{Key, NamedKey};
 
@@ -13286,7 +13377,11 @@ fn encode(logical: &winit::keyboard::Key, held: crate::mouse::Held) -> Option<St
         _ => return None,
     };
 
-    key_encoding::encode_key(key, mods)
+    if key_encoding::depends_on_keyboard_modes(key, mods) {
+        key_encoding::encode_key_with(key, mods, modes())
+    } else {
+        key_encoding::encode_key(key, mods)
+    }
 }
 
 #[cfg(test)]

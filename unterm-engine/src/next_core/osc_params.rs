@@ -12,6 +12,8 @@ pub(super) enum OscCommand {
     PromptStart,
     /// `OSC 9` / `OSC 777;notify`: a program asking for the user's eye.
     Notification(String),
+    /// `OSC 9;4;<state>;<percent>`: progress, or `None` when it is cleared.
+    Progress(Option<crate::TerminalProgress>),
 }
 
 pub(super) fn parse(sequence: &str) -> Option<OscCommand> {
@@ -22,14 +24,40 @@ pub(super) fn parse(sequence: &str) -> Option<OscCommand> {
         "8" => parse_osc8_hyperlink(value).map(OscCommand::Hyperlink),
         "52" => parse_osc52_clipboard(value).map(OscCommand::Clipboard),
         "133" if value.split(';').next() == Some("A") => Some(OscCommand::PromptStart),
-        // `9;4;1;60` is ConEmu's progress bar and `9;9;<path>` its working
-        // directory: a numbered subcommand, not text for the user's eye.
+        "9" if value.starts_with("4;") || value == "4" => {
+            parse_osc9_progress(value).map(OscCommand::Progress)
+        }
+        // `9;9;<path>` is ConEmu's working directory, and the other numbered
+        // forms are its subcommands too: not text for the user's eye.
         "9" if !value.is_empty() && !is_conemu_command(value) => {
             Some(OscCommand::Notification(value.to_string()))
         }
         "777" => parse_osc777_notification(value).map(OscCommand::Notification),
         _ => None,
     }
+}
+
+/// `4;<state>;<percent>`. State 0 clears; 1 normal, 2 error, 3
+/// indeterminate, 4 paused. A missing or oversized percent is read the way
+/// Windows Terminal reads it: absent is 0, anything above 100 is 100.
+fn parse_osc9_progress(value: &str) -> Option<Option<crate::TerminalProgress>> {
+    use crate::{ProgressState, TerminalProgress};
+    let mut parts = value.split(';').skip(1);
+    let state = parts.next().unwrap_or("0");
+    let percent = parts
+        .next()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .min(100) as u8;
+    let state = match state.trim() {
+        "" | "0" => return Some(None),
+        "1" => ProgressState::Normal,
+        "2" => ProgressState::Error,
+        "3" => ProgressState::Indeterminate,
+        "4" => ProgressState::Paused,
+        _ => return None,
+    };
+    Some(Some(TerminalProgress { state, percent }))
 }
 
 fn is_conemu_command(value: &str) -> bool {
@@ -135,6 +163,43 @@ fn hex_value(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `OSC 9;4` is progress, not a notification: Windows Terminal's
+    /// reading of each state, and `0` clears.
+    #[test]
+    fn osc9_4_is_progress() {
+        use crate::{ProgressState, TerminalProgress};
+        assert_eq!(
+            parse("9;4;1;60"),
+            Some(OscCommand::Progress(Some(TerminalProgress {
+                state: ProgressState::Normal,
+                percent: 60
+            })))
+        );
+        assert_eq!(
+            parse("9;4;2;250"),
+            Some(OscCommand::Progress(Some(TerminalProgress {
+                state: ProgressState::Error,
+                percent: 100
+            })))
+        );
+        assert_eq!(
+            parse("9;4;3"),
+            Some(OscCommand::Progress(Some(TerminalProgress {
+                state: ProgressState::Indeterminate,
+                percent: 0
+            })))
+        );
+        assert_eq!(parse("9;4;0;0"), Some(OscCommand::Progress(None)));
+        assert_eq!(parse("9;4"), Some(OscCommand::Progress(None)));
+        assert_eq!(parse("9;4;9;10"), None);
+        // Plain text is still a notification.
+        assert_eq!(
+            parse("9;build finished"),
+            Some(OscCommand::Notification("build finished".into()))
+        );
+    }
+
 
     #[test]
     fn parses_title_updates() {
@@ -263,8 +328,10 @@ mod conemu_tests {
 
     #[test]
     fn a_progress_report_is_not_a_notification() {
-        assert_eq!(parse("9;4;1;60"), None);
-        assert_eq!(parse("9;4;0"), None);
+        // Progress is read as progress now, and still never as text for the
+        // user's eye.
+        assert!(matches!(parse("9;4;1;60"), Some(OscCommand::Progress(Some(_)))));
+        assert_eq!(parse("9;4;0"), Some(OscCommand::Progress(None)));
         assert_eq!(parse("9;9;C:\\work"), None);
         assert_eq!(
             parse("9;Build finished"),

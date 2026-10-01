@@ -89,6 +89,82 @@ fn encode_char(c: char, mods: Modifiers) -> Option<String> {
     Some(base)
 }
 
+/// The keyboard protocols a program asked for, as far as encoding goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyboardModes {
+    /// kitty keyboard flags in force (only `1`, disambiguate, is acted on).
+    pub kitty: u8,
+    /// xterm `modifyOtherKeys` level, 0-2.
+    pub modify_other_keys: u8,
+}
+
+/// Whether `key` with `mods` encodes differently under some keyboard mode,
+/// so a front end knows when the pane's modes are worth asking for.
+///
+/// Plain typing never is: asking the Core about every letter would put a
+/// round trip in front of each keystroke for nothing.
+pub fn depends_on_keyboard_modes(key: KeyCode, mods: Modifiers) -> bool {
+    let modified = mods.intersects(Modifiers::CTRL | Modifiers::ALT | Modifiers::SUPER);
+    match key {
+        KeyCode::Escape => true,
+        KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace => !mods.is_empty(),
+        KeyCode::Char(_) => modified,
+        _ => false,
+    }
+}
+
+/// Encode a key press under the keyboard protocols the program asked for.
+///
+/// The kitty protocol's "disambiguate" level (flag 1) is what agents and
+/// modern TUIs ask for: it is how Shift+Enter becomes a newline in Claude
+/// Code's prompt instead of a send, and how Esc stops being confused with
+/// the start of an Alt chord. Keys whose legacy encoding is unambiguous --
+/// plain text, Enter without modifiers, the arrows -- keep it, exactly as the
+/// protocol specifies.
+pub fn encode_key_with(key: KeyCode, mods: Modifiers, modes: KeyboardModes) -> Option<String> {
+    let param = modifier_param(mods);
+    if modes.kitty & 1 != 0 {
+        let codepoint = |code: u32| match param {
+            Some(param) => format!("\x1b[{code};{param}u"),
+            None => format!("\x1b[{code}u"),
+        };
+        match key {
+            KeyCode::Escape => return Some(codepoint(27)),
+            KeyCode::Enter if param.is_some() => return Some(codepoint(13)),
+            KeyCode::Tab if param.is_some() => return Some(codepoint(9)),
+            KeyCode::Backspace if param.is_some() => return Some(codepoint(127)),
+            KeyCode::Char(c)
+                if mods.intersects(Modifiers::CTRL | Modifiers::ALT | Modifiers::SUPER) =>
+            {
+                // The key, not the shifted symbol: the protocol names keys
+                // by their unshifted codepoint and carries Shift in the
+                // modifiers.
+                let base = c.to_lowercase().next().unwrap_or(c);
+                return Some(codepoint(base as u32));
+            }
+            _ => {}
+        }
+    } else if modes.modify_other_keys > 0 {
+        let other = |code: u32| param.map(|param| format!("\x1b[27;{param};{code}~"));
+        match key {
+            KeyCode::Enter if param.is_some() => return other(13),
+            KeyCode::Tab if param.is_some() && mods != Modifiers::SHIFT => return other(9),
+            KeyCode::Backspace if param.is_some() => return other(127),
+            // Level 2 reports every Ctrl/Alt chord; level 1 only the ones
+            // the legacy encoding cannot tell apart (Ctrl+digit and the
+            // like, which have no control byte).
+            KeyCode::Char(c) if mods.intersects(Modifiers::CTRL | Modifiers::ALT) => {
+                let ambiguous = mods.contains(Modifiers::CTRL) && control_byte(c).is_none();
+                if modes.modify_other_keys >= 2 || ambiguous {
+                    return other(c as u32);
+                }
+            }
+            _ => {}
+        }
+    }
+    encode_key(key, mods)
+}
+
 /// Encode a key press for a next-core PTY.
 ///
 /// Returns `None` when the key produces no input: modifier keys themselves,
@@ -172,6 +248,63 @@ fn encode_function_key(n: u8, mods: Modifiers) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{encode_key_with, KeyboardModes};
+
+    fn kitty() -> KeyboardModes {
+        KeyboardModes { kitty: 1, modify_other_keys: 0 }
+    }
+
+    /// What an agent's prompt needs from the kitty protocol: Shift+Enter is
+    /// not Enter, Esc is not the start of an Alt chord, Ctrl chords carry
+    /// their key -- and plain typing is untouched.
+    #[test]
+    fn kitty_disambiguate_encodes_only_what_was_ambiguous() {
+        use termwiz::input::{KeyCode, Modifiers};
+        let k = |key, mods| encode_key_with(key, mods, kitty());
+        assert_eq!(k(KeyCode::Enter, Modifiers::SHIFT).as_deref(), Some("\x1b[13;2u"));
+        assert_eq!(k(KeyCode::Enter, Modifiers::NONE).as_deref(), Some("\r"));
+        assert_eq!(k(KeyCode::Escape, Modifiers::NONE).as_deref(), Some("\x1b[27u"));
+        assert_eq!(k(KeyCode::Char('c'), Modifiers::CTRL).as_deref(), Some("\x1b[99;5u"));
+        assert_eq!(
+            k(KeyCode::Char('A'), Modifiers::CTRL | Modifiers::SHIFT).as_deref(),
+            Some("\x1b[97;6u")
+        );
+        assert_eq!(k(KeyCode::Char('x'), Modifiers::ALT).as_deref(), Some("\x1b[120;3u"));
+        assert_eq!(k(KeyCode::Tab, Modifiers::SHIFT).as_deref(), Some("\x1b[9;2u"));
+        assert_eq!(k(KeyCode::Backspace, Modifiers::CTRL).as_deref(), Some("\x1b[127;5u"));
+        assert_eq!(k(KeyCode::Char('a'), Modifiers::NONE).as_deref(), Some("a"));
+        assert_eq!(k(KeyCode::Char('A'), Modifiers::SHIFT).as_deref(), Some("A"));
+        assert_eq!(k(KeyCode::UpArrow, Modifiers::CTRL).as_deref(), Some("\x1b[1;5A"));
+        // Without the protocol, the legacy bytes, unchanged.
+        assert_eq!(
+            encode_key_with(KeyCode::Enter, Modifiers::SHIFT, KeyboardModes::default()).as_deref(),
+            Some("\r")
+        );
+    }
+
+    #[test]
+    fn modify_other_keys_reports_modified_enter_and_chords() {
+        use termwiz::input::{KeyCode, Modifiers};
+        let level = |n| KeyboardModes { kitty: 0, modify_other_keys: n };
+        assert_eq!(
+            encode_key_with(KeyCode::Enter, Modifiers::SHIFT, level(2)).as_deref(),
+            Some("\x1b[27;2;13~")
+        );
+        assert_eq!(
+            encode_key_with(KeyCode::Char('c'), Modifiers::CTRL, level(2)).as_deref(),
+            Some("\x1b[27;5;99~")
+        );
+        // Level 1 leaves the chords that already have a byte alone.
+        assert_eq!(
+            encode_key_with(KeyCode::Char('c'), Modifiers::CTRL, level(1)).as_deref(),
+            Some("\u{3}")
+        );
+        assert_eq!(
+            encode_key_with(KeyCode::Char('1'), Modifiers::CTRL, level(1)).as_deref(),
+            Some("\x1b[27;5;49~")
+        );
+    }
+
     use super::encode_key;
     use termwiz::input::{KeyCode, Modifiers};
 

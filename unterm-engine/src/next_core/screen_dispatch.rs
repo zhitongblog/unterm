@@ -35,7 +35,12 @@ pub(super) fn read_styled_viewport(pane_id: usize) -> Result<StyledScreenSnapsho
     let snapshot = {
         let screen = screen_handle.lock();
         let first_row = screen.viewport_first_row();
-        screen_snapshot::styled_viewport(screen.styled_viewport_lines(first_row), meta(&screen))
+        let (lines, held_cursor) = screen.shown_viewport_lines(first_row);
+        let mut meta = meta(&screen);
+        if let Some(cursor) = held_cursor {
+            meta.cursor = cursor;
+        }
+        screen_snapshot::styled_viewport(lines, meta)
     };
     activity_handle
         .lock()
@@ -58,6 +63,29 @@ pub(super) fn read_render_frame(
         let mut screen = screen_handle.lock();
         let first_row = screen.viewport_first_row();
         let revision = screen.revision();
+
+        // Mid synchronized update: the reader keeps the picture it has. Its
+        // dirty rows stay dirty, so the whole update arrives in one frame
+        // when the program says it is done. Only for a reader that has a
+        // picture to keep -- a full read has to be answered.
+        let held = since_revision.and_then(|since| screen.held_cursor().map(|cursor| (since, cursor)));
+        if let Some((since, cursor)) = held {
+            drop(screen);
+            activity_handle
+                .lock()
+                .mark_screen_read(started_at.elapsed());
+            let screen = screen_handle.lock();
+            return Ok(RenderFrameSnapshot {
+                lines: Vec::new(),
+                cursor,
+                cols: screen.cols,
+                rows: screen.rows,
+                scrollback_rows: screen.scrollback_rows(),
+                revision: since,
+                dirty_rows: None,
+                full: false,
+            });
+        }
 
         match render_frame::select_frame(
             screen.rows,
@@ -346,6 +374,7 @@ fn meta(screen: &super::NextCoreScreen) -> ScreenSnapshotMeta {
         bells: screen.bells,
         notifications: screen.notifications,
         last_notification: screen.last_notification.clone(),
+        progress: screen.progress,
         focus_reporting: screen.focus_event_reporting,
         clipboard_request: screen.clipboard_request.clone(),
     }

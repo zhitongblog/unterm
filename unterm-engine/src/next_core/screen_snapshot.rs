@@ -15,6 +15,7 @@ pub(super) struct ScreenSnapshotMeta {
     pub(super) bells: u64,
     pub(super) notifications: u64,
     pub(super) last_notification: Option<String>,
+    pub(super) progress: Option<crate::TerminalProgress>,
     pub(super) focus_reporting: bool,
     pub(super) clipboard_request: Option<String>,
 }
@@ -46,6 +47,7 @@ pub(super) fn plain_viewport(
         bells: meta.bells,
         notifications: meta.notifications,
         last_notification: meta.last_notification.clone(),
+        progress: meta.progress,
         focus_reporting: meta.focus_reporting,
         clipboard_request: meta.clipboard_request.clone(),
     }
@@ -67,6 +69,7 @@ pub(super) fn styled_viewport(
         bells: meta.bells,
         notifications: meta.notifications,
         last_notification: meta.last_notification.clone(),
+        progress: meta.progress,
         focus_reporting: meta.focus_reporting,
         clipboard_request: meta.clipboard_request.clone(),
     }
@@ -145,6 +148,7 @@ mod tests {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             focus_reporting: false,
             clipboard_request: None,
         }

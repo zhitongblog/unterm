@@ -1487,6 +1487,19 @@ fn dispatch_inner(
                 serde_json::json!({"first_ratio": first_ratio}),
             ))?
         }
+        // The colours a window is drawing with, so the sessions -- which run
+        // here, not in the window -- can answer programs that ask for them.
+        "terminal.set_colors" => {
+            let colors: unterm_engine::next_core::color::TerminalColors = serde_json::from_value(
+                request
+                    .params
+                    .get("colors")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("terminal.set_colors needs colors"))?,
+            )?;
+            engine.set_terminal_colors(colors)?;
+            serde_json::to_string(&response_ok(id, serde_json::json!({"set": true})))?
+        }
         "session.close" => {
             let pane_id = required_pane_id(request)?;
             engine.destroy_session(pane_id)?;
@@ -2596,6 +2609,16 @@ impl SessionEngine for CoreEngineClient {
         self.call_unit(
             "session.set_split_ratio",
             serde_json::json!({"pane_id": pane_id, "first_ratio": first_ratio}),
+        )
+    }
+
+    fn set_terminal_colors(
+        &self,
+        colors: unterm_engine::next_core::color::TerminalColors,
+    ) -> Result<()> {
+        self.call_unit(
+            "terminal.set_colors",
+            serde_json::json!({ "colors": colors }),
         )
     }
 }

@@ -59,6 +59,16 @@ pub fn run_ls_fonts(json_out: bool) -> Result<()> {
 }
 
 pub fn run_imgcat(path: PathBuf) -> Result<()> {
+    // The bytes below are iTerm2's inline-image sequence, which Unterm's own
+    // terminal does not draw yet: inside an Unterm pane this printed nothing
+    // and reported success. Say so instead. Elsewhere -- iTerm2, WezTerm, an
+    // SSH session out of Unterm -- the sequence still does its job.
+    if std::env::var_os("UNTERM_PANE").is_some() {
+        anyhow::bail!(
+            "Unterm cannot display inline images yet, so `imgcat` would print nothing here. \
+             It still works in terminals that support iTerm2 inline images."
+        );
+    }
     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let name = path

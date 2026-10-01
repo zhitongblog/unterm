@@ -182,6 +182,7 @@ struct NextCoreScreen {
     /// the newest text — a front end compares the count between frames.
     notifications: u64,
     last_notification: Option<String>,
+    progress: Option<crate::TerminalProgress>,
     /// Text a program asked to put on the system clipboard.
     clipboard_request: Option<String>,
     cursor_blinking: bool,
@@ -200,6 +201,14 @@ struct NextCoreScreen {
     sgr_pixel_mouse: bool,
     meta_sends_escape: bool,
     synchronized_output: bool,
+    /// The kitty keyboard protocol's flag stack: `CSI > f u` pushes,
+    /// `CSI < n u` pops, `CSI = f ; m u` changes the top. Empty is legacy.
+    kitty_keyboard: Vec<u8>,
+    /// xterm `modifyOtherKeys` level.
+    modify_other_keys: u8,
+    /// When the program began its current synchronized update, and where the
+    /// cursor was then: what a reader is shown until the update ends.
+    synchronized_since: Option<SynchronizedHold>,
     alternate_screen_modes: BTreeSet<usize>,
     origin_mode: bool,
     insert_mode: bool,
@@ -224,6 +233,16 @@ struct NextCoreScreen {
     parser: TerminalParser,
 }
 
+/// What a synchronized update holds on to: when it began, and the picture
+/// and cursor from just before it.
+#[derive(Clone, Debug)]
+struct SynchronizedHold {
+    since: std::time::Instant,
+    cursor: CursorSnapshot,
+    first_row: i64,
+    lines: Vec<crate::StyledScreenLine>,
+}
+
 impl NextCoreScreen {
     /// The terminal modes a GUI pane surfaces.
     ///
@@ -236,6 +255,114 @@ impl NextCoreScreen {
             alt_screen_active: !self.alternate_screen_modes.is_empty(),
             bracketed_paste: self.bracketed_paste,
             application_cursor_keys: self.application_cursor_keys,
+            kitty_keyboard: self.kitty_keyboard_flags(),
+            modify_other_keys: self.modify_other_keys,
+        }
+    }
+
+    /// The kitty flags this terminal acts on: disambiguate (1). Reporting
+    /// event types, alternate keys, all keys as escapes and associated text
+    /// are not implemented, so they are neither honoured nor claimed -- a
+    /// program reads the answer to `CSI ? u` and adapts to it.
+    const KITTY_SUPPORTED: u8 = 0b1;
+    const KITTY_STACK_LIMIT: usize = 32;
+
+    pub(super) fn kitty_keyboard_flags(&self) -> u8 {
+        self.kitty_keyboard.last().copied().unwrap_or(0) & Self::KITTY_SUPPORTED
+    }
+
+    /// `CSI > flags u`, `CSI < count u`, `CSI = flags ; mode u`.
+    fn apply_kitty_keyboard(&mut self, marker: char, numbers: &[usize]) {
+        let first = numbers.first().copied().unwrap_or(0);
+        match marker {
+            '>' => {
+                if self.kitty_keyboard.len() >= Self::KITTY_STACK_LIMIT {
+                    self.kitty_keyboard.remove(0);
+                }
+                self.kitty_keyboard.push(first.min(255) as u8);
+            }
+            '<' => {
+                for _ in 0..first.max(1) {
+                    if self.kitty_keyboard.pop().is_none() {
+                        break;
+                    }
+                }
+            }
+            '=' => {
+                let flags = first.min(255) as u8;
+                let mode = numbers.get(1).copied().unwrap_or(1);
+                if self.kitty_keyboard.is_empty() {
+                    self.kitty_keyboard.push(0);
+                }
+                if let Some(top) = self.kitty_keyboard.last_mut() {
+                    *top = match mode {
+                        2 => *top | flags,
+                        3 => *top & !flags,
+                        _ => flags,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `CSI > 4 ; level m` sets xterm's modifyOtherKeys; `CSI > 4 m` and
+    /// `CSI > 4 ; 0 m` turn it off. Other resources are not keyboard ones.
+    fn apply_modify_keys(&mut self, numbers: &[usize]) {
+        if numbers.first() == Some(&4) {
+            self.modify_other_keys = numbers.get(1).copied().unwrap_or(0).min(2) as u8;
+        }
+    }
+
+    /// The longest a synchronized update may hold the picture back.
+    ///
+    /// A program that turns `?2026` on and dies -- or simply forgets -- must
+    /// not freeze the pane. Other terminals pick the same order of magnitude.
+    const SYNCHRONIZED_HOLD: std::time::Duration = std::time::Duration::from_millis(150);
+
+    /// `CSI ? 2026 h/l`.
+    fn set_synchronized_output(&mut self, enabled: bool) {
+        if enabled && !self.synchronized_output {
+            let first_row = self.viewport_first_row();
+            self.synchronized_since = Some(SynchronizedHold {
+                since: std::time::Instant::now(),
+                cursor: self.cursor_snapshot(),
+                first_row,
+                lines: self.styled_viewport_lines(first_row),
+            });
+        }
+        if !enabled {
+            self.synchronized_since = None;
+        }
+        self.synchronized_output = enabled;
+    }
+
+    /// Whether a reader should be shown the picture from before the program's
+    /// update began, and the cursor from then.
+    ///
+    /// Recorded since the first kernel and never acted on, so an app that
+    /// redraws a whole screen per keystroke -- Claude Code's input box,
+    /// anything built on Ink or Ratatui -- was drawn halfway through each
+    /// redraw: the old frame partly erased, the new one partly written.
+    fn held_cursor(&self) -> Option<CursorSnapshot> {
+        self.held().map(|hold| hold.cursor.clone())
+    }
+
+    fn held(&self) -> Option<&SynchronizedHold> {
+        let hold = self.synchronized_since.as_ref()?;
+        (self.synchronized_output
+            && hold.since.elapsed() < Self::SYNCHRONIZED_HOLD
+            && hold.lines.len() == self.rows)
+            .then_some(hold)
+    }
+
+    /// The viewport a reader is shown: the held picture mid-update, the live
+    /// one otherwise. Scrolled away from where the hold began, the reader
+    /// asked for something else and gets it live.
+    fn shown_viewport_lines(&self, first_row: i64) -> (Vec<crate::StyledScreenLine>, Option<CursorSnapshot>) {
+        match self.held() {
+            Some(hold) if hold.first_row == first_row => (hold.lines.clone(), Some(hold.cursor.clone())),
+            _ => (self.styled_viewport_lines(first_row), None),
         }
     }
 
@@ -283,6 +410,7 @@ impl NextCoreScreen {
             bells: 0,
             notifications: 0,
             last_notification: None,
+            progress: None,
             clipboard_request: None,
             cursor_blinking: true,
             cursor_shape: "Default".to_string(),
@@ -1189,6 +1317,8 @@ impl NextCoreScreen {
         self.sgr_pixel_mouse = false;
         self.meta_sends_escape = false;
         self.synchronized_output = false;
+        self.kitty_keyboard.clear();
+        self.modify_other_keys = 0;
         self.cursor_visible = true;
         self.cursor_blinking = true;
         self.cursor_shape = "Default".to_string();
@@ -1488,7 +1618,11 @@ impl NextCoreScreen {
             // and should not grow one, but it is the only thing that sees
             // the sequence.
             Some(osc_params::OscCommand::Clipboard(text)) => self.clipboard_request = Some(text),
+            Some(osc_params::OscCommand::Progress(progress)) => self.progress = progress,
             Some(osc_params::OscCommand::PromptStart) if self.alternate.is_none() => {
+                // A prompt means whatever was running has finished, whether
+                // or not it cleared its progress on the way out.
+                self.progress = None;
                 let row = self.history.scrollback_rows() + self.cursor_y;
                 if self.prompt_rows.last() != Some(&row) {
                     self.prompt_rows.push(row);
@@ -2108,6 +2242,11 @@ impl SessionEngine for NextCoreEngine {
 
     fn destroy_session(&self, pane_id: usize) -> Result<()> {
         runtime::destroy(pane_id)
+    }
+
+    fn set_terminal_colors(&self, colors: color::TerminalColors) -> Result<()> {
+        color::set_reported_colors(colors);
+        Ok(())
     }
 
     fn set_split_ratio(&self, pane_id: usize, first_ratio: f64) -> Result<()> {
@@ -7324,6 +7463,67 @@ mod tests {
         screen.feed("\x1b[?1004h\x1b[!p");
         assert!(!screen.focus_event_reporting);
 
+        Ok(())
+    }
+
+    #[test]
+    fn keyboard_protocol_requests_are_tracked_and_never_styled() -> Result<()> {
+        let mut screen = NextCoreScreen::new(20, 3);
+        // kitty: push, change the top, query, pop.
+        screen.feed("\x1b[>1u");
+        assert_eq!(screen.pane_modes().kitty_keyboard, 1);
+        assert_eq!(
+            terminal_queries::response_for_csi_for_tests("?u", &screen),
+            Some(b"\x1b[?1u".to_vec())
+        );
+        // Unsupported flags are not claimed.
+        screen.feed("\x1b[>31u");
+        assert_eq!(screen.pane_modes().kitty_keyboard, 1);
+        screen.feed("\x1b[<u");
+        assert_eq!(screen.pane_modes().kitty_keyboard, 1);
+        screen.feed("\x1b[=0;1u");
+        assert_eq!(screen.pane_modes().kitty_keyboard, 0);
+        screen.feed("\x1b[<10u");
+        assert_eq!(screen.pane_modes().kitty_keyboard, 0);
+        // Plain `CSI u` is still restore-cursor.
+        screen.set_cursor(1, 4);
+        screen.feed("\x1b[s");
+        screen.set_cursor(0, 0);
+        screen.feed("\x1b[u");
+        assert_eq!((screen.cursor_y, screen.cursor_x), (1, 4));
+        // modifyOtherKeys is a keyboard mode, not underline and faint.
+        screen.feed("\x1b[>4;2mX");
+        assert_eq!(screen.pane_modes().modify_other_keys, 2);
+        let styled = screen.styled_viewport_lines(screen.viewport_first_row());
+        let cell = styled[1].cells.iter().find(|cell| cell.ch == 'X').expect("X drawn");
+        assert!(!cell.style.underline && !cell.style.faint, "{:?}", cell.style);
+        screen.feed("\x1b[>4m");
+        assert_eq!(screen.pane_modes().modify_other_keys, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_synchronized_update_is_shown_whole_or_not_at_all() -> Result<()> {
+        let mut screen = NextCoreScreen::new(20, 3);
+        screen.feed("before");
+        let first_row = screen.viewport_first_row();
+        screen.feed("\x1b[?2026h\r\x1b[2Kafter-1");
+        // Mid-update the reader is shown the picture from before it began.
+        let (held, cursor) = screen.shown_viewport_lines(first_row);
+        let text: String = held[0].cells.iter().map(|cell| cell.ch).collect();
+        assert!(text.starts_with("before"), "{:?}", text);
+        assert!(cursor.is_some());
+        screen.feed("\x1b[?2026l");
+        let (live, cursor) = screen.shown_viewport_lines(first_row);
+        let text: String = live[0].cells.iter().map(|cell| cell.ch).collect();
+        assert!(text.starts_with("after-1"), "{:?}", text);
+        assert!(cursor.is_none());
+        // A program that never ends its update cannot freeze the pane.
+        screen.feed("\x1b[?2026h");
+        if let Some(hold) = screen.synchronized_since.as_mut() {
+            hold.since -= NextCoreScreen::SYNCHRONIZED_HOLD * 2;
+        }
+        assert!(screen.held().is_none());
         Ok(())
     }
 

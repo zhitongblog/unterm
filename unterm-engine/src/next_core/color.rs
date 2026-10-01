@@ -10,7 +10,7 @@
 //! colours that are already bright and does nothing visible to dark ones,
 //! which is exactly backwards for a tab bar that has to work in both themes.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Rgb {
     pub red: u8,
     pub green: u8,
@@ -255,5 +255,68 @@ mod palette_tests {
         // 0 -> 0x5f is the large first step. Even spacing would put it at
         // 0x33, which reads as a different colour entirely.
         assert_eq!(palette_rgb(16 + 1).blue, 0x5f);
+    }
+}
+
+/// The colours a program is told when it asks (`OSC 4`, `10`, `11`, `12`).
+///
+/// A front end decides what a pane looks like; the kernel answers the
+/// questions programs send through the pty, and in Core mode those two are
+/// different processes. So the front end hands its effective theme down here
+/// whenever it changes, and the kernel answers from it. Programs ask for a
+/// reason: Claude Code, Codex, Neovim and friends read the background to
+/// choose between their light and dark palettes, and a terminal that stays
+/// silent leaves them guessing -- usually "dark", which is wrong half the time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TerminalColors {
+    pub foreground: Rgb,
+    pub background: Rgb,
+    pub cursor: Rgb,
+    pub ansi: [Rgb; 16],
+}
+
+impl Default for TerminalColors {
+    /// The default theme's frame colours, until a front end says otherwise:
+    /// an answer that is right for most people beats no answer at all.
+    fn default() -> Self {
+        let mut ansi = [Rgb::new(0, 0, 0); 16];
+        for (index, slot) in ansi.iter_mut().enumerate() {
+            *slot = palette_rgb(index as u8);
+        }
+        Self {
+            foreground: Rgb::new(0xf2, 0xef, 0xe7),
+            background: Rgb::new(0x16, 0x18, 0x1d),
+            cursor: Rgb::new(0xe8, 0xb3, 0x4b),
+            ansi,
+        }
+    }
+}
+
+fn reported() -> &'static parking_lot::RwLock<TerminalColors> {
+    static REPORTED: std::sync::OnceLock<parking_lot::RwLock<TerminalColors>> =
+        std::sync::OnceLock::new();
+    REPORTED.get_or_init(Default::default)
+}
+
+/// Replace what programs are told. Process-wide: one theme is in effect.
+pub fn set_reported_colors(colors: TerminalColors) {
+    *reported().write() = colors;
+}
+
+/// What programs are told right now.
+pub fn reported_colors() -> TerminalColors {
+    *reported().read()
+}
+
+impl Rgb {
+    /// `rgb:RRRR/GGGG/BBBB`, the 16-bit-per-channel form xterm answers in.
+    pub fn to_xparse(self) -> String {
+        let wide = |channel: u8| u16::from(channel) * 257;
+        format!(
+            "rgb:{:04x}/{:04x}/{:04x}",
+            wide(self.red),
+            wide(self.green),
+            wide(self.blue)
+        )
     }
 }

@@ -209,6 +209,13 @@ impl TerminalParser {
                     screen.erase_in_line(mode);
                 }
             }
+            // `CSI > … m` is xterm's resource modifier, `CSI ? … m` a query:
+            // neither is a style. Read as SGR, `CSI > 4 ; 2 m` turned on
+            // underline and faint for everything printed after it.
+            'm' if raw_params.starts_with('>') => {
+                screen.apply_modify_keys(&csi_params::parse_numbers(&raw_params[1..]))
+            }
+            'm' if raw_params.starts_with('?') => {}
             'm' => screen.apply_sgr(&csi_params::parse_sgr(raw_params)),
             'p' => {
                 if raw_params == "!" {
@@ -236,7 +243,13 @@ impl TerminalParser {
                     screen.save_cursor();
                 }
             }
-            'u' => screen.restore_cursor(),
+            'u' => match raw_params.chars().next() {
+                Some(marker @ ('>' | '<' | '=')) => screen
+                    .apply_kitty_keyboard(marker, &csi_params::parse_numbers(&raw_params[1..])),
+                // `CSI ? u` is the flags query, answered with the others.
+                Some('?') => {}
+                _ => screen.restore_cursor(),
+            },
             't' => {
                 if raw_params.ends_with('$') {
                     let numbers = csi_params::parse_numbers(raw_params);
@@ -331,7 +344,7 @@ impl TerminalParser {
                             1016 => screen.sgr_pixel_mouse = true,
                             1034 => screen.meta_sends_escape = true,
                             2004 => screen.set_bracketed_paste(true),
-                            2026 => screen.synchronized_output = true,
+                            2026 => screen.set_synchronized_output(true),
                             _ => {}
                         }
                     } else if *mode == 4 {
@@ -389,7 +402,7 @@ impl TerminalParser {
                             1016 => screen.sgr_pixel_mouse = false,
                             1034 => screen.meta_sends_escape = false,
                             2004 => screen.set_bracketed_paste(false),
-                            2026 => screen.synchronized_output = false,
+                            2026 => screen.set_synchronized_output(false),
                             _ => {}
                         }
                     } else if *mode == 4 {
