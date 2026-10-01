@@ -12,25 +12,27 @@ Unterm is a terminal that agents can drive and that shows you what the agents in
 
 Most of what follows is terminal groundwork: the protocols modern command-line tools expect, and the install and update paths people expect from a daily driver. The agent surface (MCP, CLI, Agent Cockpit) already ships; see the [MCP reference](/docs/mcp-reference) and [Agent Cockpit](/docs/agent-cockpit).
 
-## In progress
+## Ready for the next release
+
+Built and verified on `master`; each one ships with the next tagged release.
 
 ### Terminal protocols
 
-- **Kitty keyboard protocol** — unambiguous key reporting, so programs can tell `Ctrl+I` from `Tab` and see key releases.
-- **Synchronized output (mode 2026)** — a program can ask for a frame to be drawn only once it has finished writing it, so full-screen redraws stop tearing.
-- **OSC 10 / OSC 11 colour queries** — programs can ask for the foreground and background colour and pick a light or dark palette to match.
-- **OSC 9;4 progress** — a command's progress, reported by the program and shown by Unterm.
-- **Full OSC 133 shell integration with automatic injection** — prompt, command and output marks set up in the shells Unterm starts without editing your shell config, so command boundaries and exit codes are known without extra setup.
+- **Kitty keyboard protocol** (the "disambiguate" level, which is what agents and modern TUIs ask for) and xterm's **modifyOtherKeys**: Shift+Enter, Esc and Ctrl/Alt chords reach the program as themselves. Unterm answers the protocol's query with exactly the levels it implements.
+- **Synchronized output (mode 2026)**: an update is shown whole or not at all, for at most 150 ms, so full-screen redraws stop tearing.
+- **Colour queries** (OSC 4, 10, 11, 12) answered from the theme the window is drawing, and **XTVERSION**.
+- **OSC 9;4 progress**, drawn as a bar under the tab in the sidebar.
+- **Shell integration, injected automatically** into zsh, bash, fish and PowerShell: prompt and command marks with exit codes, so a failed command marks its tab. See [Shell integration](/docs/shell-integration).
 
 ### Windows
 
-- **WSL and Git Bash as first-class shells** — found and offered when you open a tab.
+- **Git Bash** found wherever Git is installed, and **each WSL distribution** listed by name in the shell menu.
 
 ### Install and update
 
-- **In-app updates** — today Unterm only checks GitHub for a newer release and tells you; it will download and install it too.
-- **Package managers** — Homebrew, Scoop and winget.
-- **Crash reports via a pre-filled GitHub issue** — after a crash, Unterm offers to open an issue with the details already filled in. Nothing is sent unless you submit it yourself.
+- **In-app updates**: `unterm-cli update`, the command palette's **Install update**, and Web Settings download, verify and install the new release, then restart Unterm. See [`update`](/docs/cli-reference#update).
+- **Homebrew, Scoop and winget**: manifests and a publish script are ready; the channels are listed here once they are live.
+- **Crash reports via a pre-filled GitHub issue**: nothing is sent unless you submit it yourself.
 
 ## Later
 

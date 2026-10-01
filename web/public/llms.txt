@@ -36,6 +36,7 @@
 - [Identity profiles](https://unterm.app/docs/profiles): binding credentials to a window.
 - [Configuration](https://unterm.app/docs/configuration): every file under `~/.unterm/`.
 - [Config file reference](https://unterm.app/docs/config-reference): every key in `unterm.conf`, including `[env]` and `[keys]`.
+- [Shell integration](https://unterm.app/docs/shell-integration): the prompt and command marks Unterm loads into zsh, bash, fish and PowerShell, and how to turn them off.
 - [Architecture](https://unterm.app/docs/architecture): how the control surfaces fit together.
 
 ## Links

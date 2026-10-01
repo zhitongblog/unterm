@@ -659,6 +659,28 @@ done in 0.6s
 
 Typed into an Unterm tab, the command runs inside the Core it is stopping. It hands the work to a detached copy of itself first, so the quit still finishes when the tab closes around it. If the copy's report can still be shown, it is printed there. `--json` returns `asked`, `left_running`, `terminated`, `survivors` and `ok`.
 
+## update
+
+Install the newest Unterm and restart into it.
+
+```text
+unterm-cli update [--check] [--app <path>] [--force] [--no-restart]
+```
+
+1. Ask GitHub for the latest release and pick this platform's package: the `.dmg` on macOS, the `.msi` for your architecture on Windows, the `.AppImage` when Unterm runs from one.
+2. Download it and check its SHA-256 against the digest GitHub recorded when the file was uploaded. When the GitHub API is rate-limited (60 anonymous requests an hour per address), the release's `SHA256SUMS` file is used instead; set `GITHUB_TOKEN` to use your own allowance. A file that does not match is deleted, and nothing is installed without a checksum.
+3. On macOS, verify the new app's code signature and that it is signed by the same team as the app it replaces.
+4. Quit Unterm the orderly way (as [`quit`](#quit) does), let a helper put the new version in place once every Unterm process has exited, and start it again.
+
+| Flag | Effect |
+|---|---|
+| `--check` | Only report whether a newer version exists. |
+| `--app <path>` | Update this install rather than the one `unterm-cli` belongs to: the `.app` bundle on macOS, the install folder on Windows. |
+| `--force` | Install the latest release even when it is not newer. |
+| `--no-restart` | Leave Unterm closed afterwards. |
+
+A `.deb` install and a portable `.zip` are not replaced: the command names the release and leaves the upgrade to your package manager, or to you. The same update is in the command palette (**Install update**) and in Web Settings, whenever a newer release is available. Typed into an Unterm tab, the command hands itself to a detached copy first, so it finishes when the tab closes around it.
+
 ## agent
 
 Install, authenticate, configure, launch, or run AI coding-agent CLIs through Unterm's profile and MCP wiring. `agent launch` opens the vendor CLI interactively; `agent run` uses the vendor's non-interactive mode and waits for the task to finish. Since v0.55 this family also carries the Agent Cockpit state surface: `status`, `inbox`, `signal`, and `enable-hooks`.

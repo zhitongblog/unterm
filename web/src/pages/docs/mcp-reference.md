@@ -1496,9 +1496,18 @@ handler every other door uses.
 ### `agent_session.*` — hosting a CLI agent
 
 `start` / `events` / `submit_input` / `interrupt` / `status` / `close`. Events
-are `session.started`, `output.delta`, `tool.requested`, `tool.completed`,
-`session.exited`. The `task_id` / `run_id` / `step_id` you pass in come back
+are `session.started`, `turn.started`, `output.delta`, `tool_call.requested`,
+`tool_call.result`, `usage.updated`, `turn.completed`, `error` and
+`session.closed`. The `task_id` / `run_id` / `step_id` you pass in come back
 on every event untouched — nothing here invents one.
+
+Which parser reads the agent's output is decided by the program behind the
+command, seen through `cmd /c`, `env`, `npx`, `node script.js`, `sh -c` and
+`pwsh -Command`: Claude Code's `--output-format stream-json`, Codex's
+`exec --json`, or `generic` for anything else, which reports each line as
+`output.delta` and claims nothing more. Pass `adapter` (`claude`, `codex`,
+`generic`) to choose it yourself. `status` reports `usage: null` when the
+agent never said what it used, rather than zeros.
 
 Events are buffered behind a cursor (poll, reconnect where you left off); the
 *ending* is persisted, so "what happened to the agent I started before the
