@@ -1,0 +1,42 @@
+{
+    "version": "@@VERSION@@",
+    "description": "Terminal that AI agents can drive over MCP — GUI, unterm-cli and a headless Core.",
+    "homepage": "https://github.com/zhitongblog/unterm",
+    "license": "MIT",
+    "notes": [
+        "Quit Unterm before 'scoop update unterm' (unterm-cli quit --all ends the GUI and the Core):",
+        "Scoop refuses to replace files that a running unterm.exe or unterm-core.exe holds.",
+        "The Explorer 'Open in Unterm' menu entries come with the MSI install (winget), not with Scoop."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/zhitongblog/unterm/releases/download/v@@VERSION@@/Unterm-windows-x64-v@@VERSION@@.zip",
+            "hash": "@@SHA256_ZIP_X64@@"
+        },
+        "arm64": {
+            "url": "https://github.com/zhitongblog/unterm/releases/download/v@@VERSION@@/Unterm-windows-arm64-v@@VERSION@@.zip",
+            "hash": "@@SHA256_ZIP_ARM64@@"
+        }
+    },
+    "extract_dir": "unterm-release-stage\\unterm",
+    "bin": "unterm-cli.exe",
+    "shortcuts": [
+        [
+            "unterm.exe",
+            "Unterm"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/zhitongblog/unterm"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/zhitongblog/unterm/releases/download/v$version/Unterm-windows-x64-v$version.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/zhitongblog/unterm/releases/download/v$version/Unterm-windows-arm64-v$version.zip"
+            }
+        }
+    }
+}

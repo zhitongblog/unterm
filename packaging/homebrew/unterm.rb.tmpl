@@ -1,0 +1,47 @@
+cask "unterm" do
+  version "@@VERSION@@"
+  sha256 "@@SHA256_DMG@@"
+
+  url "https://github.com/zhitongblog/unterm/releases/download/v#{version}/Unterm-macos-v#{version}.dmg"
+  name "Unterm"
+  desc "Terminal that AI agents can drive over MCP"
+  homepage "https://github.com/zhitongblog/unterm"
+
+  livecheck do
+    url :url
+    strategy :github_latest
+  end
+
+  # The binaries are universal (x86_64 + arm64) and the app needs macOS 11
+  # (arm64 slices and the Finder extension are built for 11.0), which is below
+  # what Homebrew itself supports, so the bare form is the whole requirement.
+  depends_on :macos
+
+  app "Unterm.app"
+  # A wrapper, not a symlink: unterm-cli starts unterm-core (and opens windows
+  # with unterm) from the directory of std::env::current_exe(), which on macOS
+  # is the path it was invoked by. Through a symlink in the Homebrew prefix that
+  # is the prefix's bin/, where neither sibling exists, so the Core could not
+  # be started. exec'ing the real binary keeps current_exe() inside the bundle.
+  binary "#{staged_path}/unterm-cli.wrapper.sh", target: "unterm-cli"
+
+  preflight_steps do
+    write_file "unterm-cli.wrapper.sh", <<~EOS
+      #!/bin/sh
+      exec '{{appdir}}/Unterm.app/Contents/MacOS/unterm-cli' "$@"
+    EOS
+    set_permissions "unterm-cli.wrapper.sh", "0755"
+  end
+
+  uninstall quit: "ai.unzoo.unterm"
+
+  zap trash: [
+    "~/.config/unterm",
+    "~/.unterm",
+    "~/Library/Application Support/Unterm",
+    "~/Library/Caches/ai.unzoo.unterm",
+    "~/Library/HTTPStorages/ai.unzoo.unterm",
+    "~/Library/Preferences/ai.unzoo.unterm.plist",
+    "~/Library/Saved Application State/ai.unzoo.unterm.savedState",
+  ]
+end
