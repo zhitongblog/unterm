@@ -35,7 +35,7 @@
   "persona.power.bullets.3": "Windows MSI with WiX 6 + portable .zip",
   "persona.power.bullets.4": "9 locales out of the box, system locale auto-detect",
   "install.title": "Download by platform",
-  "install.subtitle": "Pick the signed bundle for your OS. The direct links below go straight to GitHub Releases.",
+  "install.subtitle": "お使いのシステム向けのパッケージを選んでください。リンクは GitHub Releases に直接つながります。macOS 版は署名・公証済みです。Windows のインストーラーはまだコード署名されていないため、SmartScreen で確認を求められることがあります（「詳細情報」→「実行」）。",
   "install.copy_hint": "click to copy",
   "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
   "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",

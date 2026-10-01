@@ -125,7 +125,7 @@
   "agents.card.signed.title": "Ed25519 签名 manifest 目录",
   "agents.card.signed.body": "agent 列表和安装命令不是写死在 Unterm 里 —— 而是从 <code class=\"font-mono text-xs\">unterm.app/api/agents/manifests</code> 拉的签名信封。即使 CDN 被攻破也推不了 <code class=\"font-mono text-xs\">curl | sh</code> 到你机器上，公钥 baked 进每个 Unterm binary。",
   "install.title": "按平台下载",
-  "install.subtitle": "选择适合你系统的已签名安装包，下面的直链会直接跳到 GitHub Releases。",
+  "install.subtitle": "选择适合你系统的安装包，下面的直链会直接跳到 GitHub Releases。macOS 安装包已签名并经过公证；Windows 安装包暂未做代码签名，SmartScreen 可能会要求确认（“更多信息”→“仍要运行”）。",
   "install.copy_hint": "click to copy",
   "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
   "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",

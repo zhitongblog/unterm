@@ -22,7 +22,15 @@ interface Env {}
 
 const BASE = "https://github.com/zhitongblog/unterm/releases";
 
-function targetForUA(ua: string, v: string): string {
+/// What the browser's client hints say about the CPU, when it sent them.
+/// `"arm"` for Windows on ARM: Chromium's User-Agent there is frozen at
+/// `Win64; x64`, so without the hint every ARM laptop got the x64 MSI.
+function hintedArch(req: Request): string | null {
+  const arch = req.headers.get("sec-ch-ua-arch");
+  return arch ? arch.replace(/"/g, "").toLowerCase() : null;
+}
+
+function targetForUA(ua: string, v: string, arch: string | null = null): string {
   // Construct the filenames the way Page.astro does — keep them in sync
   // here OR the click 404s. (See web/src/components/Page.astro for the
   // canonical formulas — DMG / AppImage / win.zip use the tag verbatim,
@@ -42,7 +50,7 @@ function targetForUA(ua: string, v: string): string {
     // Windows on ARM: the UA carries "ARM64" (Edge/Chrome on Snapdragon /
     // Surface) or a bare "ARM;". Serve the native arm64 MSI; everything else
     // gets x64 (which also runs on ARM via emulation, so it's a safe default).
-    if (/ARM64|aarch64|ARM;/i.test(ua)) {
+    if (arch === "arm" || /ARM64|aarch64|ARM;/i.test(ua)) {
       return `${latest}/Unterm-${semver}-arm64.msi`;
     }
     return `${latest}/Unterm-${semver}-x64.msi`;
@@ -64,5 +72,17 @@ export const onRequestGet: PagesFunction<Env> = (ctx) => {
     return Response.redirect(`${BASE}/latest`, 302);
   }
   const ua = ctx.request.headers.get("user-agent") || "";
-  return Response.redirect(targetForUA(ua, v), 302);
+  const arch = hintedArch(ctx.request);
+  const response = Response.redirect(targetForUA(ua, v, arch), 302);
+  // Ask Chromium for the architecture. `Critical-CH` makes a browser that
+  // did not send it retry this request once with it, before following the
+  // redirect -- the only way the very first click can know it is on ARM.
+  const headers = new Headers(response.headers);
+  headers.set("Accept-CH", "Sec-CH-UA-Arch, Sec-CH-UA-Platform");
+  if (/Windows/i.test(ua) && arch === null) {
+    headers.set("Critical-CH", "Sec-CH-UA-Arch");
+  }
+  headers.set("Vary", "User-Agent, Sec-CH-UA-Arch");
+  headers.set("Cache-Control", "no-store");
+  return new Response(null, { status: 302, headers });
 };

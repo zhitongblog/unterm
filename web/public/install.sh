@@ -77,8 +77,20 @@ if [ -z "$UNTERM_VERSION" ]; then
   # The API returns a JSON blob; grab the `tag_name` value with a tolerant
   # regex so we don't drag in jq as a dependency.
   api="https://api.github.com/repos/$REPO/releases/latest"
-  UNTERM_VERSION=$(fetch_stdout "$api" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
-  [ -n "$UNTERM_VERSION" ] || die "couldn't resolve latest tag from $api"
+  UNTERM_VERSION=$(fetch_stdout "$api" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  if [ -z "$UNTERM_VERSION" ]; then
+    # 60 anonymous API requests an hour per address, shared by an office or
+    # a VPN: the release page's redirect names the tag without the API.
+    warn "GitHub API unavailable; reading the release page instead"
+    if command -v curl >/dev/null 2>&1; then
+      loc=$(curl -fsSI "https://github.com/$REPO/releases/latest" | tr -d '\r' | sed -n 's/^[Ll]ocation: *//p' | head -1)
+    else
+      loc=$(wget -S --max-redirect=0 -O /dev/null "https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | head -1)
+    fi
+    UNTERM_VERSION=${loc##*/tag/}
+    case "$UNTERM_VERSION" in v*) ;; *) UNTERM_VERSION="" ;; esac
+  fi
+  [ -n "$UNTERM_VERSION" ] || die "couldn't resolve the latest release from GitHub"
 fi
 ok "Unterm $UNTERM_VERSION"
 DL_BASE="https://github.com/$REPO/releases/download/$UNTERM_VERSION"

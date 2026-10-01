@@ -30,7 +30,21 @@ if (-not $version) {
   try {
     $version = (Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent'='unterm-installer' }).tag_name
   } catch {
-    Die "couldn't resolve latest tag from $api ($_)"
+    # The API allows 60 anonymous requests an hour per address, and an office
+    # or a VPN shares one. The release page's redirect names the tag too.
+    Warn "GitHub API unavailable ($($_.Exception.Message)); reading the release page instead"
+    try {
+      $page = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
+      $location = $page.Headers.Location
+    } catch {
+      # PowerShell 7 throws on the 302 and carries an HttpResponseMessage;
+      # Windows PowerShell 5.1 carries an HttpWebResponse.
+      $response = $_.Exception.Response
+      if ($response -and $response.Headers.Location) { $location = $response.Headers.Location }
+      elseif ($response) { $location = $response.Headers['Location'] }
+    }
+    if ($location) { $version = ($location.ToString() -split '/tag/')[-1] }
+    if (-not $version) { Die "couldn't resolve the latest release from GitHub ($_)" }
   }
 }
 if (-not $version) { Die 'tag_name was empty in API response' }
