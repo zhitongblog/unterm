@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: zhitongblog.Unterm
+PackageVersion: @@VERSION@@
+InstallerLocale: en-US
+InstallerType: wix
+# installer/Unterm.wxs: <Package Scope="perMachine">, installs to Program Files.
+Scope: machine
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+Commands:
+  - unterm-cli
+ReleaseDate: @@RELEASE_DATE@@
+AppsAndFeaturesEntries:
+  - DisplayName: Unterm
+    Publisher: Alex
+    UpgradeCode: '{2B17738E-D6E7-44BB-9B55-1D6AF31404A2}'
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/zhitongblog/unterm/releases/download/v@@VERSION@@/Unterm-@@VERSION@@-x64.msi
+    InstallerSha256: @@SHA256_MSI_X64@@
+    ProductCode: '@@PRODUCTCODE_MSI_X64@@'
+  - Architecture: arm64
+    InstallerUrl: https://github.com/zhitongblog/unterm/releases/download/v@@VERSION@@/Unterm-@@VERSION@@-arm64.msi
+    InstallerSha256: @@SHA256_MSI_ARM64@@
+    ProductCode: '@@PRODUCTCODE_MSI_ARM64@@'
+ManifestType: installer
+ManifestVersion: 1.6.0
