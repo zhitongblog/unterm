@@ -314,7 +314,7 @@ unterm-cli agent inbox`;
 </section>
 
 <!-- ============== INSTALL ============== -->
-<section id="install" class="py-20 border-t border-notion-border">
+<section id="install" class="py-20 border-t border-notion-border" data-copy-hint={t("install.copy_hint")}>
   <div class="max-w-4xl mx-auto px-6">
     <h2 class="text-3xl font-semibold tracking-tight text-center text-notion-ink">{t("install.title")}</h2>
     <p class="mt-3 text-center text-notion-muted">{t("install.subtitle")}</p>
@@ -411,7 +411,7 @@ unterm-cli agent inbox`;
     );
     document.querySelectorAll(".install-pane pre").forEach((pre) => {
       pre.style.cursor = "copy";
-      pre.title = "click to copy";
+      pre.title = document.getElementById("install")?.dataset.copyHint || "click to copy";
       pre.addEventListener("click", async () => {
         const text = pre.textContent.trim();
         const code = pre.querySelector("code") || pre;
