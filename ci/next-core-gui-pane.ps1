@@ -535,8 +535,10 @@ $Suites = @(
         # and counts what fits from each row's own height.
         # 35 since a row picked from the keyboard is brought into view by its
         # own height, and a project keeps its colour while others come and go.
-        ExpectedCount = 35
+        # 36 since a tab carries the progress a program reports with OSC 9;4.
+        ExpectedCount = 36
         RequiredTests = @(
+            "sidebar::tests::progress_fills_its_share_in_status_colours",
             "sidebar::tests::a_tall_row_is_followed_by_its_own_height",
             "sidebar::tests::a_project_keeps_its_colour_as_others_come_and_go",
             "sidebar::tests::projects_on_the_rail_are_told_apart",
