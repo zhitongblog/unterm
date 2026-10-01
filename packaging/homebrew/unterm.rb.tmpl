@@ -12,6 +12,9 @@ cask "unterm" do
     strategy :github_latest
   end
 
+  # Unterm installs its own updates (unterm-cli update, the command palette,
+  # Web Settings), so `brew upgrade` leaves it alone unless asked --greedy.
+  auto_updates true
   # The binaries are universal (x86_64 + arm64) and the app needs macOS 11
   # (arm64 slices and the Finder extension are built for 11.0), which is below
   # what Homebrew itself supports, so the bare form is the whole requirement.

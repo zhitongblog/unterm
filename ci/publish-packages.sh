@@ -305,6 +305,12 @@ winget_state() {
   fi
 }
 
+# The in-app updater falls back to SHA256SUMS when the GitHub API is
+# rate-limited; attach it before anything points people at this release.
+if [ "$DRY_RUN" = 0 ]; then
+  bash "$(dirname "$0")/release-checksums.sh" "$TAG"
+fi
+
 if [ "$DRY_RUN" = 1 ]; then
   say "Dry run: nothing was cloned, pushed or submitted. Rendered files:"
   note "$CASK"
