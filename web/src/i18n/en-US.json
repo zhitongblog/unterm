@@ -149,7 +149,7 @@
   "install.subtitle": "Pick the package for your system; the links go straight to GitHub Releases. macOS builds are signed and notarized. Windows installers are not code-signed yet, so SmartScreen may ask you to confirm (More info → Run anyway).",
   "install.copy_hint": "click to copy",
   "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
-  "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
+  "install.win_detail": "Pulls the latest MSI for your machine (x64 or arm64) from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
   "install.or_manual": "Or grab the artifact directly:",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
@@ -534,5 +534,9 @@
   "guide.keys.composer": "Composer: write a long prompt, send it when the pane is idle",
   "guide.keys.git": "Git panel",
   "guide.keys.split": "Split right / down",
-  "guide.keys.zoom": "Zoom the focused pane"
+  "guide.keys.zoom": "Zoom the focused pane",
+  "install.via_brew": "Or with Homebrew (macOS):",
+  "install.via_scoop": "Or with Scoop:",
+  "whatsnew.update717.title": "Updates itself, and knows how your commands ended",
+  "whatsnew.update717.body": "<strong>One-click updates</strong>: <code class=\"font-mono text-xs\">unterm-cli update</code>, <em>Install update</em> in the command palette, or the button in Web Settings downloads the new release, checks its SHA-256 (and on macOS its signature), and restarts into it. <strong>Shell integration loads itself</strong> into zsh, bash, fish and PowerShell, so a command that fails puts ▲ on its tab — and output that merely says “error” does not. Agents get what they ask terminals for: <strong>Shift+Enter is not Enter</strong> (kitty keyboard protocol), colour queries answered from your theme, progress bars under the tab (OSC 9;4), and full-screen redraws that no longer tear (mode 2026). Also: Git Bash and every WSL distribution in the Windows shell menu, a crash dialog that opens a pre-filled GitHub issue, and installs via Homebrew and Scoop."
 }

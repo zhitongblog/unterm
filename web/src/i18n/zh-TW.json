@@ -37,8 +37,8 @@
   "install.title": "按平台下載",
   "install.subtitle": "選擇適合你系統的安裝包，下面的直鏈會直接跳到 GitHub Releases。macOS 安裝包已簽名並經過公證；Windows 安裝包暫未做程式碼簽章，SmartScreen 可能會要求確認（「其他資訊」→「仍要執行」）。",
   "install.copy_hint": "click to copy",
-  "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
-  "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
+  "install.unix_detail": "自動識別系統和架構，下載最新版本對應的安裝包。macOS 把已簽名、已公證的 DMG 裝進 <code class=\"text-zinc-300\">/Applications</code>；Linux 有 <code class=\"text-zinc-300\">apt</code> 就用它，否則把 AppImage 放到 <code class=\"text-zinc-300\">~/.local/bin</code>。",
+  "install.win_detail": "從 GitHub Releases 拉取適合本機的最新 MSI（x64 或 arm64），用帶基本介面的 <code class=\"text-zinc-300\">msiexec</code> 安裝。UAC 會請求提升權限。",
   "install.or_manual": "Or grab the artifact directly:",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
@@ -372,5 +372,9 @@
   "cmp.c.rmux.a2": "<strong>反方向也行。</strong>rmux 是單向的：程式碼驅動終端。Unterm 還看著在它裡面執行的 agent——即時的每 pane 狀態、等待者優先的收件匣、帶驗證關卡審閱的 worktree fleet。終端是駕駛艙，不只是目標。",
   "cmp.c.rmux.a3": "<strong>一個人類真正用的終端。</strong>Unterm 是你整天工作的 GPU 視窗：選取即複製、右鍵貼上、身分 profile、9 種介面語言、脫敏 markdown 工作階段錄製。rmux 完全沒有算繪面——要配哪個終端 App 得你自己解決。",
   "cmp.c.rmux.win": "rmux 的工作階段持久性是真正的 tmux 等級：SSH 斷了，你的 agent 的 shell 照樣在跑，從哪裡都能重新接上。它的型別化快照和 wait_for_text 定位器比文字比對更細，無介面常駐程式也適合根本不可能有 GUI 的 CI 管線。它還能嵌入 Ratatui 應用程式。",
-  "cmp.c.rmux.verdict": "要建一個在 CI 或伺服器上由程式碼掌管終端工作階段的系統？rmux 是很強的基礎元件。在桌前和 AI agent 並肩工作，用的又是你自己也住在裡面的終端？那就是 Unterm——對 agent 是原生協定，對你是原生駕駛艙。"
+  "cmp.c.rmux.verdict": "要建一個在 CI 或伺服器上由程式碼掌管終端工作階段的系統？rmux 是很強的基礎元件。在桌前和 AI agent 並肩工作，用的又是你自己也住在裡面的終端？那就是 Unterm——對 agent 是原生協定，對你是原生駕駛艙。",
+  "install.via_brew": "或者用 Homebrew（macOS）：",
+  "install.via_scoop": "或者用 Scoop：",
+  "whatsnew.update717.title": "自己就能更新，也知道指令是怎麼結束的",
+  "whatsnew.update717.body": "<strong>一鍵更新</strong>：<code class=\"font-mono text-xs\">unterm-cli update</code>、命令面板裡的「安裝更新」或 Web 設定裡的按鈕，會下載新版本、校驗 SHA-256（macOS 還校驗簽名），然後重新啟動進新版本。<strong>shell 整合自動載入</strong>到 zsh、bash、fish 和 PowerShell：失敗的指令會在分頁上標 ▲，而只是輸出裡出現「error」字樣的不會。Agent 向終端要的東西也都有了：<strong>Shift+Enter 不再等同於 Enter</strong>（kitty 鍵盤協定）、顏色查詢按你的主題回答、分頁下的進度條（OSC 9;4）、整屏重繪不再撕裂（mode 2026）。另外：Windows 的 shell 選單裡有 Git Bash 和每個 WSL 發行版；崩潰對話框可以開啟預填好的 GitHub issue；可以用 Homebrew 和 Scoop 安裝。"
 }

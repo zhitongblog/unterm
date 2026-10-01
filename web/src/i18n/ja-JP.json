@@ -37,8 +37,8 @@
   "install.title": "Download by platform",
   "install.subtitle": "お使いのシステム向けのパッケージを選んでください。リンクは GitHub Releases に直接つながります。macOS 版は署名・公証済みです。Windows のインストーラーはまだコード署名されていないため、SmartScreen で確認を求められることがあります（「詳細情報」→「実行」）。",
   "install.copy_hint": "click to copy",
-  "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
-  "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
+  "install.unix_detail": "OS とアーキテクチャを判別し、最新リリースの適切なパッケージをダウンロードします。macOS は署名・公証済みの DMG を <code class=\"text-zinc-300\">/Applications</code> へ。Linux は <code class=\"text-zinc-300\">apt</code> があれば使い、なければ AppImage を <code class=\"text-zinc-300\">~/.local/bin</code> に置きます。",
+  "install.win_detail": "お使いのマシン向けの最新 MSI（x64 または arm64）を GitHub Releases から取得し、基本 UI 付きの <code class=\"text-zinc-300\">msiexec</code> でインストールします。UAC が昇格を求めます。",
   "install.or_manual": "Or grab the artifact directly:",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
@@ -372,5 +372,9 @@
   "cmp.c.rmux.a2": "<strong>逆方向も。</strong>rmux は一方向です：コードがターミナルを操作する。Unterm はその中で動くエージェントも見ています——ペインごとのライブ状態、待機中優先の受信箱、検証ゲート付きレビューの worktree フリート。ターミナルは操作対象であるだけでなく、コックピットです。",
   "cmp.c.rmux.a3": "<strong>人間が使うターミナル。</strong>Unterm は一日中作業する GPU ウィンドウです：選択でコピー、右クリックで貼り付け、アイデンティティプロファイル、9 つの UI 言語、秘匿化された Markdown へのセッション録画。rmux には描画面がまったくありません——どのターミナルアプリと組み合わせるかはあなた次第です。",
   "cmp.c.rmux.win": "rmux のセッション永続性は本物の tmux 級です：SSH が切れてもエージェントのシェルは動き続け、どこからでも再接続できます。型付きスナップショットと wait_for_text ロケーターはテキスト照合より細かく、ヘッドレスなデーモンは GUI が存在しえない CI パイプラインにも合います。Ratatui アプリへの組み込みもできます。",
-  "cmp.c.rmux.verdict": "CI やサーバー上でコードがターミナルセッションを握るシステムを作るなら？rmux は強力な部品です。デスクで AI エージェントと並んで、自分も住むターミナルで働くなら？それが Unterm——エージェントにはプロトコルネイティブ、あなたにはコックピットネイティブ。"
+  "cmp.c.rmux.verdict": "CI やサーバー上でコードがターミナルセッションを握るシステムを作るなら？rmux は強力な部品です。デスクで AI エージェントと並んで、自分も住むターミナルで働くなら？それが Unterm——エージェントにはプロトコルネイティブ、あなたにはコックピットネイティブ。",
+  "install.via_brew": "Homebrew でも（macOS）：",
+  "install.via_scoop": "Scoop でも：",
+  "whatsnew.update717.title": "自分でアップデートし、コマンドの結末もわかる",
+  "whatsnew.update717.body": "<strong>ワンクリック更新</strong>：<code class=\"font-mono text-xs\">unterm-cli update</code>、コマンドパレットの「アップデートをインストール」、Web 設定のボタンが新しいリリースをダウンロードし、SHA-256（macOS では署名も）を確認して再起動します。<strong>シェル統合が自動で読み込まれ</strong>（zsh・bash・fish・PowerShell）、失敗したコマンドのタブに ▲ が付きます。出力に「error」とあるだけでは付きません。エージェントが端末に求めるものも揃いました：<strong>Shift+Enter と Enter の区別</strong>（kitty キーボードプロトコル）、テーマに沿った色の問い合わせへの応答、タブの下の進捗バー（OSC 9;4）、ちらつかない全画面再描画（mode 2026）。さらに Windows のシェルメニューに Git Bash と各 WSL ディストリビューション、クラッシュ時に入力済みの GitHub issue を開くダイアログ、Homebrew と Scoop でのインストール。"
 }

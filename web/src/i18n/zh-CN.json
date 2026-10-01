@@ -127,8 +127,8 @@
   "install.title": "按平台下载",
   "install.subtitle": "选择适合你系统的安装包，下面的直链会直接跳到 GitHub Releases。macOS 安装包已签名并经过公证；Windows 安装包暂未做代码签名，SmartScreen 可能会要求确认（“更多信息”→“仍要运行”）。",
   "install.copy_hint": "click to copy",
-  "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
-  "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
+  "install.unix_detail": "自动识别系统和架构，下载最新版本对应的安装包。macOS 把已签名、已公证的 DMG 装进 <code class=\"text-zinc-300\">/Applications</code>；Linux 有 <code class=\"text-zinc-300\">apt</code> 就用它，否则把 AppImage 放到 <code class=\"text-zinc-300\">~/.local/bin</code>。",
+  "install.win_detail": "从 GitHub Releases 拉取适合本机的最新 MSI（x64 或 arm64），用带基本界面的 <code class=\"text-zinc-300\">msiexec</code> 安装。UAC 会请求提升权限。",
   "install.or_manual": "Or grab the artifact directly:",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
@@ -534,5 +534,9 @@
   "guide.keys.composer": "编写器：写好长提示，等窗格空闲时再发送",
   "guide.keys.git": "Git 面板",
   "guide.keys.split": "向右 / 向下分割",
-  "guide.keys.zoom": "放大当前窗格"
+  "guide.keys.zoom": "放大当前窗格",
+  "install.via_brew": "或者用 Homebrew（macOS）：",
+  "install.via_scoop": "或者用 Scoop：",
+  "whatsnew.update717.title": "自己就能更新，也知道命令是怎么结束的",
+  "whatsnew.update717.body": "<strong>一键更新</strong>：<code class=\"font-mono text-xs\">unterm-cli update</code>、命令面板里的「安装更新」或 Web 设置里的按钮，会下载新版本、校验 SHA-256（macOS 还校验签名），然后重启进新版本。<strong>shell 集成自动加载</strong>到 zsh、bash、fish 和 PowerShell：失败的命令会在标签上标 ▲，而只是输出里出现「error」字样的不会。Agent 向终端要的东西也都有了：<strong>Shift+Enter 不再等同于 Enter</strong>（kitty 键盘协议）、颜色查询按你的主题回答、标签下的进度条（OSC 9;4）、整屏重绘不再撕裂（mode 2026）。另外：Windows 的 shell 菜单里有 Git Bash 和每个 WSL 发行版；崩溃对话框可以打开预填好的 GitHub issue；可以用 Homebrew 和 Scoop 安装。"
 }

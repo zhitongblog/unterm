@@ -37,8 +37,8 @@
   "install.title": "Download by platform",
   "install.subtitle": "अपने सिस्टम के लिए पैकेज चुनें; लिंक सीधे GitHub Releases पर ले जाते हैं। macOS बिल्ड साइन और नोटराइज़ किए गए हैं। Windows इंस्टॉलर अभी कोड-साइन नहीं हैं, इसलिए SmartScreen पुष्टि माँग सकता है (अधिक जानकारी → फिर भी चलाएँ)।",
   "install.copy_hint": "click to copy",
-  "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
-  "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
+  "install.unix_detail": "OS और आर्किटेक्चर पहचानकर नवीनतम रिलीज़ का सही पैकेज डाउनलोड करता है। macOS को साइन और नोटराइज़ किया गया DMG <code class=\"text-zinc-300\">/Applications</code> में मिलता है। Linux पर <code class=\"text-zinc-300\">apt</code> हो तो उसका उपयोग, वरना AppImage <code class=\"text-zinc-300\">~/.local/bin</code> में।",
+  "install.win_detail": "आपकी मशीन के लिए नवीनतम MSI (x64 या arm64) GitHub Releases से लेकर बुनियादी UI वाले <code class=\"text-zinc-300\">msiexec</code> से इंस्टॉल करता है। UAC अनुमति माँगेगा।",
   "install.or_manual": "Or grab the artifact directly:",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
@@ -361,5 +361,9 @@
   "cmp.c.rmux.a2": "<strong>उल्टी दिशा में भी।</strong> rmux एकतरफ़ा है: कोड टर्मिनल चलाता है। Unterm अपने अंदर चल रहे एजेंटों को भी देखता है — हर pane की लाइव स्थिति, इंतज़ार करने वालों को पहले रखने वाला इनबॉक्स, सत्यापन-शर्त वाले रिव्यू के साथ worktree फ़्लीट। टर्मिनल सिर्फ़ निशाना नहीं, कॉकपिट है।",
   "cmp.c.rmux.a3": "<strong>इंसानों के इस्तेमाल का टर्मिनल।</strong> Unterm वह GPU विंडो है जिसमें आप दिन भर काम करते हैं: चुनते ही कॉपी, राइट-क्लिक से पेस्ट, पहचान प्रोफ़ाइल, 9 UI भाषाएँ, संवेदनशील हिस्से छिपाकर markdown में सत्र रिकॉर्डिंग। rmux के पास कोई रेंडरिंग सतह है ही नहीं — उसे किसी टर्मिनल ऐप के साथ जोड़ना आपके ज़िम्मे है।",
   "cmp.c.rmux.win": "rmux का सत्र बनाए रखना असली tmux स्तर का है: SSH टूट जाए तब भी आपके एजेंट का शेल चलता रहता है, और कहीं से भी फिर जुड़ा जा सकता है। इसके टाइप्ड स्नैपशॉट और wait_for_text लोकेटर टेक्स्ट मिलान से ज़्यादा बारीक हैं, और हेडलेस डेमन उन CI पाइपलाइनों में फ़िट बैठता है जहाँ GUI हो ही नहीं सकता। इसे Ratatui ऐप्स में भी जोड़ा जा सकता है।",
-  "cmp.c.rmux.verdict": "ऐसा सिस्टम बना रहे हैं जिसमें CI या सर्वर पर कोड टर्मिनल सत्रों का मालिक हो? rmux एक मज़बूत बुनियादी हिस्सा है। डेस्क पर AI एजेंटों के साथ, उसी टर्मिनल में काम कर रहे हैं जिसमें आप खुद रहते हैं? वही Unterm है — एजेंटों के लिए प्रोटोकॉल-नेटिव, आपके लिए कॉकपिट-नेटिव।"
+  "cmp.c.rmux.verdict": "ऐसा सिस्टम बना रहे हैं जिसमें CI या सर्वर पर कोड टर्मिनल सत्रों का मालिक हो? rmux एक मज़बूत बुनियादी हिस्सा है। डेस्क पर AI एजेंटों के साथ, उसी टर्मिनल में काम कर रहे हैं जिसमें आप खुद रहते हैं? वही Unterm है — एजेंटों के लिए प्रोटोकॉल-नेटिव, आपके लिए कॉकपिट-नेटिव।",
+  "install.via_brew": "या Homebrew से (macOS):",
+  "install.via_scoop": "या Scoop से:",
+  "whatsnew.update717.title": "खुद अपडेट होता है, और जानता है कि आपके कमांड कैसे खत्म हुए",
+  "whatsnew.update717.body": "<strong>एक-क्लिक अपडेट</strong>: <code class=\"font-mono text-xs\">unterm-cli update</code>, कमांड पैलेट में “अपडेट इंस्टॉल करें” या Web सेटिंग्स का बटन नई रिलीज़ डाउनलोड करता है, उसका SHA-256 (macOS पर सिग्नेचर भी) जाँचता है और नए संस्करण में फिर से शुरू होता है। <strong>शेल इंटीग्रेशन अपने-आप लोड होता है</strong> zsh, bash, fish और PowerShell में: विफल कमांड अपने टैब पर ▲ लगाता है — जिस आउटपुट में बस “error” शब्द हो, वह नहीं। एजेंट्स को वह मिलता है जो वे टर्मिनल से माँगते हैं: <strong>Shift+Enter अब Enter नहीं</strong> (kitty कीबोर्ड प्रोटोकॉल), आपकी थीम के अनुसार रंग-प्रश्नों के उत्तर, टैब के नीचे प्रगति पट्टी (OSC 9;4), और बिना फटे फुल-स्क्रीन रीड्रॉ (mode 2026)। साथ ही: Windows शेल मेनू में Git Bash और हर WSL वितरण, पहले से भरा GitHub issue खोलने वाला क्रैश डायलॉग, और Homebrew व Scoop से इंस्टॉल।"
 }

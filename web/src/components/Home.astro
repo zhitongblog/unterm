@@ -327,10 +327,14 @@ unterm-cli agent inbox`;
       <div class="install-pane" data-pane="unix">
         <pre class="font-mono text-sm text-notion-ink px-5 py-5 overflow-x-auto"><code>curl -fsSL https://unterm.app/install.sh | sh</code></pre>
         <p class="text-xs text-notion-faint px-5 pb-4" set:html={t("install.unix_detail")}></p>
+        <p class="text-xs text-notion-muted px-5">{t("install.via_brew")}</p>
+        <pre class="font-mono text-sm text-notion-ink px-5 pt-2 pb-5 overflow-x-auto"><code>brew install --cask zhitongblog/tap/unterm</code></pre>
       </div>
       <div class="install-pane hidden" data-pane="win">
         <pre class="font-mono text-sm text-notion-ink px-5 py-5 overflow-x-auto"><code>irm https://unterm.app/install.ps1 | iex</code></pre>
         <p class="text-xs text-notion-faint px-5 pb-4" set:html={t("install.win_detail")}></p>
+        <p class="text-xs text-notion-muted px-5">{t("install.via_scoop")}</p>
+        <pre class="font-mono text-sm text-notion-ink px-5 pt-2 pb-5 overflow-x-auto"><code>scoop bucket add zhitongblog https://github.com/zhitongblog/scoop-bucket; scoop install unterm</code></pre>
       </div>
     </div>
     <p class="mt-6 text-center text-xs text-notion-faint">{t("install.or_manual")}</p>

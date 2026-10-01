@@ -37,8 +37,8 @@
   "install.title": "Download by platform",
   "install.subtitle": "시스템에 맞는 패키지를 고르세요. 링크는 GitHub Releases로 바로 연결됩니다. macOS 빌드는 서명 및 공증되었습니다. Windows 설치 파일은 아직 코드 서명이 되어 있지 않아 SmartScreen이 확인을 요청할 수 있습니다(추가 정보 → 실행).",
   "install.copy_hint": "click to copy",
-  "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
-  "install.win_detail": "Pulls the latest <code class=\"text-zinc-300\">Unterm-x.y.z-x64.msi</code> from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
+  "install.unix_detail": "OS와 아키텍처를 감지해 최신 릴리스에 맞는 패키지를 내려받습니다. macOS는 서명·공증된 DMG를 <code class=\"text-zinc-300\">/Applications</code>에 설치하고, Linux는 <code class=\"text-zinc-300\">apt</code>가 있으면 사용하고 없으면 AppImage를 <code class=\"text-zinc-300\">~/.local/bin</code>에 둡니다.",
+  "install.win_detail": "이 컴퓨터에 맞는 최신 MSI(x64 또는 arm64)를 GitHub Releases에서 받아 기본 UI가 있는 <code class=\"text-zinc-300\">msiexec</code>로 설치합니다. UAC가 권한 상승을 요청합니다.",
   "install.or_manual": "Or grab the artifact directly:",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
@@ -361,5 +361,9 @@
   "cmp.c.rmux.a2": "<strong>반대 방향도.</strong> rmux는 한 방향입니다: 코드가 터미널을 조종합니다. Unterm은 그 안에서 실행되는 에이전트도 지켜봅니다 — pane별 실시간 상태, 대기 우선 받은편지함, 검증 관문이 있는 리뷰를 갖춘 worktree 플릿. 터미널은 대상일 뿐 아니라 조종석입니다.",
   "cmp.c.rmux.a3": "<strong>사람이 쓰는 터미널.</strong> Unterm은 하루 종일 일하는 GPU 창입니다: 선택하면 복사, 우클릭하면 붙여넣기, 아이덴티티 프로필, 9개 UI 언어, 민감 정보를 가린 Markdown 세션 녹화. rmux에는 렌더링 표면이 전혀 없습니다 — 어떤 터미널 앱과 짝지을지는 여러분 몫입니다.",
   "cmp.c.rmux.win": "rmux의 세션 지속성은 진짜 tmux급입니다: SSH가 끊겨도 에이전트의 셸은 계속 돌고, 어디서든 다시 붙을 수 있습니다. 타입 스냅숏과 wait_for_text 로케이터는 텍스트 매칭보다 세밀하고, 헤드리스 데몬은 GUI가 있을 수 없는 CI 파이프라인에 맞습니다. Ratatui 앱에 임베드할 수도 있습니다.",
-  "cmp.c.rmux.verdict": "CI나 서버에서 코드가 터미널 세션을 쥐는 시스템을 만드나요? rmux는 강력한 기본 요소입니다. 책상 앞에서 AI 에이전트와 나란히, 여러분도 사는 터미널에서 일하나요? 그게 Unterm입니다 — 에이전트에게는 프로토콜 네이티브, 여러분에게는 조종석 네이티브."
+  "cmp.c.rmux.verdict": "CI나 서버에서 코드가 터미널 세션을 쥐는 시스템을 만드나요? rmux는 강력한 기본 요소입니다. 책상 앞에서 AI 에이전트와 나란히, 여러분도 사는 터미널에서 일하나요? 그게 Unterm입니다 — 에이전트에게는 프로토콜 네이티브, 여러분에게는 조종석 네이티브.",
+  "install.via_brew": "Homebrew로도 (macOS):",
+  "install.via_scoop": "Scoop으로도:",
+  "whatsnew.update717.title": "스스로 업데이트하고, 명령이 어떻게 끝났는지 압니다",
+  "whatsnew.update717.body": "<strong>원클릭 업데이트</strong>: <code class=\"font-mono text-xs\">unterm-cli update</code>, 명령 팔레트의 「업데이트 설치」, Web 설정의 버튼이 새 릴리스를 내려받아 SHA-256(macOS는 서명도)을 확인하고 새 버전으로 다시 시작합니다. <strong>셸 통합이 자동으로 로드</strong>되어(zsh·bash·fish·PowerShell) 실패한 명령의 탭에 ▲가 붙고, 출력에 「error」가 있을 뿐인 경우에는 붙지 않습니다. 에이전트가 터미널에 기대하는 것도 갖췄습니다: <strong>Shift+Enter와 Enter 구분</strong>(kitty 키보드 프로토콜), 테마에 맞춘 색상 질의 응답, 탭 아래 진행 막대(OSC 9;4), 찢어지지 않는 전체 화면 다시 그리기(mode 2026). 또한 Windows 셸 메뉴의 Git Bash와 각 WSL 배포판, 미리 채워진 GitHub issue를 여는 충돌 대화상자, Homebrew·Scoop 설치."
 }
