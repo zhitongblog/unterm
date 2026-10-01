@@ -103,21 +103,103 @@ fn store() -> Result<Arc<unterm_tasks::TaskStore>> {
     crate::cockpit::fleet_store::tasks().ok_or_else(|| anyhow!("there is no task store"))
 }
 
-/// Which adapter reads a given command's output.
-fn adapter_for(program: &str) -> (&'static str, Box<dyn BrainAdapter>) {
-    let name = std::path::Path::new(program)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(program)
-        .to_ascii_lowercase();
-    if name.contains("claude") {
-        ("claude", Box::new(unterm_brain::adapters::ClaudeAdapter::new()))
-    } else {
-        // Codex's JSONL is the reference implementation and the default: an
-        // unknown CLI printing JSON lines is far more likely to look like it
-        // than to look like nothing.
-        ("codex", Box::new(unterm_brain::adapters::CodexAdapter::new()))
+/// The program a command line actually runs, seen through the launchers in
+/// front of it.
+///
+/// On Windows an npm-installed CLI is a `.cmd` shim and has to be started as
+/// `cmd /c claude …`; elsewhere the same agent turns up behind `env`, `npx`,
+/// `node …/cli.js` or `sh -c "…"`. Reading only the first word named every
+/// one of those `cmd` -- and every session `codex`.
+pub fn effective_program(command: &[String]) -> Option<String> {
+    fn name_of(word: &str) -> String {
+        let last = word.rsplit(|c| c == '/' || c == '\\').next().unwrap_or(word);
+        let lower = last.to_ascii_lowercase();
+        for suffix in [".exe", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs"] {
+            if let Some(stem) = lower.strip_suffix(suffix) {
+                return stem.to_string();
+            }
+        }
+        lower
     }
+    let mut words: Vec<String> = command.to_vec();
+    for _ in 0..8 {
+        let first = words.first()?.clone();
+        let name = name_of(&first);
+        let rest = &words[1..];
+        let next: Option<Vec<String>> = match name.as_str() {
+            "cmd" => rest
+                .iter()
+                .position(|arg| matches!(arg.to_ascii_lowercase().as_str(), "/c" | "/k"))
+                .map(|at| rest[at + 1..].to_vec()),
+            "sh" | "bash" | "zsh" | "dash" => rest
+                .iter()
+                .position(|arg| arg == "-c" || arg == "-lc")
+                .and_then(|at| rest.get(at + 1))
+                .map(|line| vec![line.clone()]),
+            "pwsh" | "powershell" => rest
+                .iter()
+                .position(|arg| {
+                    let arg = arg.to_ascii_lowercase();
+                    arg == "-command" || arg == "-c"
+                })
+                .map(|at| rest[at + 1..].to_vec()),
+            "env" => Some(
+                rest.iter()
+                    .skip_while(|arg| arg.contains('=') || arg.starts_with('-'))
+                    .cloned()
+                    .collect(),
+            ),
+            "npx" | "bunx" | "pnpx" | "node" | "bun" | "deno" => Some(
+                rest.iter()
+                    .skip_while(|arg| arg.starts_with('-'))
+                    .cloned()
+                    .collect(),
+            ),
+            _ => None,
+        };
+        match next {
+            // A single argument holding a whole command line (`cmd /c "claude
+            // -p"`, `sh -c '…'`) is split for its first word.
+            Some(mut words_after) if !words_after.is_empty() => {
+                if words_after.len() == 1 && words_after[0].contains(' ') {
+                    words_after = words_after[0]
+                        .split_whitespace()
+                        .map(|word| word.trim_matches(|c| c == '"' || c == '\'').to_string())
+                        .collect();
+                }
+                words = words_after;
+            }
+            _ => return Some(name),
+        }
+    }
+    words.first().map(|word| name_of(word))
+}
+
+/// Which adapter reads a given command's output.
+///
+/// `requested` -- the caller naming one -- wins; otherwise the program decides,
+/// and a program no adapter knows gets the generic one, which reports its
+/// output as output and claims nothing else.
+fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static str, Box<dyn BrainAdapter>)> {
+    let chosen = match requested {
+        Some(name) => name.to_ascii_lowercase(),
+        None => {
+            let program = effective_program(command).unwrap_or_default();
+            if program.contains("claude") {
+                "claude".into()
+            } else if program.contains("codex") {
+                "codex".into()
+            } else {
+                "generic".into()
+            }
+        }
+    };
+    Ok(match chosen.as_str() {
+        "claude" => ("claude", Box::new(unterm_brain::adapters::ClaudeAdapter::new())),
+        "codex" => ("codex", Box::new(unterm_brain::adapters::CodexAdapter::new())),
+        "generic" => ("generic", Box::new(unterm_brain::adapters::GenericAdapter::new())),
+        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex or generic"),
+    })
 }
 
 /// Start hosting an agent.
@@ -126,13 +208,14 @@ pub fn start(
     cwd: Option<&str>,
     env: &[(String, String)],
     prompt: Option<&str>,
+    adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
     let program = command
         .first()
         .ok_or_else(|| anyhow!("Missing 'command'"))?
         .clone();
-    let (adapter_id, adapter) = adapter_for(&program);
+    let (adapter_id, adapter) = adapter_for(command, adapter)?;
 
     let mut spec = Spec::new(&program).args(command[1..].to_vec());
     if let Some(cwd) = cwd {
@@ -337,7 +420,13 @@ pub fn status(id: &str) -> Result<Value> {
             "state": if live.running.is_running() { "running" } else { "finished" },
             "adapter": live.adapter,
             "turns": snapshot.turns,
-            "usage": snapshot.usage,
+            // Null when the agent never said, rather than zeros that read as
+            // "this cost nothing".
+            "usage": if snapshot.usage_reported {
+                serde_json::to_value(&snapshot.usage)?
+            } else {
+                Value::Null
+            },
             "task_id": live.context.task_id,
             "run_id": live.context.run_id,
             "step_id": live.context.step_id,
@@ -418,6 +507,45 @@ pub fn interrupt_orphans() -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use super::effective_program;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| word.to_string()).collect()
+    }
+
+    /// Issue #35: the program behind the launcher picks the adapter, and an
+    /// unknown one is generic rather than codex.
+    #[test]
+    fn the_adapter_follows_the_program_behind_the_launcher() {
+        let cases: &[(&[&str], &str)] = &[
+            (&["cmd", "/c", "claude", "-p", "--output-format", "stream-json", "--verbose"], "claude"),
+            (&["cmd.exe", "/C", "codex", "exec", "--json", "-"], "codex"),
+            (&["cmd", "/c", "gemini", "--yolo", "-p", "x"], "gemini"),
+            (&["cmd", "/c", "echo", "hello"], "echo"),
+            (&["cmd", "/c", "claude -p --verbose"], "claude"),
+            (&["env", "FOO=1", "claude", "-p"], "claude"),
+            (&["npx", "-y", "@anthropic-ai/claude-code", "-p"], "claude-code"),
+            (&["node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "exec"], "codex"),
+            (&["sh", "-c", "codex exec --json -"], "codex"),
+            (&["C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd", "-p"], "claude"),
+            (&["/opt/homebrew/bin/claude", "-p"], "claude"),
+        ];
+        for (command, expected) in cases {
+            assert_eq!(
+                effective_program(&argv(command)).as_deref(),
+                Some(*expected),
+                "{command:?}"
+            );
+        }
+        let pick = |command: &[&str]| super::adapter_for(&argv(command), None).unwrap().0;
+        assert_eq!(pick(&["cmd", "/c", "claude", "-p"]), "claude");
+        assert_eq!(pick(&["cmd", "/c", "qwen", "--yolo"]), "generic");
+        assert_eq!(pick(&["cmd", "/c", "echo", "hello"]), "generic");
+        assert_eq!(pick(&["codex", "exec", "--json"]), "codex");
+        assert_eq!(super::adapter_for(&argv(&["anything"]), Some("claude")).unwrap().0, "claude");
+        assert!(super::adapter_for(&argv(&["anything"]), Some("bogus")).is_err());
+    }
+
     use super::*;
 
     fn isolate() -> tempfile::TempDir {
@@ -447,6 +575,7 @@ printf '%s\n' '{"type":"turn.completed"}'
             None,
             &[],
             None,
+            Some("codex"),
             TaskContext::default(),
         )
         .unwrap();
@@ -512,7 +641,7 @@ printf '%s\n' '{"type":"turn.completed"}'
             idempotency_key: Some("idem-1".into()),
             lease_id: Some("lse_1".into()),
         };
-        let id = start(&a_codex_like_agent(A_TURN), None, &[], None, context).unwrap();
+        let id = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), context).unwrap();
         close(&id).unwrap();
 
         let (events, count) = replay_of(&id);
@@ -534,6 +663,7 @@ printf '%s\n' '{"type":"turn.completed"}'
             None,
             &[],
             None,
+            Some("codex"),
             TaskContext::default(),
         )
         .unwrap();
@@ -554,6 +684,7 @@ printf '%s\n' '{"type":"turn.completed"}'
             None,
             &[],
             None,
+            Some("codex"),
             TaskContext::default(),
         )
         .unwrap();
@@ -573,6 +704,7 @@ printf '%s\n' '{"type":"turn.completed"}'
             None,
             &[],
             None,
+            Some("codex"),
             TaskContext {
                 task_id: Some("tsk_1".into()),
                 ..TaskContext::default()

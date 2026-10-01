@@ -408,6 +408,7 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 params.get("cwd").and_then(Value::as_str),
                 &env,
                 params.get("prompt").and_then(Value::as_str),
+                params.get("adapter").and_then(Value::as_str),
                 context,
             )?;
             Ok(json!({"session_id": id}))

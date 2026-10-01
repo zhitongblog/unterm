@@ -96,6 +96,92 @@ impl BrainAdapter for CodexAdapter {
                         .map(str::to_string),
                 });
             }
+            // `codex exec --json` (0.40 and later) reports work as items:
+            // started when they begin, completed with their outcome.
+            "item.started" | "item.updated" | "item.completed"
+                if value.get("item").and_then(|item| item.get("type")).is_some() =>
+            {
+                let item = &value["item"];
+                let completed = kind == "item.completed";
+                let started = kind == "item.started";
+                let id = text_at(item, &[&["id"]]).unwrap_or("unknown").to_string();
+                match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+                    "agent_message" if completed => {
+                        if let Some(text) = text_at(item, &[&["text"]]).filter(|t| !t.is_empty()) {
+                            events.push(BrainEvent::Text { text: text.to_string() });
+                        }
+                    }
+                    "reasoning" if completed => {
+                        if let Some(text) = text_at(item, &[&["text"]]).filter(|t| !t.is_empty()) {
+                            events.push(BrainEvent::Reasoning { text: text.to_string() });
+                        }
+                    }
+                    "command_execution" => {
+                        if started {
+                            events.push(BrainEvent::ToolRequested {
+                                call_id: id,
+                                name: "shell".into(),
+                                arguments: serde_json::json!({
+                                    "command": item.get("command").cloned().unwrap_or(Value::Null)
+                                }),
+                            });
+                        } else if completed {
+                            let ok = item
+                                .get("exit_code")
+                                .and_then(Value::as_i64)
+                                .map(|code| code == 0)
+                                .unwrap_or_else(|| text_at(item, &[&["status"]]) != Some("failed"));
+                            events.push(BrainEvent::ToolResult {
+                                call_id: id,
+                                ok,
+                                output: text_at(item, &[&["aggregated_output"], &["output"]])
+                                    .map(str::to_string),
+                            });
+                        }
+                    }
+                    "mcp_tool_call" => {
+                        let name = match (text_at(item, &[&["server"]]), text_at(item, &[&["tool"]])) {
+                            (Some(server), Some(tool)) => format!("{server}.{tool}"),
+                            (None, Some(tool)) => tool.to_string(),
+                            _ => "mcp".to_string(),
+                        };
+                        if started {
+                            events.push(BrainEvent::ToolRequested {
+                                call_id: id,
+                                name,
+                                arguments: item.get("arguments").cloned().unwrap_or(Value::Null),
+                            });
+                        } else if completed {
+                            events.push(BrainEvent::ToolResult {
+                                call_id: id,
+                                ok: text_at(item, &[&["status"]]) != Some("failed"),
+                                output: item.get("result").map(|result| result.to_string()),
+                            });
+                        }
+                    }
+                    // A patch arrives finished: one request and its result.
+                    "file_change" if completed => {
+                        events.push(BrainEvent::ToolRequested {
+                            call_id: id.clone(),
+                            name: "apply_patch".into(),
+                            arguments: item.get("changes").cloned().unwrap_or(Value::Null),
+                        });
+                        events.push(BrainEvent::ToolResult {
+                            call_id: id,
+                            ok: text_at(item, &[&["status"]]) != Some("failed"),
+                            output: None,
+                        });
+                    }
+                    "error" if completed => {
+                        events.push(BrainEvent::Error {
+                            message: text_at(item, &[&["message"]])
+                                .unwrap_or("codex reported an error")
+                                .to_string(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
             "item.completed" | "agent_message" | "message" => {
                 if let Some(text) =
                     text_at(&value, &[&["text"], &["item", "text"], &["message"]])
@@ -156,10 +242,15 @@ impl BrainAdapter for CodexAdapter {
             }
             "turn.completed" | "task_complete" => {
                 self.turn_open = false;
+                // The current CLI reports a turn's cost with its end.
+                if let Some(usage) = value.get("usage").filter(|usage| usage.is_object()) {
+                    events.push(BrainEvent::Usage(usage_from(usage)));
+                }
                 events.push(BrainEvent::TurnEnded {
                     reason: StopReason::Completed,
                 });
             }
+            "thread.started" => {}
             "turn.failed" | "error" => {
                 self.turn_open = false;
                 events.push(BrainEvent::Error {
@@ -289,9 +380,10 @@ impl BrainAdapter for ClaudeAdapter {
                         _ => {}
                     }
                 }
-                if let Some(usage) = value.get("message").and_then(|m| m.get("usage")) {
-                    events.push(BrainEvent::Usage(usage_from(usage)));
-                }
+                // No usage here. Claude repeats a message's usage on every
+                // line that carries one of its blocks, and reports the
+                // session's total again with the result: counting these as
+                // well added the same tokens several times over.
             }
             "user" => {
                 // A tool result comes back as a user message holding
@@ -368,6 +460,37 @@ impl BrainAdapter for ClaudeAdapter {
             }];
         }
         Vec::new()
+    }
+}
+
+/// Reads a CLI no adapter knows: each line of output is output, nothing
+/// more is claimed about it.
+///
+/// What an unrecognised program used to get was the Codex adapter, which
+/// read Claude's, Gemini's and Qwen's streams as malformed Codex -- every
+/// event lost, every session reported as `codex`.
+#[derive(Default)]
+pub struct GenericAdapter;
+
+impl GenericAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl BrainAdapter for GenericAdapter {
+    fn id(&self) -> &'static str {
+        "generic"
+    }
+
+    fn on_line(&mut self, line: &str) -> Vec<BrainEvent> {
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            return Vec::new();
+        }
+        vec![BrainEvent::Text {
+            text: line.to_string(),
+        }]
     }
 }
 
@@ -483,6 +606,84 @@ mod tests {
                 "{name} folded cached reads into fresh input"
             );
         }
+    }
+
+    /// Issue #36: what `claude -p --output-format stream-json --verbose`
+    /// prints today -- usage repeated on every assistant line and totalled
+    /// again in the result -- is read as events, and the tokens are counted
+    /// once.
+    #[test]
+    fn claude_stream_json_is_read_and_counted_once() {
+        let stream = r#"
+{"type":"system","subtype":"init","session_id":"s1","model":"claude-sonnet-5","tools":["Bash"]}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Writing rmb.py"}],"usage":{"input_tokens":10,"cache_read_input_tokens":500,"output_tokens":3}}}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"rmb.py"}}],"usage":{"input_tokens":10,"cache_read_input_tokens":500,"output_tokens":40}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"File created"}]}}
+{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":25,"cache_read_input_tokens":1000,"output_tokens":90},"total_cost_usd":0.01}
+"#;
+        let events = replay(&mut ClaudeAdapter::new(), stream);
+        let kinds: Vec<&str> = events.iter().map(|event| event.kind()).collect();
+        assert_eq!(
+            kinds,
+            ["turn_started", "text", "tool_requested", "tool_result", "usage", "turn_ended"]
+        );
+        let usage: Vec<&Usage> = events
+            .iter()
+            .filter_map(|event| match event {
+                BrainEvent::Usage(usage) => Some(usage),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(
+            (usage[0].input_tokens, usage[0].cached_input_tokens, usage[0].output_tokens),
+            (25, 1000, 90)
+        );
+    }
+
+    /// Issue #36, Codex half: `codex exec --json` reports work as items and
+    /// the turn's tokens with `turn.completed`.
+    #[test]
+    fn codex_exec_json_items_and_usage_are_read() {
+        let stream = r#"
+{"type":"thread.started","thread_id":"th_1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"list files"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"a\nb","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"rmb.py","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done."}}
+{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
+"#;
+        let mut adapter = CodexAdapter::new();
+        let events = replay(&mut adapter, stream);
+        let kinds: Vec<&str> = events.iter().map(|event| event.kind()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "turn_started",
+                "reasoning",
+                "tool_requested",
+                "tool_result",
+                "tool_requested",
+                "tool_result",
+                "text",
+                "usage",
+                "turn_ended"
+            ]
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BrainEvent::Usage(Usage { input_tokens: 24763, cached_input_tokens: 24448, output_tokens: 122 })
+        )));
+        assert_eq!(adapter.external_id(), Some("th_1"));
+    }
+
+    #[test]
+    fn an_unknown_cli_still_reports_its_output() {
+        let events = replay(&mut GenericAdapter::new(), "hello\n\n{\"x\":1}\n");
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.kind() == "text"));
     }
 
     #[test]

@@ -125,6 +125,10 @@ pub struct Snapshot {
     /// Summed over every turn. Cached input stays in its own column here for
     /// the same reason it does in [`Usage`]: the two are not priced alike.
     pub usage: Usage,
+    /// Whether the stream reported any usage at all. Without it, `usage`
+    /// reads as "cost nothing" when the truth is "nobody said".
+    #[serde(default)]
+    pub usage_reported: bool,
     pub turns: u64,
     pub last_stop: Option<StopReason>,
     /// The tail of stderr, kept bounded. Agent CLIs write progress there, so
@@ -262,6 +266,7 @@ fn record(snapshot: &Arc<Mutex<Snapshot>>, event: &BrainEvent, external_id: Opti
             }
         }
         BrainEvent::Usage(usage) => {
+            snapshot.usage_reported = true;
             snapshot.usage.input_tokens += usage.input_tokens;
             snapshot.usage.output_tokens += usage.output_tokens;
             snapshot.usage.cached_input_tokens += usage.cached_input_tokens;
@@ -629,6 +634,7 @@ sleep 30"#;
                 output_tokens: 2,
                 cached_input_tokens: 3,
             },
+            usage_reported: true,
             turns: 2,
             last_stop: Some(StopReason::Completed),
             stderr_tail: vec!["warn".into()],
