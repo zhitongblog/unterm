@@ -194,7 +194,7 @@ const cmpRows = [
   { row: "cmp.r.identity", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.instance", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.rec",      unterm: "✓ md",     native: "✗",     warp: "~",          iterm: "✓",          ghostty: "✗" },
-  { row: "cmp.r.capture",  unterm: "✓",        native: "✗",     warp: "✗",          iterm: "~",          ghostty: "✗" },
+  { row: "cmp.r.capture",  unterm: "✓ (Linux ~)",        native: "✗",     warp: "✗",          iterm: "~",          ghostty: "✗" },
   { row: "cmp.r.rightclick", unterm: "✓ gesture", native: "menu", warp: "menu",      iterm: "menu",       ghostty: "menu" },
   { row: "cmp.r.proxy",    unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.local",    unterm: "✓",        native: "✓",     warp: "✗",          iterm: "✓",          ghostty: "✓" },
@@ -214,7 +214,7 @@ const cmpRows = [
 const capStats = [
   { n: "151", label: "cap.stat.methods" },
   { n: "30", label: "cap.stat.namespaces" },
-  { n: "37", label: "cap.stat.cli" },
+  { n: "34", label: "cap.stat.cli" },
   { n: "4",  label: "cap.stat.surfaces" },
   { n: "22ms", label: "cap.stat.startup" },
   { n: "~12k", label: "cap.stat.kernel" },
@@ -227,7 +227,7 @@ const capabilities = [
   { icon: "🤖", title: "cap.agents.title",   body: "cap.agents.body",   meta: "agent · 7 CLIs", items: "install · auth · launch · config · mcp-stdio bridge" },
   { icon: "🪪", title: "cap.identity.title", body: "cap.identity.body", meta: "profile · 7 sniffers", items: "list · current · create · switch · delete" },
   { icon: "🛰️", title: "cap.instance.title", body: "cap.instance.body", meta: "instance.* · 8", items: "list · info · focus · set_title" },
-  { icon: "🎬", title: "cap.rec.title",      body: "cap.rec.body",      meta: "recording · asciicast", items: "recording_start · stop · status · list · read · export_markdown" },
+  { icon: "🎬", title: "cap.rec.title",      body: "cap.rec.body",      meta: "recording · markdown", items: "recording_start · stop · status · list · read · export_markdown" },
   { icon: "📸", title: "cap.capture.title",  body: "cap.capture.body",  meta: "capture.* · 6 + upload", items: "screen · window · select · clipboard · scrollback · window_scroll · upload.file" },
   { icon: "🌐", title: "cap.proxy.title",    body: "cap.proxy.body",    meta: "proxy.* · 12",   items: "status · switch · nodes · speedtest · configure · disable · env" },
   { icon: "🛡️", title: "cap.gov.title",      body: "cap.gov.body",      meta: "governance · 9", items: "audit_log · policy.check/set · agent.identify · selftest.run · server.health" },
@@ -452,8 +452,9 @@ const capabilities = [
 <!-- ============== COMPLETE CAPABILITY MAP ============== -->
 <!-- The full control surface, grouped by family. The thin Features grid
      above names the four surfaces; this section enumerates what those
-     surfaces actually expose: 151 MCP methods across 30 namespaces + 37
-     CLI commands. Each card is one namespace/feature family with its
+     surfaces actually expose: 151 MCP methods across 30 namespaces + 34
+     CLI commands (38 subcommands minus the 4 legacy stubs cli / connect /
+     record / replay). Each card is one namespace/feature family with its
      method count chip and representative call names (never translated). -->
 <section id="capabilities" class="py-20 border-t border-notion-border bg-gradient-to-b from-notion-bg via-notion-bg/10 to-notion-bg">
   <div class="max-w-6xl mx-auto px-6">

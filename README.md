@@ -8,9 +8,10 @@ Cross-platform terminal (macOS / Linux / Windows) built on Unterm's native
 `next-core` terminal engine, with one design bet: the terminal itself is
 controllable from the outside by any AI agent over MCP. Claude Code, Codex,
 Gemini CLI, Cursor, Aider, your own scripts — they all get the same JSON-RPC
-surface (**149 authenticated methods plus `auth.login`**) to spawn shells, run
-commands, read pane state, capture screenshots, change settings, and record
-sessions.
+surface (**151 authenticated methods plus `auth.login`**) to spawn shells, run
+commands, read pane state, capture screenshots, record sessions, and run the
+Agent Cockpit. (Theme, language and `unterm.conf` are not on MCP; they are set
+through Web Settings, `unterm-cli`, or the file.)
 
 Since v0.68 the terminal is also something an orchestrator can govern rather than merely call: it publishes what it can do and how dangerous each capability is, works under leases that expire and cannot be replayed, keeps agents inside workspaces that cannot see each other, and can hand you an evidence bundle for a task that somebody who was not there can verify.
 
@@ -117,7 +118,7 @@ Run the MSI installer; it places `unterm.exe` in `Program Files\Unterm` and crea
   task / always". Workspaces are roots that cannot see each other, and a
   shell that `cd`s out stops being inside. The audit trail is hash-chained,
   so an edit to it disagrees with the next line. `unterm-cli provider |
-  scope | artifact | evidence | system` — 46 new MCP methods (149 total).
+  scope | artifact | evidence | system` — 46 new MCP methods (149 total at the time; 151 today).
 - **v0.57 — Fleet verification loop + new brand mark.** Review now verifies each fleet member automatically (Cargo / Go / npm / pnpm / yarn / Python / Maven / Gradle / .NET inferred, or your own command), ranks members by verification and change size, gates squash-merge on a passing run (audited `force` override), and retries failed members in their existing worktree without losing work — `review.verify` / `fleet.retry` over MCP + CLI. The sidebar gains repository-grouped navigation with always-on fuzzy search. Every logo surface moves to the new command-loop mark.
 - **v0.55 — Agent Cockpit.** The terminal now sees the agents inside it: live per-pane state with tab badges and a cross-window tally, the waiting-first Agent Inbox (`Ctrl+Shift+A`), fleets running one task across N agents in N isolated worktrees, and a Review page with checkpoints, diffs, rollback, and squash-merge. 12 new MCP methods, 3 new CLI families.
 - **v0.54 — 2.8× faster cold start** (~780ms → ~280ms) via five startup-path wins, and no more CPU core burned on Windows output floods (~91% → ~4%); MCP stays responsive mid-flood.
@@ -133,7 +134,7 @@ The full Unterm docs live at **https://unterm.app/docs/**:
 - [Agent Cockpit](https://unterm.app/docs/agent-cockpit) — agent state engine, Inbox, Fleet, Review: run and supervise CLI agents from one terminal
 - [Agent integration](https://unterm.app/docs/agent-integration) — how to drive Unterm from Claude Code / Cursor / Aider / your own client
 - [Agent recipes](https://unterm.app/docs/agent-recipes) — copy-paste patterns for common agent-drives-terminal workflows
-- [Product roadmap](https://unterm.app/docs/product-roadmap) — the five directions we are executing now
+- [Product roadmap](https://unterm.app/docs/product-roadmap) — what is being built now and what comes later
 - [Product requirements](docs/product-requirements.md) — complete product scope, functional requirements, MCP/CLI coverage, and acceptance criteria
 - [Detailed product planning](docs/product-planning-detailed-zh.md) — Chinese execution plan covering user scenarios, version roadmap, priorities, validation, and next-core migration
 - [Next-core product plan](docs/product-plan-next-core.md) — staged plan to stabilize the current engine while building Unterm's own terminal core
@@ -143,6 +144,7 @@ The full Unterm docs live at **https://unterm.app/docs/**:
 - [Identity profiles](https://unterm.app/docs/profiles) — one window per identity. Bind GitHub / AWS / npm / OpenAI tokens, git identity, SSH key routing all at once. CLI + MCP.
 - [CLI reference](https://unterm.app/docs/cli-reference) — `unterm-cli` subcommands, flags, exit codes
 - [Configuration](https://unterm.app/docs/configuration) — every file under `~/.unterm/`
+- [Config file reference](https://unterm.app/docs/config-reference) — every key in `unterm.conf`, including `[env]` and `[keys]`
 - [Architecture](https://unterm.app/docs/architecture) — what we forked from WezTerm and why
 
 This README is the short version. The site is the long version.
@@ -151,10 +153,10 @@ This README is the short version. The site is the long version.
 
 ## Features
 
-- **GPU-accelerated rendering** on all three platforms (Metal / OpenGL / DirectX via ANGLE).
+- **GPU-accelerated rendering** on all three platforms through wgpu: Metal on macOS, Direct3D 12 on Windows and Vulkan on Linux. If the hardware path fails, Unterm tries OpenGL, then the same two in software (WARP on Windows), and on Windows finally Vulkan — so a machine with no usable graphics driver still opens a window. `UNTERM_GPU_BACKEND=dx12|vulkan|gl|metal` pins one backend.
 - **MCP server** on `127.0.0.1:<auto-port>` (default 19876) —
   line-delimited JSON-RPC over TCP, loopback-only and auth-token gated. It
-  exposes 149 authenticated methods plus `auth.login`; `meta.surface` (or
+  exposes 151 authenticated methods plus `auth.login`; `meta.surface` (or
   `unterm-cli reference`) returns the authoritative live inventory in one
   call.
 - **Agent Cockpit** — per-pane agent state, waiting-first Inbox, worktree fleets, checkpoint + review. See the section above.
@@ -170,10 +172,10 @@ This README is the short version. The site is the long version.
   GNOME gsettings / proxy environment variables, and falls back to common
   local ports. `~/.unterm/proxy.json` also persists manual HTTP/SOCKS URLs,
   `no_proxy`, named nodes, rotation, and Clash/mihomo controller settings.
-- **Region screenshots** from the status bar (left-click excludes the Unterm window, right-click includes it). PNG lands on disk under `~/.unterm/screenshots/`, on the system image clipboard, and the path on the text clipboard.
+- **Region screenshots** from the status bar (left-click excludes the Unterm window, right-click includes it). PNG lands on disk under `~/.unterm/screenshots/`, on the system image clipboard, and the path on the text clipboard. Over MCP, `capture.screen`, `capture.window` and `capture.select` (a rectangle) work on macOS and Windows; on Linux they currently return "not implemented on this platform yet". `capture.scrollback` and `capture.clipboard` work everywhere.
 - **Scrolling (long) screenshots**, both directions: `capture.scrollback` re-renders a pane's *entire* history into one tall PNG headlessly (exact fonts/theme, streaming-encoded, works while occluded); `capture.window_scroll` long-shots *another app's* window by synthesizing wheel events and stitching frames via row-hash matching with sticky-header/footer detection (macOS). Both also in the `▼` menu and `unterm-cli screenshot --scrollback / --scroll-app`.
 - **Session recording → markdown** with OSC 133 block segmentation and built-in redaction (GitHub tokens / `KEY=value` / 40+ char hex/base64 patterns are masked). Recordings are stored in the project directory under `<cwd>/.unterm/sessions/<date>/<tab>-<time>.md`, or in `~/.unterm/sessions/_orphan/` when no writable project context.
-- **Right-click in the terminal is a direct gesture**: with a selection it copies and clears; without selection it pastes. On the tab strip, right-click opens the tab context menu (new tab, split, rename, move, close) instead — chrome right-clicks never fall through to paste.
+- **Right-click in the terminal pastes** — every time, with or without a selection, and in every pane, including mouse-aware programs such as vim or Claude Code (the click is not passed to them). Copying is done by selecting: releasing the button puts the selection on the clipboard. On macOS a plain Ctrl+click counts as a right-click; the middle button pastes too. On the tab strip, right-click opens the tab context menu (new tab, split, rename, move, close) instead — chrome right-clicks never fall through to paste.
 - **Quick menu** on the tab bar's `▼` button, with live key chords from the binding table:
   - New Tab / Split Right
   - Directory Jump (cd current pane or open in new tab) / File Tree
@@ -181,7 +183,7 @@ This README is the short version. The site is the long version.
   - Find / Command Palette
   - Toggle Session Recording / Export Current Session / Scrollback Long Screenshot
   - Settings (Web), plus the version/website row
-- **macOS-native window decorations** (traffic-light buttons + native title bar); Windows uses Windows Terminal-style integrated title buttons; Linux uses client-side decorations.
+- **One unified top bar** instead of a separate title bar, with buttons that follow the desktop: traffic lights on macOS, Fluent caption buttons (with Snap Layouts on Windows 11) on Windows, GNOME-style round buttons on Linux.
 
 ---
 
@@ -231,7 +233,7 @@ The `unterm-cli` binary exposes the full Unterm product surface, transparently r
 ```bash
 # Settings + Web UI
 unterm-cli settings open                       # open the Web Settings page
-unterm-cli theme list / set <id>               # standard / midnight / daylight / classic / notion-dark / notion-light
+unterm-cli theme list / set <id>               # agent-inbox / standard / midnight / daylight / classic / notion-dark / notion-light
 unterm-cli lang list / set <code> / current    # en-US / zh-CN / zh-TW / ja-JP / ko-KR / de-DE / fr-FR / it-IT / hi-IN
 
 # Proxy
@@ -347,7 +349,8 @@ Files:
 | `update_check.json`          | Background update-poller state (last check, latest seen version) |
 | `onboarded.json`             | First-run flags (which `▼` items have been seen)  |
 | `recording.json`             | Recording config (redaction patterns, etc.)      |
-| `fleets.json`                | Live agent fleets: members, worktrees, branches, review state (Agent Cockpit) |
+| `unterm.conf`                | Terminal config: fonts, colours, window, shell, `[env]`, `[keys]` — see [config reference](https://unterm.app/docs/config-reference) |
+| `tasks.db`                   | Durable task store; Agent Cockpit fleets (members, worktrees, branches, review state) live here. An old `fleets.json` is imported once. |
 | `checkpoints.json`           | Pre-agent-work snapshots per repo (dangling-commit SHAs, most recent 20 per repo) |
 | `sessions/`                  | Recording metadata index (per-project subdirs)   |
 | `screenshots/`               | Region screenshots (PNG)                         |

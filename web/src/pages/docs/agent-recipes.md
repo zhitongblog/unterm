@@ -246,3 +246,4 @@ To find the right port + token for the newly-opened window, watch `~/.unterm/ins
 - [Multi-instance](/docs/multi-instance) — discovery protocol, NATO names
 - [Profiles](/docs/profiles) — identity binding, keychain, ghost text
 - [Architecture](/docs/architecture) — how the pieces fit
+- [Config file reference](/docs/config-reference) — every key in `unterm.conf`

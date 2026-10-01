@@ -17,7 +17,7 @@ Concretely, every Unterm window opens two local servers on launch:
 
 Both GUI ports plus the GUI auth token are written to `~/.unterm/server.json` on launch for older scripts. The headless Core writes `core.json` — in the Core's platform data directory (`%LOCALAPPDATA%\Unterm`, `~/.local/share/Unterm`, `~/Library/Application Support/Unterm`), not in `~/.unterm` — with the MCP endpoint that owns terminal sessions across GUI restarts. Modern MCP clients should be registered through `unterm-cli mcp-stdio`: the bridge prefers Core discovery, falls back through the live GUI instance registry, authenticates to the right local TCP server, and keeps the static client config working across restarts and multiple windows.
 
-For the full schema of every MCP method see the [MCP reference](/docs/mcp-reference). For the layout of `~/.unterm/` see the [configuration guide](/docs/configuration). For driving more than one window at a time see the [multi-instance guide](/docs/multi-instance). For shell scripting, see the [CLI reference](/docs/cli-reference).
+For the full schema of every MCP method see the [MCP reference](/docs/mcp-reference). For the layout of `~/.unterm/` see the [configuration guide](/docs/configuration), and for every key in `unterm.conf` the [config file reference](/docs/config-reference). For driving more than one window at a time see the [multi-instance guide](/docs/multi-instance). For shell scripting, see the [CLI reference](/docs/cli-reference).
 
 ## Quick start: connecting Claude Code
 
