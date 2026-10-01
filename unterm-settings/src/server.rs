@@ -404,6 +404,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/compat") => api_compat_set(&req.body),
         ("GET", "/api/updates") => api_updates_get(),
         ("POST", "/api/updates/check") => api_updates_check(),
+        ("POST", "/api/updates/install") => api_updates_install(),
         ("POST", "/api/recording/start") => api_recording(handler, &req.body, true),
         ("POST", "/api/recording/stop") => api_recording(handler, &req.body, false),
         ("GET", "/api/sessions") => api_sessions(handler, &req.query),
@@ -1791,6 +1792,28 @@ fn api_updates_check() -> Response {
         return Response::err(502, "Bad Gateway", &format!("github check failed: {e:#}"));
     }
     Response::ok_json(crate::update_check::read_state())
+}
+
+/// Download and verify the newer release, schedule its install, and quit
+/// this Unterm so it can be put in place -- the same updater `unterm-cli
+/// update` and the command palette use. Answers before quitting, so the page
+/// can say what is happening.
+fn api_updates_install() -> Response {
+    match unterm_services::updater::update_this(true, |_, _| {}) {
+        Ok(outcome) => {
+            let scheduled = matches!(outcome, unterm_services::updater::Outcome::Scheduled { .. });
+            if scheduled {
+                // Through the process's own quit request, so the window
+                // leaves the way its close button would.
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let _ = unterm_services::process_lifetime::signal_quit(std::process::id());
+                });
+            }
+            Response::ok_json(serde_json::to_value(&outcome).unwrap_or_default())
+        }
+        Err(e) => Response::err(502, "Bad Gateway", &format!("update failed: {e:#}")),
+    }
 }
 
 fn api_compat_set(body: &[u8]) -> Response {

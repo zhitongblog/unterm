@@ -8549,6 +8549,18 @@ impl App {
     /// Every command the GUI exposes, not only the subset with a key chord.
     fn command_palette_entries(&self) -> Vec<crate::palette::Entry> {
         let mut entries = command_entries();
+        // First when there is one: an update is the row someone opened the
+        // palette after the notice to find.
+        if let Some(tag) = crate::updates::available() {
+            entries.insert(
+                0,
+                crate::palette::Entry {
+                    label: unterm_services::i18n::t_args("update.install", &[("tag", &tag)]),
+                    hint: unterm_protocol::PRODUCT_VERSION.to_string(),
+                    command: crate::palette::Command::InstallUpdate,
+                },
+            );
+        }
         for extra in self.quick_entries() {
             if !entries.iter().any(|entry| entry.command == extra.command) {
                 entries.push(extra);
@@ -9276,6 +9288,7 @@ impl App {
             crate::palette::Command::ToggleRecording => self.toggle_recording(),
             crate::palette::Command::ExportSession => self.export_session(),
             crate::palette::Command::OpenSettings => self.open_settings(),
+            crate::palette::Command::InstallUpdate => crate::updates::install(),
             crate::palette::Command::OpenConsole => self.open_console(),
             crate::palette::Command::ApplyTheme { id } => self.apply_theme(&id),
             crate::palette::Command::TypeCharacter { glyph, name } => {
@@ -11269,6 +11282,9 @@ impl App {
             self.sync_frame();
             crate::engine_backend::keep_host_channel();
             self.report_terminal_colors();
+            for text in crate::updates::take_notices() {
+                self.show_notice(text);
+            }
         }
         // The composer is checked every tick while it is open, because it is
         // waiting for a pane to go idle and a prompt held back for a quarter of

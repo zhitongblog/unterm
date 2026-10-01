@@ -376,5 +376,14 @@
   "command.split_right": "दाएँ बाँटें",
   "command.tab_navigator": "प्रोजेक्ट और टैब नेविगेटर",
   "command.tab_navigator.hint": "प्रोजेक्ट और टैब खोजें",
-  "command.zoom_pane": "पेन बड़ा करें"
+  "command.zoom_pane": "पेन बड़ा करें",
+  "update.available": "Unterm {tag} उपलब्ध है — कमांड पैलेट में “अपडेट इंस्टॉल करें” चुनें।",
+  "update.install": "अपडेट {tag} इंस्टॉल करें",
+  "update.downloading": "Unterm {tag} डाउनलोड हो रहा है… इंस्टॉल होने पर Unterm अपने-आप फिर से शुरू होगा।",
+  "update.in_progress": "एक अपडेट पहले से डाउनलोड हो रहा है।",
+  "update.up_to_date": "Unterm {version} नवीनतम है।",
+  "update.manual": "Unterm {tag} उपलब्ध है, लेकिन {reason}: {url}",
+  "update.failed": "अपडेट विफल: {err}",
+  "web.update.install": "इंस्टॉल करें और फिर शुरू करें",
+  "web.update.installing": "डाउनलोड हो रहा है…"
 }

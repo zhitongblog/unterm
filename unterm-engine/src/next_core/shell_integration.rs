@@ -33,6 +33,20 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+/// Injection off until the guard is dropped, for tests about something else.
+#[cfg(test)]
+pub(crate) fn disabled_for_test() -> impl Drop {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_enabled(self.0);
+        }
+    }
+    let was = enabled();
+    set_enabled(false);
+    Restore(was)
+}
+
 /// Which shell a program name is, for the ones that get a script.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shell {
@@ -234,6 +248,26 @@ mod tests {
         command.arg("build.ps1");
         apply(&mut command);
         assert_eq!(command.get_argv().len(), 3);
+    }
+
+    /// A default login bash becomes `bash --rcfile … -i` that still reads
+    /// the login files: the rcfile is told so through the environment.
+    #[cfg(unix)]
+    #[test]
+    fn a_default_login_bash_keeps_its_login_files() {
+        let mut command = portable_pty::CommandBuilder::new_default_prog();
+        command.env("SHELL", "/bin/bash");
+        command.env("KEEP_ME", "1");
+        apply(&mut command);
+        let argv: Vec<String> = command
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(argv.first().map(String::as_str), Some("/bin/bash"), "{:?}", argv);
+        assert!(argv.iter().any(|arg| arg == "--rcfile"), "{:?}", argv);
+        assert_eq!(command.get_env("UNTERM_BASH_LOGIN").and_then(|v| v.to_str()), Some("1"));
+        assert_eq!(command.get_env("KEEP_ME").and_then(|v| v.to_str()), Some("1"));
     }
 
     #[test]

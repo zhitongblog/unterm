@@ -63,6 +63,8 @@ mod window;
 mod win_chrome;
 mod window_buttons;
 mod workspaces;
+mod updates;
+mod crash_report;
 
 /// Say something the user can see, on the platform where nobody sees stderr.
 ///
@@ -86,20 +88,9 @@ pub(crate) fn report_fatal(text: &str) {
             let _ = file.write_all(line.as_bytes());
         }
     }
-    #[cfg(windows)]
-    {
-        #[link(name = "user32")]
-        extern "system" {
-            fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, kind: u32) -> i32;
-        }
-        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let text = wide(text);
-        let caption = wide("Unterm");
-        const MB_ICONERROR: u32 = 0x10;
-        unsafe {
-            MessageBoxW(0, text.as_ptr(), caption.as_ptr(), MB_ICONERROR);
-        }
-    }
+    // The dialog now offers to report it -- on every platform, where it
+    // used to be a Windows-only message box and silence elsewhere.
+    crash_report::offer(text);
 }
 
 /// Leave a trace of a panic where a user can find it.
@@ -168,6 +159,11 @@ pub fn main() -> std::process::ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().filter_or("UNTERM_LOG", "info"))
         .init();
     install_panic_reporter();
+    // How the crash dialog and its "Report on GitHub" are exercised without
+    // a real crash: the main thread panics exactly the way a bug would.
+    if std::env::var_os("UNTERM_SIMULATE_CRASH").is_some() {
+        panic!("simulated crash (UNTERM_SIMULATE_CRASH is set)");
+    }
     startup_trace::init();
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,

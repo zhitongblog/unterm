@@ -376,5 +376,14 @@
   "command.split_right": "Dividi a destra",
   "command.tab_navigator": "Navigatore di progetti e schede",
   "command.tab_navigator.hint": "cerca progetti e schede",
-  "command.zoom_pane": "Ingrandisci riquadro"
+  "command.zoom_pane": "Ingrandisci riquadro",
+  "update.available": "Unterm {tag} è disponibile — scegli «Installa aggiornamento» nella palette dei comandi.",
+  "update.install": "Installa aggiornamento {tag}",
+  "update.downloading": "Download di Unterm {tag}… Unterm si riavvia al termine dell'installazione.",
+  "update.in_progress": "Un aggiornamento è già in download.",
+  "update.up_to_date": "Unterm {version} è aggiornato.",
+  "update.manual": "Unterm {tag} è disponibile, ma {reason}: {url}",
+  "update.failed": "Aggiornamento non riuscito: {err}",
+  "web.update.install": "Installa e riavvia",
+  "web.update.installing": "Download in corso…"
 }

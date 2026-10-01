@@ -660,5 +660,14 @@
   "command.font_bigger": "Increase font size",
   "command.font_smaller": "Decrease font size",
   "command.font_reset": "Reset font size",
-  "command.full_screen": "Full screen"
+  "command.full_screen": "Full screen",
+  "update.available": "Unterm {tag} is available — choose “Install update” in the command palette.",
+  "update.install": "Install update {tag}",
+  "update.downloading": "Downloading Unterm {tag}… Unterm restarts when it is installed.",
+  "update.in_progress": "An update is already being downloaded.",
+  "update.up_to_date": "Unterm {version} is the latest.",
+  "update.manual": "Unterm {tag} is available, but {reason}: {url}",
+  "update.failed": "Update failed: {err}",
+  "web.update.install": "Install and restart",
+  "web.update.installing": "Downloading…"
 }

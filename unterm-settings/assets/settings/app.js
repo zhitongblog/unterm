@@ -197,6 +197,7 @@ function untermSettings() {
       checked_at: "",
       dismissed: false,
       checking: false,
+      installing: false,
     },
 
     themes: [
@@ -448,6 +449,25 @@ function untermSettings() {
         }
       } catch (e) {
         // network blip on first load — leave defaults, don't toast spam
+      }
+    },
+
+    async installUpdate() {
+      this.updates.installing = true;
+      try {
+        const j = await this.api('POST', '/api/updates/install');
+        if (j.status === 'scheduled') {
+          this.toast(this.t('web.update.installing'));
+        } else if (j.status === 'manual') {
+          window.open(j.url, '_blank', 'noopener');
+          this.updates.installing = false;
+        } else {
+          this.updates.installing = false;
+          this.updates.upgrade_available = false;
+        }
+      } catch (e) {
+        this.updates.installing = false;
+        this.toast(String(e && e.message || e));
       }
     },
 

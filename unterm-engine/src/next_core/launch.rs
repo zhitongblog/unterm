@@ -269,6 +269,10 @@ mod tests {
 
     #[test]
     fn prepare_command_applies_env_and_cwd() {
+        // About the environment and directory a launch carries, not about
+        // shell integration -- which rewrites a default bash (CI's $SHELL)
+        // into an explicit one and would change what this test looks at.
+        let _integration = crate::next_core::shell_integration::disabled_for_test();
         let expected_cwd = std::env::current_dir()
             .expect("current dir")
             .display()

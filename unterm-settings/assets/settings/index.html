@@ -41,6 +41,12 @@
           <span x-text="t('web.update.available_post')"></span>
         </span>
         <div class="flex items-center gap-2 text-xs">
+          <button
+            @click="installUpdate()"
+            :disabled="updates.installing"
+            class="rounded-md border border-notion-green/60 bg-notion-green/20 px-2.5 py-1 text-notion-teal hover:bg-notion-green/30 disabled:opacity-60"
+            x-text="updates.installing ? t('web.update.installing') : t('web.update.install')"
+          ></button>
           <a
             :href="'https://github.com/zhitongblog/unterm/releases/tag/' + updates.latest_tag"
             target="_blank" rel="noopener"

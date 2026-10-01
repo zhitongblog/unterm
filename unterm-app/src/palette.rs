@@ -35,6 +35,8 @@ pub enum Command {
     ExportSession,
     /// Open the web settings page in a browser.
     OpenSettings,
+    /// Download the newer release, verify it, quit and restart into it.
+    InstallUpdate,
     /// Open the Unzoo One console in a browser. Only offered when the
     /// console assets are actually installed.
     OpenConsole,

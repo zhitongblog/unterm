@@ -376,5 +376,14 @@
   "command.split_right": "右に分割",
   "command.tab_navigator": "プロジェクトとタブのナビゲーター",
   "command.tab_navigator.hint": "プロジェクトとタブを検索",
-  "command.zoom_pane": "ペインを拡大"
+  "command.zoom_pane": "ペインを拡大",
+  "update.available": "Unterm {tag} が公開されました——コマンドパレットで「アップデートをインストール」を選んでください。",
+  "update.install": "アップデート {tag} をインストール",
+  "update.downloading": "Unterm {tag} をダウンロード中…インストール後に自動で再起動します。",
+  "update.in_progress": "アップデートはすでにダウンロード中です。",
+  "update.up_to_date": "Unterm {version} は最新です。",
+  "update.manual": "Unterm {tag} が公開されていますが、{reason}：{url}",
+  "update.failed": "アップデートに失敗しました：{err}",
+  "web.update.install": "インストールして再起動",
+  "web.update.installing": "ダウンロード中…"
 }

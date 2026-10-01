@@ -376,5 +376,14 @@
   "command.split_right": "Nach rechts teilen",
   "command.tab_navigator": "Projekt- und Tab-Navigator",
   "command.tab_navigator.hint": "Projekte und Tabs durchsuchen",
-  "command.zoom_pane": "Pane vergrößern"
+  "command.zoom_pane": "Pane vergrößern",
+  "update.available": "Unterm {tag} ist verfügbar — wähle „Update installieren“ in der Befehlspalette.",
+  "update.install": "Update {tag} installieren",
+  "update.downloading": "Unterm {tag} wird heruntergeladen … Unterm startet nach der Installation neu.",
+  "update.in_progress": "Ein Update wird bereits heruntergeladen.",
+  "update.up_to_date": "Unterm {version} ist aktuell.",
+  "update.manual": "Unterm {tag} ist verfügbar, aber {reason}: {url}",
+  "update.failed": "Update fehlgeschlagen: {err}",
+  "web.update.install": "Installieren und neu starten",
+  "web.update.installing": "Wird heruntergeladen …"
 }

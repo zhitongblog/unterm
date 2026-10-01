@@ -376,5 +376,14 @@
   "command.split_right": "向右分割",
   "command.tab_navigator": "專案與分頁導覽",
   "command.tab_navigator.hint": "搜尋專案和分頁",
-  "command.zoom_pane": "縮放窗格"
+  "command.zoom_pane": "縮放窗格",
+  "update.available": "Unterm {tag} 已發佈——在命令面板裡選擇「安裝更新」。",
+  "update.install": "安裝更新 {tag}",
+  "update.downloading": "正在下載 Unterm {tag}……安裝完成後會自動重新啟動。",
+  "update.in_progress": "更新已在下載中。",
+  "update.up_to_date": "Unterm {version} 已是最新版本。",
+  "update.manual": "Unterm {tag} 已發佈，但{reason}：{url}",
+  "update.failed": "更新失敗：{err}",
+  "web.update.install": "安裝並重新啟動",
+  "web.update.installing": "正在下載……"
 }

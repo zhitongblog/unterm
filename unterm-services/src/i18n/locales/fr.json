@@ -376,5 +376,14 @@
   "command.split_right": "Diviser à droite",
   "command.tab_navigator": "Navigateur de projets et d’onglets",
   "command.tab_navigator.hint": "chercher des projets et des onglets",
-  "command.zoom_pane": "Agrandir le panneau"
+  "command.zoom_pane": "Agrandir le panneau",
+  "update.available": "Unterm {tag} est disponible — choisissez « Installer la mise à jour » dans la palette de commandes.",
+  "update.install": "Installer la mise à jour {tag}",
+  "update.downloading": "Téléchargement d'Unterm {tag}… Unterm redémarre une fois installé.",
+  "update.in_progress": "Une mise à jour est déjà en cours de téléchargement.",
+  "update.up_to_date": "Unterm {version} est à jour.",
+  "update.manual": "Unterm {tag} est disponible, mais {reason} : {url}",
+  "update.failed": "Échec de la mise à jour : {err}",
+  "web.update.install": "Installer et redémarrer",
+  "web.update.installing": "Téléchargement…"
 }
