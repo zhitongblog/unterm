@@ -4,7 +4,7 @@
 
 ## What it does
 
-- **Four control surfaces, one engine.** Every window starts a local MCP server (line-delimited JSON-RPC over TCP, bound to 127.0.0.1, auth-token gated), an HTTP Web Settings server, a CLI (`unterm-cli`), and the GUI — all read/write the same JSON state.
+- **Four control surfaces, one engine.** Every window starts a local MCP server (line-delimited JSON-RPC over TCP, bound to 127.0.0.1, auth-token gated), an HTTP Web Settings server, a CLI (`unterm-cli`), and the GUI. They share the same state but do not all expose everything: theme, language and the `unterm.conf` config file are deliberately not on MCP.
 - **151 MCP methods plus `auth.login`** and the product CLI families. An agent calls `meta.surface` (or runs `unterm-cli reference`) once to receive the entire API live: every method with param schemas, every CLI subcommand, and every currently-bound keybinding.
 - **Agent Cockpit (v0.55).** Live per-pane agent state (working / needs-you / done / idle) for Claude Code, Codex CLI, Gemini CLI, Aider and others — zero-config via title/OSC parsing and process detection, exact via official lifecycle hooks that `unterm-cli agent enable-hooks` wires up. Tab-badge dots, a cross-window tally chip, and an Agent Inbox (`Ctrl+Shift+A`) sorted waiting-first with jump-to-pane.
 - **Fleet.** One task × N agents × N isolated git worktrees (`unterm-cli fleet launch --agents claude,claude,codex -- <task>`): each member gets its own worktree, branch, tab, and state badge. Crew presets include `claude+codex+gemini` for cross-model comparison of the same task.
@@ -16,7 +16,7 @@
 ## Key facts
 
 - License: MIT (open-source client). Price: $0 forever — no paid tier, no subscription, no in-app purchase.
-- Privacy: zero telemetry, no account, no analytics; every server bound to 127.0.0.1. The Agent Cockpit is fully local: state detection, fleets, checkpoints, and review never touch a cloud.
+- Privacy: zero telemetry, no account, no analytics; every server bound to 127.0.0.1. Two outbound requests of its own: a plain GET to the GitHub releases API every 6 hours (update check, no identifiers) and a GET of the signed agent catalog from unterm.app when the AI Agents page or `unterm-cli agent` is used. Neither can be switched off in settings yet. The Agent Cockpit is fully local: state detection, fleets, checkpoints, and review never touch a cloud.
 - Platforms: macOS (universal, signed + Apple-notarized DMG), Linux x86_64/arm64 (.deb + AppImage), Windows 10/11 x64/arm64 (.msi + portable .zip).
 - UI languages: 9 (English, 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français, Italiano, हिन्दी) with system-locale auto-detect.
 - Tech stack: Rust, native next-core terminal engine, wgpu rendering, MCP, Tailwind + Alpine for Web Settings.
@@ -34,7 +34,8 @@
 - [Agent recipes](https://unterm.app/docs/agent-recipes): copy-pastable Python snippets for driving panes.
 - [Multi-instance](https://unterm.app/docs/multi-instance): NATO-named instances and cross-window routing.
 - [Identity profiles](https://unterm.app/docs/profiles): binding credentials to a window.
-- [Configuration](https://unterm.app/docs/configuration): `unterm.lua` options.
+- [Configuration](https://unterm.app/docs/configuration): every file under `~/.unterm/`.
+- [Config file reference](https://unterm.app/docs/config-reference): every key in `unterm.conf`, including `[env]` and `[keys]`.
 - [Architecture](https://unterm.app/docs/architecture): how the control surfaces fit together.
 
 ## Links

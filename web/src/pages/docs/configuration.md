@@ -6,9 +6,12 @@ kicker: Docs / Configuration
 date: 2026-05-03
 ---
 
-Unterm has no monolithic config file. Every product surface — proxy, theme, language, scrollback, recording, agent handshake — gets its own small JSON file under `~/.unterm/`. Each file has one writer, a documented schema, and degrades gracefully when missing. You can edit any of them by hand, or let Web Settings (Settings ▼ → Open Web Settings) and `unterm-cli` write them — both paths produce the same on-disk format.
+Unterm keeps its settings in two kinds of file under `~/.unterm/`:
 
-Why this shape: a bunch of one-purpose files is easier for an outside agent to read and write than one monolithic doc. An MCP client that wants to flip the proxy touches `proxy.json` and nothing else. Nobody owns "the config" in process memory; everyone's a client of these files.
+- **`unterm.conf`** — the terminal's own config: fonts, colours, window size and padding, the shell, `[env]` variables, `[keys]` bindings, MCP confirmation and Agent Cockpit options. Plain `key = value` lines with `[section]` headers, read when Unterm starts. Every key is listed in the [config file reference](/docs/config-reference). If you still have an `unterm.lua` from an older version and no `unterm.conf` yet, Unterm converts it on start and logs any lines it could not translate.
+- **Small JSON files**, one per product surface — proxy, theme, language, scrollback, recording, agent handshake. Each has one writer, a documented schema, and degrades gracefully when missing. You can edit any of them by hand, or let Web Settings (Settings ▼ → Open Web Settings) and `unterm-cli` write them — both paths produce the same on-disk format.
+
+This page documents the JSON files and the runtime state next to them. Why this shape: a bunch of one-purpose files is easier for an outside agent to read and write than one big document. An MCP client that wants to flip the proxy touches `proxy.json` and nothing else.
 
 ## The directory
 
@@ -18,6 +21,7 @@ A populated tree looks like this:
 
 ```
 ~/.unterm/
+├── unterm.conf              # terminal config (see /docs/config-reference)
 ├── server.json              # active instance pointer (ports + auth token)
 ├── active.json              # same shape as server.json; modern multi-instance pointer
 ├── instances/               # one file per running Unterm process
@@ -37,7 +41,7 @@ A populated tree looks like this:
 ├── scrollback.json          # per-pane scrollback line cap
 ├── compat.json              # TERM_PROGRAM masquerade
 ├── recording.json           # session recorder + redaction flags
-├── fleets.json              # Agent Cockpit: live fleets (members, worktrees, review state)
+├── tasks.db                 # durable task store; Agent Cockpit fleets live here (an old fleets.json is imported once)
 ├── checkpoints.json         # Agent Cockpit: pre-agent-work snapshots per repo (dangling-commit SHAs)
 ├── verifications.json       # Agent Cockpit: fleet-member verification results (status, exit code, log)
 │
@@ -376,7 +380,8 @@ Some files are personal config worth carrying; others are runtime state.
 
 | Portable | Not portable |
 |---|---|
-| `theme.json` | `server.json` (regenerated each launch) |
+| `unterm.conf` | `server.json` (regenerated each launch) |
+| `theme.json` | `tasks.db` (fleets point at worktrees on this machine) |
 | `lang.json` | `active.json` (regenerated each launch) |
 | `scrollback.json` | `instances/*.json` (process-specific) |
 | `compat.json` | `auth_token` (regenerated each launch) |
@@ -394,7 +399,7 @@ Every file is read on demand with a fallback to the built-in default.
 - **Reset everything:** quit Unterm, `rm -rf ~/.unterm/`, relaunch.
 - **Reset just the auth token:** quit Unterm and relaunch — a new UUID is generated on every launch.
 
-Precedence at runtime: file value > Web Settings (which is a write path to the file) > built-in default in the Rust source. There's no Lua / dotenv / env-var override layer for these specific files.
+Precedence at runtime: file value > Web Settings (which is a write path to the file) > built-in default in the Rust source. There's no Lua / dotenv / env-var override layer for these specific files. One exception: `scrollback_lines` in `unterm.conf`, when set, wins over `scrollback.json`.
 
 When a file is malformed, Unterm logs at `debug` and uses the default — it doesn't delete the bad file or refuse to launch. Run `RUST_LOG=debug unterm 2>&1 | grep -i config` to see which file got rejected.
 
@@ -404,7 +409,9 @@ For each schema above, the load-bearing source files in the repo are:
 
 - `unterm-services/src/server_info.rs` — `InstanceInfo` plus the writers for `server.json`, `active.json`, `instances/`, and the auth token.
 - `unterm-settings/src/update_check.rs` — `update_check.json`.
-- `unterm-services/src/settings.rs` — shared theme, proxy, profile, and compatibility settings.
+- `unterm-services/src/settings.rs` — shared theme, proxy, profile, and compatibility settings, and where `unterm.conf` is found and loaded.
+- `unterm-engine/src/next_core/config.rs`, `config_schema.rs`, `config_migrate.rs` — the `unterm.conf` parser, the list of valid keys, and the `unterm.lua` migration.
+- `unterm-services/src/cockpit/fleet_store.rs` — fleets in `tasks.db`.
 - `unterm-mcp/src/handler.rs` — MCP proxy, policy, workspace, profile, and recording operations.
 - `unterm-services/src/launch_env.rs` — resolves profile and proxy environment immediately before a pane is spawned.
 - `unterm-app/src/window.rs` and `unterm-settings/src/server.rs` — native and Web settings surfaces; live theme changes use `unterm-services/src/theme_state.rs`.

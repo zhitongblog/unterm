@@ -791,9 +791,9 @@ This is the "wait for the inner agent's prompt marker before sending the next in
 
 ## Theme
 
-There is no `theme.*` namespace on the MCP server. Theme switching is done through the HTTP settings server at `127.0.0.1:<http_port>` — the same `~/.unterm/server.json` file lists that port. The HTTP server exposes the Tailwind+Alpine settings SPA at `/` and REST endpoints under `/api/settings/...`.
+There is no `theme.*` namespace on the MCP server. Theme switching is done through the HTTP settings server at `127.0.0.1:<http_port>` — the same `~/.unterm/server.json` file lists that port. The HTTP server exposes the Tailwind+Alpine settings SPA at `/` and REST endpoints such as `/api/theme`, behind the same auth token. From a shell, `unterm-cli theme list` / `unterm-cli theme switch <id>` use that API.
 
-If you see references to `theme.list` / `theme.switch` in older docs, those are HTTP endpoints, not MCP methods. The MCP wire protocol does not currently surface theme management.
+If you see references to `theme.list` / `theme.switch` in older docs, those are HTTP endpoints, not MCP methods. The MCP wire protocol does not currently surface theme management. The same is true of the interface language (`unterm-cli lang …`) and of `unterm.conf`: there is no `lang.*` or `settings.*` namespace.
 
 ---
 
@@ -1527,4 +1527,4 @@ bundles for somebody who was not there, and the process/snapshot/uninstall
 surface. See the [CLI reference](/docs/cli-reference/) for the shell-level
 versions.
 
-That's 149 authenticated methods plus `auth.login`. If you find a method in the codebase that isn't listed here, file an issue — the `MCP_METHODS` table in `unterm-agents/src/mcp_meta.rs`, exposed by `meta.surface` and dispatched in `unterm-mcp/src/handler.rs`, is the source of truth and this page should track it.
+That's 151 authenticated methods plus `auth.login`. If you find a method in the codebase that isn't listed here, file an issue — the `MCP_METHODS` table in `unterm-agents/src/mcp_meta.rs`, exposed by `meta.surface` and dispatched in `unterm-mcp/src/handler.rs`, is the source of truth and this page should track it.

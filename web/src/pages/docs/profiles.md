@@ -329,3 +329,4 @@ Profiles still work for the TOML side (list / show / edit), but `set-secret` and
 - [MCP reference](/docs/mcp-reference/) — what agents see from outside
 - [Multi-instance](/docs/multi-instance/) — NATO names, `instance.list`, and how profiles interact with the instance system
 - [Configuration](/docs/configuration/) — `~/.unterm/` layout, env vars, file paths
+- [Config file reference](/docs/config-reference/) — every key in `unterm.conf`
