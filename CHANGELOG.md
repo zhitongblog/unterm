@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.71.17 — 2026-10-01
+
+### Added
+
+- **Update from inside Unterm.** `unterm-cli update`, **Install update** in the
+  command palette, and a button in Web Settings download the new release,
+  check it against the SHA-256 GitHub recorded (and on macOS its signature and
+  team), quit Unterm, put the new version in place and start it again. Works
+  for the macOS app, the Windows MSI and the AppImage; a `.deb` or a portable
+  zip is left to you. A newer release is announced once, in the window.
+- **Shell integration, loaded for you.** zsh, bash, fish and PowerShell started
+  by Unterm get prompt and command marks without any change to your own
+  startup files. A command that fails marks its tab with ▲; output that only
+  contains the word "error" no longer does. `shell_integration = false` turns
+  it off.
+- **Shift+Enter is not Enter.** The kitty keyboard protocol (the level agents
+  and modern TUIs ask for) and xterm's modifyOtherKeys: Shift+Enter, Esc and
+  Ctrl/Alt chords reach the program as themselves.
+- **Programs can ask what colours they are on** (OSC 4/10/11/12), answered
+  from the theme you are using, so Claude Code, Codex and Neovim pick the
+  right palette. XTVERSION names Unterm.
+- **Progress bars in the sidebar.** A program reporting progress (`OSC 9;4`)
+  shows it under its tab — normal, paused, failed or indeterminate.
+- **Windows: Git Bash and each WSL distribution** in the shell menu, found
+  wherever they are installed.
+- **"Report on GitHub" after a crash**: a new issue opens with the details
+  filled in. Nothing is sent unless you submit it.
+- **Homebrew and Scoop**: `brew install --cask zhitongblog/tap/unterm`;
+  `scoop bucket add zhitongblog https://github.com/zhitongblog/scoop-bucket`,
+  then `scoop install unterm`.
+
+### Fixed
+
+- **Full-screen redraws no longer tear.** Synchronized output (mode 2026) is
+  honoured: an update is shown whole or not at all.
+- **Dim text was as bright as everything else.** Faint (SGR 2) is drawn dimmer,
+  so Claude Code's suggestions no longer look like what you typed.
+- **Unterm's own command suggestions leaked between tabs and into agents.**
+  Typing in Claude Code's prompt recorded it as a shell command and offered it
+  in other tabs; predictions now stay out of panes where an agent runs.
+- **A new tab opened in your home folder** instead of where the current one is.
+- **`agent_session`: every agent was read as Codex** (#35), so Claude Code's
+  events were lost and usage read 0 (#36). The program behind `cmd /c`, `env`,
+  `npx`, `node` or `sh -c` now decides; unknown programs get a generic reader;
+  Codex's current `exec --json` items and usage are read; usage is `null` when
+  an agent never reported it.
+- `CSI > 4 ; 2 m` turned on underline and faint instead of a keyboard mode;
+  four working config keys were reported as unknown; `unterm-cli imgcat` printed
+  nothing inside Unterm without saying why.
+
 ## v0.71.16 — 2026-09-30
 
 ### Fixed

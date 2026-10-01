@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Doc.astro
 title: Product roadmap
-subtitle: "What is being built now, what comes after it, and what Unterm will not become. Current release: v0.71.16."
+subtitle: "What is being built now, what comes after it, and what Unterm will not become. Current release: v0.71.17."
 kicker: Docs / Product roadmap
 date: 2026-10-01
 ---
@@ -12,9 +12,7 @@ Unterm is a terminal that agents can drive and that shows you what the agents in
 
 Most of what follows is terminal groundwork: the protocols modern command-line tools expect, and the install and update paths people expect from a daily driver. The agent surface (MCP, CLI, Agent Cockpit) already ships; see the [MCP reference](/docs/mcp-reference) and [Agent Cockpit](/docs/agent-cockpit).
 
-## Ready for the next release
-
-Built and verified on `master`; each one ships with the next tagged release.
+## Shipped in v0.71.17
 
 ### Terminal protocols
 
@@ -31,7 +29,7 @@ Built and verified on `master`; each one ships with the next tagged release.
 ### Install and update
 
 - **In-app updates**: `unterm-cli update`, the command palette's **Install update**, and Web Settings download, verify and install the new release, then restart Unterm. See [`update`](/docs/cli-reference#update).
-- **Homebrew, Scoop and winget**: manifests and a publish script are ready; the channels are listed here once they are live.
+- **Homebrew and Scoop**: `brew install --cask zhitongblog/tap/unterm`, `scoop bucket add zhitongblog https://github.com/zhitongblog/scoop-bucket` then `scoop install unterm`. winget (`zhitongblog.Unterm`) is submitted and listed once Microsoft accepts it.
 - **Crash reports via a pre-filled GitHub issue**: nothing is sent unless you submit it yourself.
 
 ## Later
