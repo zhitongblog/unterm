@@ -385,5 +385,8 @@
   "update.manual": "Unterm {tag} उपलब्ध है, लेकिन {reason}: {url}",
   "update.failed": "अपडेट विफल: {err}",
   "web.update.install": "इंस्टॉल करें और फिर शुरू करें",
-  "web.update.installing": "डाउनलोड हो रहा है…"
+  "web.update.installing": "डाउनलोड हो रहा है…",
+  "web.about.star": "GitHub पर स्टार",
+  "web.about.star_why": "अगर Unterm आपके काम आता है, तो एक स्टार दूसरों को इसे खोजने में मदद करता है।",
+  "command.star": "GitHub पर Unterm को स्टार दें"
 }

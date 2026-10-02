@@ -37,6 +37,9 @@ pub enum Command {
     OpenSettings,
     /// Download the newer release, verify it, quit and restart into it.
     InstallUpdate,
+    /// Open the repository so someone who likes Unterm can star it. Only
+    /// ever offered here and in Web Settings -- never pushed at anyone.
+    StarOnGitHub,
     /// Open the Unzoo One console in a browser. Only offered when the
     /// console assets are actually installed.
     OpenConsole,

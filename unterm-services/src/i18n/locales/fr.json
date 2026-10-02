@@ -385,5 +385,8 @@
   "update.manual": "Unterm {tag} est disponible, mais {reason} : {url}",
   "update.failed": "Échec de la mise à jour : {err}",
   "web.update.install": "Installer et redémarrer",
-  "web.update.installing": "Téléchargement…"
+  "web.update.installing": "Téléchargement…",
+  "web.about.star": "Étoile sur GitHub",
+  "web.about.star_why": "Si Unterm vous est utile, une étoile aide d'autres personnes à le découvrir.",
+  "command.star": "Mettre une étoile à Unterm sur GitHub"
 }

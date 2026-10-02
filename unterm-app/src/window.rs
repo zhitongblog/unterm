@@ -9289,6 +9289,12 @@ impl App {
             crate::palette::Command::ExportSession => self.export_session(),
             crate::palette::Command::OpenSettings => self.open_settings(),
             crate::palette::Command::InstallUpdate => crate::updates::install(),
+            crate::palette::Command::StarOnGitHub => {
+                let url = "https://github.com/zhitongblog/unterm";
+                if let Err(err) = crate::links::open(url) {
+                    log::warn!("could not open {url}: {err}");
+                }
+            }
             crate::palette::Command::OpenConsole => self.open_console(),
             crate::palette::Command::ApplyTheme { id } => self.apply_theme(&id),
             crate::palette::Command::TypeCharacter { glyph, name } => {
@@ -14149,6 +14155,12 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         label: unterm_services::i18n::t("command.capture_region"),
         hint: unterm_services::i18n::t("command.capture_region.hint"),
         command: crate::palette::Command::SelectCaptureRegion,
+    });
+    // Last, and only here: there to be found by whoever looks for it.
+    entries.push(crate::palette::Entry {
+        label: unterm_services::i18n::t("command.star"),
+        hint: "github.com/zhitongblog/unterm".to_string(),
+        command: crate::palette::Command::StarOnGitHub,
     });
     entries
 }

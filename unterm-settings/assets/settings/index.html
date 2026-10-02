@@ -2162,7 +2162,7 @@
               Unterm <span class="font-mono" x-text="state.version"></span>
             </div>
             <div class="text-xs text-notion-faint" x-text="t('web.about.line')"></div>
-            <div class="pt-2">
+            <div class="pt-2 flex flex-wrap items-center gap-3">
               <a
                 class="text-notion-green hover:text-notion-teal"
                 href="https://github.com/zhitongblog/unterm"
@@ -2170,7 +2170,15 @@
                 rel="noreferrer"
                 >github.com/zhitongblog/unterm</a
               >
+              <a
+                class="inline-flex items-center gap-1 rounded-md border border-notion-green/40 px-2.5 py-1 text-xs text-notion-teal hover:bg-notion-surface/40"
+                href="https://github.com/zhitongblog/unterm"
+                target="_blank"
+                rel="noreferrer"
+                x-text="'★ ' + t('web.about.star')"
+              ></a>
             </div>
+            <div class="text-xs text-notion-faint" x-text="t('web.about.star_why')"></div>
             <div class="pt-3 flex items-center gap-2">
               <span class="text-xs text-notion-faint">Made by</span>
               <a

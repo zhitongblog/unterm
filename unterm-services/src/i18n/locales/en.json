@@ -669,5 +669,8 @@
   "update.manual": "Unterm {tag} is available, but {reason}: {url}",
   "update.failed": "Update failed: {err}",
   "web.update.install": "Install and restart",
-  "web.update.installing": "Downloading…"
+  "web.update.installing": "Downloading…",
+  "web.about.star": "Star on GitHub",
+  "web.about.star_why": "If Unterm is useful to you, a star helps other people find it.",
+  "command.star": "Star Unterm on GitHub"
 }

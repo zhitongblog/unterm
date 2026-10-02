@@ -385,5 +385,8 @@
   "update.manual": "Unterm {tag}이(가) 출시되었지만 {reason}: {url}",
   "update.failed": "업데이트 실패: {err}",
   "web.update.install": "설치 후 다시 시작",
-  "web.update.installing": "다운로드 중…"
+  "web.update.installing": "다운로드 중…",
+  "web.about.star": "GitHub에서 Star",
+  "web.about.star_why": "Unterm이 유용하다면 Star가 다른 사람들이 찾는 데 도움이 됩니다.",
+  "command.star": "GitHub에서 Unterm에 Star 주기"
 }

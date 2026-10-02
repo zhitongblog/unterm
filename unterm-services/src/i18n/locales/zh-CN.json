@@ -669,5 +669,8 @@
   "update.manual": "Unterm {tag} 已发布，但{reason}：{url}",
   "update.failed": "更新失败：{err}",
   "web.update.install": "安装并重启",
-  "web.update.installing": "正在下载……"
+  "web.update.installing": "正在下载……",
+  "web.about.star": "在 GitHub 点 Star",
+  "web.about.star_why": "如果 Unterm 对你有用，点个 Star 能让更多人发现它。",
+  "command.star": "在 GitHub 上 Star Unterm"
 }
