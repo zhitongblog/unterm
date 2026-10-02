@@ -1381,4 +1381,148 @@
     <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/guide"/>
     <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/guide"/>
   </url>
+  <url>
+    <loc>https://unterm.app/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-CN/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-TW/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ja-JP/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ko-KR/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/de-DE/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/fr-FR/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/it-IT/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/hi-IN/ambassador</loc>
+    <lastmod>2026-10-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/ambassador"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/ambassador"/>
+  </url>
 </urlset>

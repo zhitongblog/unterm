@@ -1,0 +1,56 @@
+---
+import Base from "../../layouts/Base.astro";
+import Ambassador from "../../components/Ambassador.astro";
+import { LOCALES, alternatesFor } from "../../i18n/locales";
+
+import enUS from "../../i18n/en-US.json";
+import zhCN from "../../i18n/zh-CN.json";
+import zhTW from "../../i18n/zh-TW.json";
+import jaJP from "../../i18n/ja-JP.json";
+import koKR from "../../i18n/ko-KR.json";
+import deDE from "../../i18n/de-DE.json";
+import frFR from "../../i18n/fr-FR.json";
+import itIT from "../../i18n/it-IT.json";
+import hiIN from "../../i18n/hi-IN.json";
+
+const DICTS: Record<string, Record<string, string>> = {
+  "zh-CN": zhCN,
+  "zh-TW": zhTW,
+  "ja-JP": jaJP,
+  "ko-KR": koKR,
+  "de-DE": deDE,
+  "fr-FR": frFR,
+  "it-IT": itIT,
+  "hi-IN": hiIN,
+};
+
+export function getStaticPaths() {
+  return [
+    { params: { lang: "zh-CN" } },
+    { params: { lang: "zh-TW" } },
+    { params: { lang: "ja-JP" } },
+    { params: { lang: "ko-KR" } },
+    { params: { lang: "de-DE" } },
+    { params: { lang: "fr-FR" } },
+    { params: { lang: "it-IT" } },
+    { params: { lang: "hi-IN" } },
+  ];
+}
+
+const { lang } = Astro.params;
+const dict = DICTS[lang as string];
+const pathPrefix = `/${lang}`;
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
+
+---
+
+<Base
+  lang={lang as string}
+  dict={dict}
+  alternates={alternatesFor("/ambassador")}
+  locales={LOCALES}
+  pathPrefix={pathPrefix}
+  seo={{ title: t("amb.meta.title"), description: t("amb.meta.desc"), canonicalPath: `${pathPrefix}/ambassador`, xDefault: "https://unterm.app/ambassador" }}
+>
+  <Ambassador dict={dict} pathPrefix={pathPrefix} />
+</Base>

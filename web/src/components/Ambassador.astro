@@ -1,0 +1,159 @@
+---
+// The ambassador program page: what ambassadors do, what they get, the
+// ground rules, and how to apply. Applications are GitHub issues opened from
+// .github/ISSUE_TEMPLATE/ambassador.yml, so there is no form backend here.
+// Accepted ambassadors are listed from src/data/ambassadors.json.
+
+import enUS from "../i18n/en-US.json";
+import ambassadors from "../data/ambassadors.json";
+
+interface Props {
+  dict: Record<string, string>;
+  pathPrefix: string;
+}
+const { dict, pathPrefix } = Astro.props as Props;
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
+
+const APPLY_URL =
+  "https://github.com/zhitongblog/unterm/issues/new?template=ambassador.yml";
+const LIST_URL =
+  "https://github.com/zhitongblog/unterm/issues?q=label%3Aambassador-application";
+
+const tasks = [
+  { icon: "✍️", key: "write" },
+  { icon: "🎬", key: "demo" },
+  { icon: "💬", key: "help" },
+  { icon: "🌐", key: "translate" },
+];
+const perks = ["credit", "early", "priority", "roadmap"];
+const rules = ["disclose", "own", "respect", "fake", "paid"];
+const steps = ["apply", "reply", "start"];
+
+interface Ambassador {
+  github: string;
+  name?: string;
+  where?: string;
+  link?: string;
+}
+const people = ambassadors as Ambassador[];
+---
+
+<section class="pt-16 pb-12 border-b border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("amb.kicker")}</div>
+    <h1 class="mt-3 text-4xl sm:text-5xl font-bold tracking-tight text-zinc-50 text-balance">{t("amb.title")}</h1>
+    <p class="mt-4 text-lg text-notion-muted max-w-3xl leading-relaxed">{t("amb.sub")}</p>
+    <div class="mt-8 flex flex-wrap gap-3">
+      <a href={APPLY_URL} target="_blank" rel="noopener"
+         class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-notion-green hover:bg-notion-teal text-zinc-950 font-semibold transition"
+         data-amb-apply>
+        {t("amb.cta.apply")} <span aria-hidden="true">→</span>
+      </a>
+      <a href="#rules" class="inline-flex items-center px-5 py-2.5 rounded-lg border border-notion-border text-notion-ink hover:bg-notion-surface/40">
+        {t("amb.cta.rules")}
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="py-14 border-b border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.do.title")}</h2>
+    <div class="mt-6 grid sm:grid-cols-2 gap-4">
+      {tasks.map((x) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/30 p-5">
+          <div class="text-2xl" aria-hidden="true">{x.icon}</div>
+          <h3 class="mt-2 font-semibold text-notion-ink">{t(`amb.do.${x.key}.title`)}</h3>
+          <p class="mt-1.5 text-sm text-notion-muted leading-relaxed">{t(`amb.do.${x.key}.body`)}</p>
+        </div>
+      ))}
+    </div>
+    <p class="mt-5 text-sm text-notion-faint">{t("amb.do.note")}</p>
+  </div>
+</section>
+
+<section class="py-14 border-b border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.get.title")}</h2>
+    <ul class="mt-6 grid sm:grid-cols-2 gap-x-8 gap-y-5">
+      {perks.map((k) => (
+        <li class="flex gap-3">
+          <span class="mt-1 text-notion-teal" aria-hidden="true">✓</span>
+          <div>
+            <div class="font-semibold text-notion-ink">{t(`amb.get.${k}.title`)}</div>
+            <p class="mt-1 text-sm text-notion-muted leading-relaxed">{t(`amb.get.${k}.body`)}</p>
+          </div>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<section id="rules" class="py-14 border-b border-notion-border scroll-mt-20">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.rules.title")}</h2>
+    <p class="mt-2 text-notion-muted max-w-3xl">{t("amb.rules.sub")}</p>
+    <ol class="mt-6 space-y-3 max-w-3xl">
+      {rules.map((k, i) => (
+        <li class="flex gap-4 rounded-lg border border-notion-border/70 px-4 py-3">
+          <span class="font-mono text-sm text-notion-faint tabular-nums mt-0.5">{String(i + 1).padStart(2, "0")}</span>
+          <p class="text-notion-ink leading-relaxed">{t(`amb.rules.${k}`)}</p>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>
+
+<section class="py-14 border-b border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.how.title")}</h2>
+    <ol class="mt-6 grid sm:grid-cols-3 gap-4">
+      {steps.map((k, i) => (
+        <li class="rounded-xl border border-notion-border p-5">
+          <div class="text-xs font-mono uppercase tracking-widest text-notion-teal">{t("amb.how.step").replace("{n}", String(i + 1))}</div>
+          <div class="mt-2 font-semibold text-notion-ink">{t(`amb.how.${k}.title`)}</div>
+          <p class="mt-1.5 text-sm text-notion-muted leading-relaxed">{t(`amb.how.${k}.body`)}</p>
+        </li>
+      ))}
+    </ol>
+    <div class="mt-8">
+      <a href={APPLY_URL} target="_blank" rel="noopener"
+         class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-notion-green hover:bg-notion-teal text-zinc-950 font-semibold transition">
+        {t("amb.cta.apply")} <span aria-hidden="true">→</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section id="ambassadors" class="py-14 scroll-mt-20">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.wall.title")}</h2>
+    {people.length === 0 ? (
+      <p class="mt-4 text-notion-muted">
+        {t("amb.wall.empty")}
+        <a href={APPLY_URL} target="_blank" rel="noopener" class="text-notion-teal hover:underline">{t("amb.wall.empty_cta")}</a>
+      </p>
+    ) : (
+      <ul class="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {people.map((p) => (
+          <li class="flex items-center gap-3 rounded-xl border border-notion-border p-4">
+            <img src={`https://github.com/${p.github}.png?size=80`} alt="" width="40" height="40" loading="lazy" class="rounded-full" />
+            <div class="min-w-0">
+              <a href={`https://github.com/${p.github}`} target="_blank" rel="noopener" class="font-semibold text-notion-ink hover:text-notion-teal">{p.name ?? p.github}</a>
+              {p.where && (
+                <div class="text-sm text-notion-muted truncate">
+                  {p.link ? <a href={p.link} target="_blank" rel="noopener" class="hover:text-notion-teal">{p.where}</a> : p.where}
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    )}
+    <p class="mt-6 text-sm text-notion-faint">
+      <a href={LIST_URL} target="_blank" rel="noopener" class="hover:text-notion-teal">{t("amb.wall.issues")}</a>
+      <span class="mx-2 text-zinc-700">·</span>
+      <a href={pathPrefix + "/"} class="hover:text-notion-teal">unterm.app</a>
+    </p>
+  </div>
+</section>

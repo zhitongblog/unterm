@@ -1,0 +1,19 @@
+---
+import Base from "../layouts/Base.astro";
+import Ambassador from "../components/Ambassador.astro";
+import dict from "../i18n/en-US.json";
+import { LOCALES, alternatesFor } from "../i18n/locales";
+
+
+---
+
+<Base
+  lang="en-US"
+  dict={dict}
+  alternates={alternatesFor("/ambassador")}
+  locales={LOCALES}
+  pathPrefix=""
+  seo={{ title: dict["amb.meta.title"], description: dict["amb.meta.desc"], canonicalPath: "/ambassador", xDefault: "https://unterm.app/ambassador" }}
+>
+  <Ambassador dict={dict} pathPrefix="" />
+</Base>

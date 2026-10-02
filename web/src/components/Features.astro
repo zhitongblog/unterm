@@ -765,6 +765,10 @@ const capabilities = [
       ))}
     </div>
     <p class="mt-6 text-center text-xs text-notion-faint" set:html={t("sponsor.note")}></p>
+    <p class="mt-8 text-center text-sm text-notion-muted">
+      {t("sponsor.ambassador")}
+      <a href={pathPrefix + "/ambassador"} class="text-notion-teal hover:underline">{t("sponsor.ambassador_cta")} →</a>
+    </p>
   </div>
 </section>
 
