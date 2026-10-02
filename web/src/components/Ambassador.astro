@@ -1,11 +1,11 @@
 ---
 // The ambassador program page: what ambassadors do, what they get, the
-// ground rules, and how to apply. Applications are GitHub issues opened from
-// .github/ISSUE_TEMPLATE/ambassador.yml, so there is no form backend here.
-// Accepted ambassadors are listed from src/data/ambassadors.json.
+// ground rules, and how to share a post. There is no application: a post is
+// a GitHub issue opened from .github/ISSUE_TEMPLATE/ambassador.yml, and the
+// wall below lists the open ones through /api/ambassador-posts. Closing an
+// issue takes its post off the page.
 
 import enUS from "../i18n/en-US.json";
-import ambassadors from "../data/ambassadors.json";
 
 interface Props {
   dict: Record<string, string>;
@@ -17,7 +17,7 @@ const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
 const APPLY_URL =
   "https://github.com/zhitongblog/unterm/issues/new?template=ambassador.yml";
 const LIST_URL =
-  "https://github.com/zhitongblog/unterm/issues?q=label%3Aambassador-application";
+  "https://github.com/zhitongblog/unterm/issues?q=label%3Aambassador-post";
 
 const tasks = [
   { icon: "✍️", key: "write" },
@@ -25,17 +25,9 @@ const tasks = [
   { icon: "💬", key: "help" },
   { icon: "🌐", key: "translate" },
 ];
-const perks = ["credit", "early", "priority", "roadmap"];
+const perks = ["credit", "priority", "roadmap"];
 const rules = ["disclose", "own", "respect", "fake", "paid"];
-const steps = ["apply", "reply", "start"];
-
-interface Ambassador {
-  github: string;
-  name?: string;
-  where?: string;
-  link?: string;
-}
-const people = ambassadors as Ambassador[];
+const steps = ["write", "submit", "show"];
 ---
 
 <section class="pt-16 pb-12 border-b border-notion-border">
@@ -75,7 +67,7 @@ const people = ambassadors as Ambassador[];
 <section class="py-14 border-b border-notion-border">
   <div class="max-w-5xl mx-auto px-6">
     <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.get.title")}</h2>
-    <ul class="mt-6 grid sm:grid-cols-2 gap-x-8 gap-y-5">
+    <ul class="mt-6 grid sm:grid-cols-3 gap-x-8 gap-y-5">
       {perks.map((k) => (
         <li class="flex gap-3">
           <span class="mt-1 text-notion-teal" aria-hidden="true">✓</span>
@@ -125,35 +117,64 @@ const people = ambassadors as Ambassador[];
   </div>
 </section>
 
-<section id="ambassadors" class="py-14 scroll-mt-20">
+<section id="posts" class="py-14 scroll-mt-20">
   <div class="max-w-5xl mx-auto px-6">
     <h2 class="text-2xl font-semibold tracking-tight text-notion-ink">{t("amb.wall.title")}</h2>
-    {people.length === 0 ? (
-      <p class="mt-4 text-notion-muted">
-        {t("amb.wall.empty")}
-        <a href={APPLY_URL} target="_blank" rel="noopener" class="text-notion-teal hover:underline">{t("amb.wall.empty_cta")}</a>
-      </p>
-    ) : (
-      <ul class="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {people.map((p) => (
-          <li class="flex items-center gap-3 rounded-xl border border-notion-border p-4">
-            <img src={`https://github.com/${p.github}.png?size=80`} alt="" width="40" height="40" loading="lazy" class="rounded-full" />
-            <div class="min-w-0">
-              <a href={`https://github.com/${p.github}`} target="_blank" rel="noopener" class="font-semibold text-notion-ink hover:text-notion-teal">{p.name ?? p.github}</a>
-              {p.where && (
-                <div class="text-sm text-notion-muted truncate">
-                  {p.link ? <a href={p.link} target="_blank" rel="noopener" class="hover:text-notion-teal">{p.where}</a> : p.where}
-                </div>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    )}
+    <p class="mt-4 text-notion-muted" data-amb-status>{t("amb.wall.loading")}</p>
+    <p class="mt-4 text-notion-muted" data-amb-empty hidden>
+      {t("amb.wall.empty")}
+      <a href={APPLY_URL} target="_blank" rel="noopener" class="text-notion-teal hover:underline">{t("amb.wall.empty_cta")}</a>
+    </p>
+    <ul class="mt-6 grid sm:grid-cols-2 gap-4" data-amb-posts hidden></ul>
     <p class="mt-6 text-sm text-notion-faint">
       <a href={LIST_URL} target="_blank" rel="noopener" class="hover:text-notion-teal">{t("amb.wall.issues")}</a>
       <span class="mx-2 text-zinc-700">·</span>
-      <a href={pathPrefix + "/"} class="hover:text-notion-teal">unterm.app</a>
+      <a href={APPLY_URL} target="_blank" rel="noopener" class="hover:text-notion-teal">{t("amb.cta.apply")}</a>
     </p>
   </div>
 </section>
+
+<script is:inline data-by={t("amb.wall.by")} data-failed={t("amb.wall.failed")}>
+  (function () {
+    var me = document.currentScript;
+    var by = me.getAttribute("data-by");
+    var failed = me.getAttribute("data-failed");
+    var status = document.querySelector("[data-amb-status]");
+    var empty = document.querySelector("[data-amb-empty]");
+    var list = document.querySelector("[data-amb-posts]");
+    function el(tag, cls, text) {
+      var e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      return e;
+    }
+    fetch("/api/ambassador-posts")
+      .then(function (r) { return r.ok ? r.json() : { posts: null }; })
+      .catch(function () { return { posts: null }; })
+      .then(function (data) {
+        var posts = data && data.posts;
+        if (!Array.isArray(posts)) { status.textContent = failed; return; }
+        status.hidden = true;
+        if (posts.length === 0) { empty.hidden = false; return; }
+        posts.forEach(function (p) {
+          if (!/^https?:\/\//.test(p.url)) return;
+          var li = el("li", "rounded-xl border border-notion-border p-4 flex gap-3");
+          var img = el("img", "rounded-full shrink-0");
+          img.src = p.avatar + (p.avatar.indexOf("?") < 0 ? "?" : "&") + "s=64";
+          img.alt = ""; img.width = 32; img.height = 32; img.loading = "lazy";
+          var box = el("div", "min-w-0");
+          var a = el("a", "font-semibold text-notion-ink hover:text-notion-teal break-words", p.title);
+          a.href = p.url; a.target = "_blank"; a.rel = "noopener nofollow ugc";
+          var meta = el("div", "mt-1 text-sm text-notion-muted truncate");
+          meta.appendChild(document.createTextNode(p.host + " · " + by + " "));
+          var who = el("a", "hover:text-notion-teal", p.author);
+          who.href = p.author_url; who.target = "_blank"; who.rel = "noopener";
+          meta.appendChild(who);
+          box.appendChild(a); box.appendChild(meta);
+          li.appendChild(img); li.appendChild(box);
+          list.appendChild(li);
+        });
+        list.hidden = false;
+      });
+  })();
+</script>

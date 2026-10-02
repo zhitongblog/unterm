@@ -437,10 +437,7 @@ Unterm includes modified WezTerm components. Upstream WezTerm remains a separate
 
 ## Ambassadors
 
-Unterm is built by a very small team, so most people find it because another developer told them. If you'd like to be one of those developers — write about how you use it, demo it, help newcomers, or translate it — [apply to be an ambassador](https://github.com/zhitongblog/unterm/issues/new?template=ambassador.yml). It is a volunteer program with a few honest ground rules (disclose it, write in your own words, no spam, no fake reviews or bought stars); details on [unterm.app/ambassador](https://unterm.app/ambassador). Ambassadors are credited here and on the site, get pre-release builds, and have their bug reports looked at first.
-
-<!-- ambassadors:start -->
-<!-- ambassadors:end -->
+Unterm is built by a very small team, so most people find it because another developer told them. If you wrote, recorded or talked about Unterm, [share the link](https://github.com/zhitongblog/unterm/issues/new?template=ambassador.yml) — no sign-up needed — and it is listed on [unterm.app/ambassador](https://unterm.app/ambassador) with your name. A few honest ground rules apply: say you're a user, write in your own words, post only where self-promotion is welcome, and no fake accounts, fake reviews or bought stars.
 
 ---
 

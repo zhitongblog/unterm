@@ -1,64 +1,39 @@
-name: Ambassador application / 推广大使申请
-description: Help other developers find Unterm. 帮更多开发者发现 Unterm。
-title: "[Ambassador] "
-labels: ["ambassador-application"]
+name: Share a post about Unterm / 提交推广文章
+description: Wrote, recorded or posted something about Unterm? Drop the link and it shows up on unterm.app/ambassador. 写了、录了或发了关于 Unterm 的内容？贴上链接，就会出现在官网推广大使页。
+title: "[Post] "
+labels: ["ambassador-post"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for wanting to help! The program and its ground rules are on [unterm.app/ambassador](https://unterm.app/ambassador). It is a volunteer program: there are no quotas and no payment per post, click or star. Answer in English or Chinese, whichever you prefer.
+        Thank you! Paste the link below. Open submissions are listed on [unterm.app/ambassador](https://unterm.app/ambassador) within a few minutes; closing the issue takes it off the page.
 
-        感谢你愿意帮忙！计划说明与规则见 [unterm.app/zh-CN/ambassador](https://unterm.app/zh-CN/ambassador)。这是志愿者计划：没有指标要求，也不按帖子、点击或 Star 付费。中英文作答均可。
-  - type: textarea
-    id: where
+        谢谢你！把链接贴在下面即可。提交后几分钟内会出现在 [unterm.app/zh-CN/ambassador](https://unterm.app/zh-CN/ambassador)；关闭 issue 即从页面移除。
+  - type: input
+    id: link
     attributes:
-      label: Where would you talk about Unterm? / 你打算在哪里介绍 Unterm？
-      description: Blogs, forums, communities, video channels, meetups — with links if you have them. 博客、论坛、社区、视频频道、线下活动等，有链接请附上。
-      placeholder: |
-        - My blog: https://…
-        - V2EX / Reddit r/… / a Discord server about …
+      label: Link / 链接
+      description: The post, video, thread or talk. 文章、视频、帖子或分享的地址。
+      placeholder: https://
     validations:
       required: true
   - type: input
-    id: languages
+    id: title
     attributes:
-      label: Languages / 使用语言
-      placeholder: English, 简体中文, 日本語 …
-    validations:
-      required: true
+      label: Title / 标题
+      description: Optional — shown on the page instead of the link. 可选，会代替链接显示在页面上。
   - type: textarea
-    id: usage
+    id: note
     attributes:
-      label: How do you use Unterm today? / 你现在怎么用 Unterm？
-      description: Which agents, which OS, what you like and what annoys you. 用哪些 Agent、什么系统、喜欢什么、哪里不满意。
-    validations:
-      required: true
-  - type: dropdown
-    id: first
-    attributes:
-      label: What would your first piece be? / 第一件想做的事
-      options:
-        - A post about how I use it / 写一篇使用体验
-        - A demo video or a talk / 录演示视频或做分享
-        - Helping newcomers in my community / 在社区里帮助新用户
-        - Translation or a localized guide / 翻译或本地化指南
-        - Something else (tell us below) / 其他（请在下面说明）
-    validations:
-      required: true
-  - type: textarea
-    id: more
-    attributes:
-      label: Anything else? / 还有什么想说的？
+      label: Anything you'd like us to know? / 想对我们说的话
+      description: Optional. Questions, bugs or requests your readers raised are very welcome here. 可选。读者提的问题、bug 或需求都欢迎写在这里。
   - type: checkboxes
     id: rules
     attributes:
       label: Ground rules / 基本规则
+      description: Details on unterm.app/ambassador. 详见官网推广大使页。
       options:
-        - label: I will say that I am an Unterm ambassador whenever I post about it. / 发布相关内容时，我会说明自己是 Unterm 推广大使。
+        - label: I wrote it myself, in my own words, and the post says I'm an Unterm ambassador or user. / 内容是我自己写的，并在文中说明了我是 Unterm 推广大使或用户。
           required: true
-        - label: I will write in my own words from my own use — no copy-pasted templates, no AI-generated posts. / 我会用自己的话写自己的使用体验——不复制模板，不用 AI 生成帖子。
-          required: true
-        - label: I will follow each community's rules and never spam groups, comments or DMs. / 我会遵守各社区规则，绝不刷群、刷评论或群发私信。
-          required: true
-        - label: I will not use fake accounts, fake reviews, vote rings or bought stars. / 我不会开小号、刷好评、刷票或买 Star。
+        - label: I posted it where self-promotion is allowed — no spam, fake accounts or bought votes. / 我发在允许自我推广的地方——没有刷屏、小号或刷票。
           required: true
