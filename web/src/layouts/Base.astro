@@ -287,6 +287,8 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
             .querySelectorAll('[data-stat="' + key + '"]')
             .forEach((el) => {
               el.textContent = fmt(value);
+              const chip = el.closest("[data-stat-chip]");
+              if (chip) chip.hidden = false;
             });
         }
         fetch("/api/stats", { headers: { accept: "application/json" } })
