@@ -9295,6 +9295,12 @@ impl App {
                     log::warn!("could not open {url}: {err}");
                 }
             }
+            crate::palette::Command::ShareAmbassadorPost => {
+                let url = ambassador_url(unterm_services::i18n::current_locale());
+                if let Err(err) = crate::links::open(&url) {
+                    log::warn!("could not open {url}: {err}");
+                }
+            }
             crate::palette::Command::OpenConsole => self.open_console(),
             crate::palette::Command::ApplyTheme { id } => self.apply_theme(&id),
             crate::palette::Command::TypeCharacter { glyph, name } => {
@@ -14162,7 +14168,22 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         hint: "github.com/zhitongblog/unterm".to_string(),
         command: crate::palette::Command::StarOnGitHub,
     });
+    entries.push(crate::palette::Entry {
+        label: unterm_services::i18n::t("command.ambassador"),
+        hint: "unterm.app/ambassador".to_string(),
+        command: crate::palette::Command::ShareAmbassadorPost,
+    });
     entries
+}
+
+/// The ambassador page in the UI's language. The site serves English at the
+/// root and every other locale under its code, the same codes the app uses.
+fn ambassador_url(locale: &str) -> String {
+    if locale == "en-US" {
+        "https://unterm.app/ambassador".to_string()
+    } else {
+        format!("https://unterm.app/{locale}/ambassador")
+    }
 }
 
 fn command_label(action: crate::keys::Action) -> String {
@@ -14571,6 +14592,15 @@ mod palette_entry_tests {
     /// for a launcher reachable two ways -- would push everything else off a
     /// short list. 0.57.4's launcher deduplicated its key assignments for
     /// the same reason.
+    #[test]
+    fn the_ambassador_page_opens_in_the_ui_language() {
+        assert_eq!(ambassador_url("en-US"), "https://unterm.app/ambassador");
+        assert_eq!(ambassador_url("zh-CN"), "https://unterm.app/zh-CN/ambassador");
+        assert!(command_entries()
+            .iter()
+            .any(|entry| matches!(entry.command, crate::palette::Command::ShareAmbassadorPost)));
+    }
+
     #[test]
     fn an_action_bound_twice_is_listed_once() {
         let entries = command_entries();

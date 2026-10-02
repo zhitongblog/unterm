@@ -388,5 +388,8 @@
   "web.update.installing": "正在下載……",
   "web.about.star": "在 GitHub 點 Star",
   "web.about.star_why": "如果 Unterm 對你有用，點個 Star 能讓更多人發現它。",
-  "command.star": "在 GitHub 上 Star Unterm"
+  "command.star": "在 GitHub 上 Star Unterm",
+  "command.ambassador": "提交你寫的 Unterm 文章",
+  "web.about.ambassador_why": "寫過關於 Unterm 的文章？提交連結，就會展示在官網上。",
+  "web.about.ambassador": "提交你的文章"
 }

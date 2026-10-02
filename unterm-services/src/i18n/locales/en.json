@@ -672,5 +672,8 @@
   "web.update.installing": "Downloading…",
   "web.about.star": "Star on GitHub",
   "web.about.star_why": "If Unterm is useful to you, a star helps other people find it.",
-  "command.star": "Star Unterm on GitHub"
+  "command.star": "Star Unterm on GitHub",
+  "command.ambassador": "Share a post you wrote about Unterm",
+  "web.about.ambassador_why": "Wrote about Unterm? Share the link and it's listed on unterm.app.",
+  "web.about.ambassador": "Share your post"
 }

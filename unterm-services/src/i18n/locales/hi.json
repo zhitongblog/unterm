@@ -388,5 +388,8 @@
   "web.update.installing": "डाउनलोड हो रहा है…",
   "web.about.star": "GitHub पर स्टार",
   "web.about.star_why": "अगर Unterm आपके काम आता है, तो एक स्टार दूसरों को इसे खोजने में मदद करता है।",
-  "command.star": "GitHub पर Unterm को स्टार दें"
+  "command.star": "GitHub पर Unterm को स्टार दें",
+  "command.ambassador": "Unterm पर लिखी पोस्ट साझा करें",
+  "web.about.ambassador_why": "Unterm के बारे में लिखा है? लिंक साझा करें, वह unterm.app पर दिखेगा।",
+  "web.about.ambassador": "पोस्ट साझा करें"
 }

@@ -388,5 +388,8 @@
   "web.update.installing": "Téléchargement…",
   "web.about.star": "Étoile sur GitHub",
   "web.about.star_why": "Si Unterm vous est utile, une étoile aide d'autres personnes à le découvrir.",
-  "command.star": "Mettre une étoile à Unterm sur GitHub"
+  "command.star": "Mettre une étoile à Unterm sur GitHub",
+  "command.ambassador": "Partager un article sur Unterm",
+  "web.about.ambassador_why": "Vous avez écrit sur Unterm ? Partagez le lien, il apparaîtra sur unterm.app.",
+  "web.about.ambassador": "Partager"
 }

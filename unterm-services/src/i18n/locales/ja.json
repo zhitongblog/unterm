@@ -388,5 +388,8 @@
   "web.update.installing": "ダウンロード中…",
   "web.about.star": "GitHub でスター",
   "web.about.star_why": "Unterm が役に立ったら、スターを付けるとほかの人が見つけやすくなります。",
-  "command.star": "GitHub で Unterm にスターを付ける"
+  "command.star": "GitHub で Unterm にスターを付ける",
+  "command.ambassador": "Unterm について書いた記事を共有",
+  "web.about.ambassador_why": "Unterm について書きましたか？リンクを共有すると unterm.app に掲載されます。",
+  "web.about.ambassador": "記事を共有"
 }

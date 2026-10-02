@@ -388,5 +388,8 @@
   "web.update.installing": "Download in corso…",
   "web.about.star": "Stella su GitHub",
   "web.about.star_why": "Se Unterm ti è utile, una stella aiuta altre persone a trovarlo.",
-  "command.star": "Metti una stella a Unterm su GitHub"
+  "command.star": "Metti una stella a Unterm su GitHub",
+  "command.ambassador": "Condividi un articolo su Unterm",
+  "web.about.ambassador_why": "Hai scritto di Unterm? Condividi il link e comparirà su unterm.app.",
+  "web.about.ambassador": "Condividi"
 }

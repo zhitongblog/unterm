@@ -590,5 +590,7 @@
   "amb.how.show.body": "En quelques minutes, il rejoint la liste ci-dessous. Nous ne retirons que ce qui enfreint les règles.",
   "amb.wall.loading": "Chargement…",
   "amb.wall.failed": "Impossible de charger les contributions pour le moment — retrouvez-les sur GitHub.",
-  "amb.wall.by": "par"
+  "amb.wall.by": "par",
+  "home.amb": "Vous avez écrit sur Unterm ?",
+  "home.amb_cta": "Partagez le lien, il sera publié sur le site"
 }

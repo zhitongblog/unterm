@@ -590,5 +590,7 @@
   "amb.how.show.body": "数分で下の一覧に載ります。削除するのはルール違反の場合だけです。",
   "amb.wall.loading": "読み込み中…",
   "amb.wall.failed": "今は読み込めませんでした。GitHub でご覧ください。",
-  "amb.wall.by": "投稿者"
+  "amb.wall.by": "投稿者",
+  "home.amb": "Unterm について書きましたか？",
+  "home.amb_cta": "リンクを共有してサイトに掲載"
 }

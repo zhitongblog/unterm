@@ -590,5 +590,7 @@
   "amb.how.show.body": "幾分鐘內就會出現在下面的列表裡。只有違反規則的內容才會被移除。",
   "amb.wall.loading": "正在載入…",
   "amb.wall.failed": "暫時載入不出來，可以到 GitHub 上看。",
-  "amb.wall.by": "作者"
+  "amb.wall.by": "作者",
+  "home.amb": "寫過關於 Unterm 的文章？",
+  "home.amb_cta": "提交連結，展示在官網"
 }

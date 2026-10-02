@@ -590,5 +590,7 @@
   "amb.how.show.body": "몇 분 안에 아래 목록에 올라갑니다. 규칙을 어긴 경우에만 내립니다.",
   "amb.wall.loading": "불러오는 중…",
   "amb.wall.failed": "지금은 불러올 수 없습니다. GitHub에서 확인해 주세요.",
-  "amb.wall.by": "작성자"
+  "amb.wall.by": "작성자",
+  "home.amb": "Unterm에 대해 글을 썼나요?",
+  "home.amb_cta": "링크를 공유하면 사이트에 실립니다"
 }

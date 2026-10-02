@@ -40,6 +40,9 @@ pub enum Command {
     /// Open the repository so someone who likes Unterm can star it. Only
     /// ever offered here and in Web Settings -- never pushed at anyone.
     StarOnGitHub,
+    /// Open unterm.app/ambassador, where someone who wrote about Unterm can
+    /// share the link. Offered in the same quiet place as the star entry.
+    ShareAmbassadorPost,
     /// Open the Unzoo One console in a browser. Only offered when the
     /// console assets are actually installed.
     OpenConsole,

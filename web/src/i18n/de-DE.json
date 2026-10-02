@@ -590,5 +590,7 @@
   "amb.how.show.body": "Nach wenigen Minuten steht er in der Liste unten. Entfernt wird nur, was gegen die Regeln verstößt.",
   "amb.wall.loading": "Beiträge werden geladen …",
   "amb.wall.failed": "Die Beiträge lassen sich gerade nicht laden – du findest sie auf GitHub.",
-  "amb.wall.by": "von"
+  "amb.wall.by": "von",
+  "home.amb": "Über Unterm geschrieben?",
+  "home.amb_cta": "Teile den Link – er kommt auf die Website"
 }

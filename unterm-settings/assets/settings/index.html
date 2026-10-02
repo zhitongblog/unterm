@@ -2179,6 +2179,16 @@
               ></a>
             </div>
             <div class="text-xs text-notion-faint" x-text="t('web.about.star_why')"></div>
+            <div class="pt-2">
+              <a
+                class="inline-flex items-center gap-1 rounded-md border border-notion-border px-2.5 py-1 text-xs text-notion-ink hover:bg-notion-surface/40"
+                :href="lang === 'en-US' ? 'https://unterm.app/ambassador' : 'https://unterm.app/' + lang + '/ambassador'"
+                target="_blank"
+                rel="noreferrer"
+                x-text="'✍ ' + t('web.about.ambassador')"
+              ></a>
+            </div>
+            <div class="text-xs text-notion-faint" x-text="t('web.about.ambassador_why')"></div>
             <div class="pt-3 flex items-center gap-2">
               <span class="text-xs text-notion-faint">Made by</span>
               <a
