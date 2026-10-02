@@ -537,5 +537,9 @@
   "whatsnew.cjk64.title": "CJK che si copia, si seleziona e si digita come un solo carattere",
   "whatsnew.cjk64.body": "Digitare in CJK si frantumava in spazzatura di byte `<009d>` quando la GUI passava alla shell una locale che non aveva mai impostato. Il testo copiato conteneva la cella di riempimento della griglia invece del testo, così un incolla tornava pieno di buchi. Il doppio clic selezionava mezza parola e perdeva l'altra metà. Ora i caratteri larghi sono un solo carattere — nella selezione, negli appunti e in ingresso. Più la fine della tempesta di ridisegni: confrontare il frame nel modo sbagliato significava ridipingere che qualcosa si fosse mosso o no.",
   "whatsnew.host68.title": "Un terminale in cui un agent può essere ospitato, non preso a urla",
-  "whatsnew.host68.body": "Le capacità ora stanno dietro a lease: un agent ne acquisisce una, la usa con una chiave che puoi vedere e la perde quando la revochi — invece di far tenere a ogni chiamante lo stesso socket senza limiti. Le approvazioni sono diventate rispondibili, con la domanda che nomina ciò che sta per accadere invece del metodo che capita di implementarlo. Le flotte vengono salvate in modo durevole invece che in un file JSON, così un crash a metà esecuzione non fa più perdere quale membro stava facendo cosa."
+  "whatsnew.host68.body": "Le capacità ora stanno dietro a lease: un agent ne acquisisce una, la usa con una chiave che puoi vedere e la perde quando la revochi — invece di far tenere a ogni chiamante lo stesso socket senza limiti. Le approvazioni sono diventate rispondibili, con la domanda che nomina ciò che sta per accadere invece del metodo che capita di implementarlo. Le flotte vengono salvate in modo durevole invece che in un file JSON, così un crash a metà esecuzione non fa più perdere quale membro stava facendo cosa.",
+  "nav.star": "Metti una stella a Unterm su GitHub",
+  "dl.thanks": "Grazie per aver scaricato Unterm! Se ti è utile, una stella su GitHub aiuta altre persone a trovarlo.",
+  "dl.star": "Stella su GitHub",
+  "dl.close": "Chiudi"
 }

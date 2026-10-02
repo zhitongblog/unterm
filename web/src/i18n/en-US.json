@@ -538,5 +538,9 @@
   "install.via_brew": "Or with Homebrew (macOS):",
   "install.via_scoop": "Or with Scoop:",
   "whatsnew.update717.title": "Updates itself, and knows how your commands ended",
-  "whatsnew.update717.body": "<strong>One-click updates</strong>: <code class=\"font-mono text-xs\">unterm-cli update</code>, <em>Install update</em> in the command palette, or the button in Web Settings downloads the new release, checks its SHA-256 (and on macOS its signature), and restarts into it. <strong>Shell integration loads itself</strong> into zsh, bash, fish and PowerShell, so a command that fails puts ▲ on its tab — and output that merely says “error” does not. Agents get what they ask terminals for: <strong>Shift+Enter is not Enter</strong> (kitty keyboard protocol), colour queries answered from your theme, progress bars under the tab (OSC 9;4), and full-screen redraws that no longer tear (mode 2026). Also: Git Bash and every WSL distribution in the Windows shell menu, a crash dialog that opens a pre-filled GitHub issue, and installs via Homebrew and Scoop."
+  "whatsnew.update717.body": "<strong>One-click updates</strong>: <code class=\"font-mono text-xs\">unterm-cli update</code>, <em>Install update</em> in the command palette, or the button in Web Settings downloads the new release, checks its SHA-256 (and on macOS its signature), and restarts into it. <strong>Shell integration loads itself</strong> into zsh, bash, fish and PowerShell, so a command that fails puts ▲ on its tab — and output that merely says “error” does not. Agents get what they ask terminals for: <strong>Shift+Enter is not Enter</strong> (kitty keyboard protocol), colour queries answered from your theme, progress bars under the tab (OSC 9;4), and full-screen redraws that no longer tear (mode 2026). Also: Git Bash and every WSL distribution in the Windows shell menu, a crash dialog that opens a pre-filled GitHub issue, and installs via Homebrew and Scoop.",
+  "nav.star": "Star Unterm on GitHub",
+  "dl.thanks": "Thanks for downloading Unterm! If it helps you, a star on GitHub helps other people find it.",
+  "dl.star": "Star on GitHub",
+  "dl.close": "Close"
 }

@@ -309,6 +309,7 @@ winget_state() {
 # rate-limited; attach it before anything points people at this release.
 if [ "$DRY_RUN" = 0 ]; then
   bash "$(dirname "$0")/release-checksums.sh" "$TAG"
+  bash "$(dirname "$0")/release-notes.sh" "$TAG"
 fi
 
 if [ "$DRY_RUN" = 1 ]; then

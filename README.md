@@ -2,6 +2,10 @@
 
 **The terminal AI agents can drive.**
 
+[![GitHub stars](https://img.shields.io/github/stars/zhitongblog/unterm?style=social)](https://github.com/zhitongblog/unterm/stargazers) [![Latest release](https://img.shields.io/github/v/release/zhitongblog/unterm)](https://github.com/zhitongblog/unterm/releases/latest)
+
+If Unterm is useful to you, a ⭐ on GitHub helps other people find it.
+
 ![Agent Cockpit: three agents working, the Inbox surfaces the one that needs you, Enter jumps to it](assets/demo/agent-cockpit.gif)
 
 Cross-platform terminal (macOS / Linux / Windows) built on Unterm's native
@@ -430,3 +434,7 @@ This repository is the main Unterm project:
 https://github.com/zhitongblog/unterm
 
 Unterm includes modified WezTerm components. Upstream WezTerm remains a separate project by Wez Furlong and contributors.
+
+---
+
+If Unterm saves you time, [star it on GitHub](https://github.com/zhitongblog/unterm) — it is the main way other people discover it.

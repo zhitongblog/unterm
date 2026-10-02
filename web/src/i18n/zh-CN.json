@@ -538,5 +538,9 @@
   "install.via_brew": "或者用 Homebrew（macOS）：",
   "install.via_scoop": "或者用 Scoop：",
   "whatsnew.update717.title": "自己就能更新，也知道命令是怎么结束的",
-  "whatsnew.update717.body": "<strong>一键更新</strong>：<code class=\"font-mono text-xs\">unterm-cli update</code>、命令面板里的「安装更新」或 Web 设置里的按钮，会下载新版本、校验 SHA-256（macOS 还校验签名），然后重启进新版本。<strong>shell 集成自动加载</strong>到 zsh、bash、fish 和 PowerShell：失败的命令会在标签上标 ▲，而只是输出里出现「error」字样的不会。Agent 向终端要的东西也都有了：<strong>Shift+Enter 不再等同于 Enter</strong>（kitty 键盘协议）、颜色查询按你的主题回答、标签下的进度条（OSC 9;4）、整屏重绘不再撕裂（mode 2026）。另外：Windows 的 shell 菜单里有 Git Bash 和每个 WSL 发行版；崩溃对话框可以打开预填好的 GitHub issue；可以用 Homebrew 和 Scoop 安装。"
+  "whatsnew.update717.body": "<strong>一键更新</strong>：<code class=\"font-mono text-xs\">unterm-cli update</code>、命令面板里的「安装更新」或 Web 设置里的按钮，会下载新版本、校验 SHA-256（macOS 还校验签名），然后重启进新版本。<strong>shell 集成自动加载</strong>到 zsh、bash、fish 和 PowerShell：失败的命令会在标签上标 ▲，而只是输出里出现「error」字样的不会。Agent 向终端要的东西也都有了：<strong>Shift+Enter 不再等同于 Enter</strong>（kitty 键盘协议）、颜色查询按你的主题回答、标签下的进度条（OSC 9;4）、整屏重绘不再撕裂（mode 2026）。另外：Windows 的 shell 菜单里有 Git Bash 和每个 WSL 发行版；崩溃对话框可以打开预填好的 GitHub issue；可以用 Homebrew 和 Scoop 安装。",
+  "nav.star": "在 GitHub 上 Star Unterm",
+  "dl.thanks": "感谢下载 Unterm！如果它帮到了你，在 GitHub 点个 Star，能让更多人发现它。",
+  "dl.star": "去 GitHub 点 Star",
+  "dl.close": "关闭"
 }

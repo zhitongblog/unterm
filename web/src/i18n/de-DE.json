@@ -537,5 +537,9 @@
   "whatsnew.cjk64.title": "CJK, das als ein Zeichen kopiert, markiert und getippt wird",
   "whatsnew.cjk64.body": "CJK-Eingaben zerfielen früher in `<009d>`-Bytemüll, wenn die GUI der Shell ein Locale übergab, das sie nie gesetzt hatte. Kopierter Text enthielt statt des Textes die Platzhalterzelle des Rasters, sodass ein Einfügen mit Lücken zurückkam. Ein Doppelklick markierte ein halbes Wort und verlor die andere Hälfte. Breite Zeichen sind jetzt ein Zeichen — in der Auswahl, in der Zwischenablage und bei der Eingabe. Dazu das Ende des Neuzeichnungs-Sturms: Der Frame wurde falsch verglichen, sodass neu gezeichnet wurde, ob sich etwas bewegt hatte oder nicht.",
   "whatsnew.host68.title": "Ein Terminal, in dem ein Agent gehostet wird, statt angeschrien zu werden",
-  "whatsnew.host68.body": "Fähigkeiten liegen jetzt hinter Leases: Ein Agent erwirbt eine, nutzt sie unter einem Schlüssel, den du sehen kannst, und verliert sie, wenn du sie widerrufst — statt dass jeder Aufrufer denselben unbegrenzten Socket hält. Freigaben sind jetzt beantwortbar, wobei die Frage benennt, was gleich passiert, statt der Methode, die es zufällig umsetzt. Fleets werden dauerhaft gespeichert statt in einer JSON-Datei, sodass ein Absturz mitten im Lauf nicht mehr verliert, welches Mitglied was gerade tat."
+  "whatsnew.host68.body": "Fähigkeiten liegen jetzt hinter Leases: Ein Agent erwirbt eine, nutzt sie unter einem Schlüssel, den du sehen kannst, und verliert sie, wenn du sie widerrufst — statt dass jeder Aufrufer denselben unbegrenzten Socket hält. Freigaben sind jetzt beantwortbar, wobei die Frage benennt, was gleich passiert, statt der Methode, die es zufällig umsetzt. Fleets werden dauerhaft gespeichert statt in einer JSON-Datei, sodass ein Absturz mitten im Lauf nicht mehr verliert, welches Mitglied was gerade tat.",
+  "nav.star": "Unterm auf GitHub einen Stern geben",
+  "dl.thanks": "Danke für den Download von Unterm! Wenn es dir hilft, hilft ein Stern auf GitHub anderen, es zu finden.",
+  "dl.star": "Stern auf GitHub",
+  "dl.close": "Schließen"
 }

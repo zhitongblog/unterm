@@ -537,5 +537,9 @@
   "why.unterm.b1": "終端是 MCP 表面——任何 agent 都能接上並驅動，不論是今天的還是明年的",
   "why.unterm.b2": "由你選擇 agent 和模型；Unterm 絕不綁住你",
   "why.unterm.b3": "MIT，完全開源；一切都留在 127.0.0.1——不需登入、沒有訂閱、沒有遙測",
-  "why.closing": "三十年後你仍會在用終端。沒人知道到時候驅動它的是哪個 AI——正因如此，唯一經得起未來考驗的終端，是生來就為被驅動而打造的那一個。"
+  "why.closing": "三十年後你仍會在用終端。沒人知道到時候驅動它的是哪個 AI——正因如此，唯一經得起未來考驗的終端，是生來就為被驅動而打造的那一個。",
+  "nav.star": "在 GitHub 上 Star Unterm",
+  "dl.thanks": "感謝下載 Unterm！如果它幫到了你，在 GitHub 點個 Star，能讓更多人發現它。",
+  "dl.star": "去 GitHub 點 Star",
+  "dl.close": "關閉"
 }
