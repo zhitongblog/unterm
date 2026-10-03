@@ -165,8 +165,13 @@ $Suites = @(
         Name = "config schema"
         Package = "unterm-engine"
         Filter = "next_core::config_schema::tests::"
-        ExpectedCount = 14
+        # 15 since settings that do nothing are named with the reason, and a
+        # flag-string `decorations` is flagged (the title-placeholder check
+        # went with the tab bar it belonged to).
+        ExpectedCount = 15
         RequiredTests = @(
+            "next_core::config_schema::tests::a_setting_that_does_nothing_says_so_and_why",
+            "next_core::config_schema::tests::the_flag_string_spelling_of_decorations_is_reported",
             "next_core::config_schema::tests::an_unknown_setting_is_rejected",
             "next_core::config_schema::tests::a_typo_outside_that_section_is_still_caught",
             "next_core::config_schema::tests::environment_variables_are_the_one_place_names_are_invented",
@@ -1055,8 +1060,11 @@ $Suites = @(
         Name = "app palette rows"
         Package = "unterm-app"
         Filter = "window::palette_entry_tests::"
-        ExpectedCount = 6
+        # 7 since the "share a post you wrote" entry opens the ambassador page
+        # in the UI's language.
+        ExpectedCount = 7
         RequiredTests = @(
+            "window::palette_entry_tests::the_ambassador_page_opens_in_the_ui_language",
             "window::palette_entry_tests::the_palette_lists_what_the_keys_do",
             "window::palette_entry_tests::the_launcher_offers_only_shells_that_exist",
             "window::palette_entry_tests::this_machine_has_at_least_one_shell_to_offer"
