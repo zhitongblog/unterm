@@ -104,6 +104,12 @@ pub enum SessionSubCommand {
         #[arg(long = "pane-id", alias = "id")]
         id: Option<u64>,
     },
+    /// List the inline pictures in a pane (kitty graphics, iTerm2, sixel).
+    Images {
+        /// Target pane id (defaults to the active pane).
+        #[arg(long = "pane-id", alias = "id")]
+        id: Option<u64>,
+    },
     /// Print the pane's current working directory.
     Cwd {
         /// Target pane id (defaults to the active pane).
@@ -521,6 +527,42 @@ pub fn run(cmd: SessionCommand, json_out: bool) -> Result<()> {
                 for line in lines {
                     if let Some(text) = line.as_str() {
                         println!("{text}");
+                    }
+                }
+            }
+        }
+        SessionSubCommand::Images { id } => {
+            let id = resolve_pane_id(&mut client, id)?;
+            let result = client.call("screen.images", json!({ "id": id }))?;
+            if json_out {
+                print_json(&result);
+            } else {
+                let images = result
+                    .get("images")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| anyhow!("screen.images did not return `images`: {}", result))?;
+                if images.is_empty() {
+                    println!("(no pictures)");
+                } else {
+                    let top = result.get("screen_top_row").and_then(Value::as_i64).unwrap_or(0);
+                    println!(
+                        "{:<8} {:<5} {:<9} {:<11} {:<8} NAME",
+                        "ROW", "COL", "CELLS", "PIXELS", "PROTOCOL"
+                    );
+                    for image in images {
+                        let num = |key: &str| image.get(key).and_then(Value::as_i64).unwrap_or(0);
+                        let row = num("row");
+                        // Rows in the scrollback are shown relative to the
+                        // screen's top, so a negative row has scrolled away.
+                        println!(
+                            "{:<8} {:<5} {:<9} {:<11} {:<8} {}",
+                            row - top,
+                            num("col"),
+                            format!("{}x{}", num("cols"), num("rows")),
+                            format!("{}x{}", num("width"), num("height")),
+                            image.get("protocol").and_then(Value::as_str).unwrap_or(""),
+                            image.get("name").and_then(Value::as_str).unwrap_or("-"),
+                        );
                     }
                 }
             }

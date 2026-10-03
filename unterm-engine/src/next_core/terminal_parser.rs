@@ -2,6 +2,10 @@ use super::{
     cell::ScreenCell, csi_params, parser_state::ParserState, MouseTrackingMode, NextCoreScreen,
 };
 
+/// The longest DCS or APC kept: a large sixel picture, with room to spare.
+/// Anything longer is dropped, as every DCS and APC used to be.
+const MAX_CONTROL_STRING_CHARS: usize = 64 * 1024 * 1024;
+
 #[derive(Default)]
 pub(super) struct TerminalParser {
     state: ParserState,
@@ -21,7 +25,9 @@ impl TerminalParser {
                 '\u{0084}' => screen.index(),
                 '\u{0085}' => screen.next_line(),
                 '\u{008d}' => screen.reverse_index(),
-                '\u{0090}' | '\u{0098}' | '\u{009e}' | '\u{009f}' => {
+                '\u{0090}' => self.state = ParserState::Dcs(String::new()),
+                '\u{009f}' => self.state = ParserState::Apc(String::new()),
+                '\u{0098}' | '\u{009e}' => {
                     self.state = ParserState::IgnoredString;
                 }
                 '\u{009b}' => self.state = ParserState::Csi(String::new()),
@@ -51,7 +57,9 @@ impl TerminalParser {
                 '#' => {
                     self.state = ParserState::EscapeHash;
                 }
-                'P' | 'X' | '^' | '_' => {
+                'P' => self.state = ParserState::Dcs(String::new()),
+                '_' => self.state = ParserState::Apc(String::new()),
+                'X' | '^' => {
                     self.state = ParserState::IgnoredString;
                 }
                 '7' => {
@@ -105,6 +113,42 @@ impl TerminalParser {
                     self.state = ParserState::IgnoredString;
                 }
             }
+            ParserState::Dcs(ref mut body) | ParserState::Apc(ref mut body) => match c {
+                '\x07' | '\u{009c}' => {
+                    let body = std::mem::take(body);
+                    let apc = matches!(self.state, ParserState::Apc(_));
+                    self.state = ParserState::Ground;
+                    Self::finish_control_string(screen, apc, &body);
+                }
+                '\x1b' => {
+                    let body = std::mem::take(body);
+                    self.state = if matches!(self.state, ParserState::Apc(_)) {
+                        ParserState::ApcEscape(body)
+                    } else {
+                        ParserState::DcsEscape(body)
+                    };
+                }
+                _ => {
+                    if body.len() >= MAX_CONTROL_STRING_CHARS {
+                        self.state = ParserState::IgnoredString;
+                    } else {
+                        body.push(c);
+                    }
+                }
+            },
+            ParserState::DcsEscape(ref mut body) | ParserState::ApcEscape(ref mut body) => {
+                let body = std::mem::take(body);
+                let apc = matches!(self.state, ParserState::ApcEscape(_));
+                self.state = ParserState::Ground;
+                if c == '\\' {
+                    Self::finish_control_string(screen, apc, &body);
+                } else {
+                    // An ESC that does not end the string cancels it and
+                    // starts a sequence of its own.
+                    self.state = ParserState::Escape;
+                    self.feed_char(screen, c);
+                }
+            }
             ParserState::Csi(ref mut sequence) => {
                 if ('@'..='~').contains(&c) {
                     sequence.push(c);
@@ -134,6 +178,14 @@ impl TerminalParser {
                 }
                 self.state = ParserState::Ground;
             }
+        }
+    }
+
+    fn finish_control_string(screen: &mut NextCoreScreen, apc: bool, body: &str) {
+        if apc {
+            screen.apply_apc(body);
+        } else {
+            screen.apply_dcs(body);
         }
     }
 

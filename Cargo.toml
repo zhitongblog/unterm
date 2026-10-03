@@ -21,6 +21,7 @@ members = [
   "unterm-gateway",
   "unterm-brain",
   "unterm-providers",
+  "unterm-images",
 ]
 resolver = "2"
 exclude = [
@@ -292,6 +293,7 @@ wezterm-input-types = { version="0.1", path = "wezterm-input-types", default-fea
 wezterm-open-url = { path = "wezterm-open-url" }
 unterm-mcp = { path = "unterm-mcp" }
 unterm-protocol = { path = "unterm-protocol" }
+unterm-images = { path = "unterm-images" }
 unterm-render = { path = "unterm-render" }
 unterm-services = { path = "unterm-services" }
 unterm-settings = { path = "unterm-settings" }

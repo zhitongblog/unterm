@@ -16,11 +16,22 @@ use std::sync::Arc;
 use std::thread;
 
 pub(super) fn pty_size(cols: usize, rows: usize) -> PtySize {
+    let rows = rows.clamp(1, u16::MAX as usize) as u16;
+    let cols = cols.clamp(1, u16::MAX as usize) as u16;
+    // Image tools (kitten icat, chafa, timg, yazi) read the pixel size from
+    // the pty. Zero, as before, until a front end has reported its cells.
+    let (pixel_width, pixel_height) = match unterm_images::cell_pixels() {
+        Some((width, height)) => (
+            (u32::from(cols) * width).min(u32::from(u16::MAX)) as u16,
+            (u32::from(rows) * height).min(u32::from(u16::MAX)) as u16,
+        ),
+        None => (0, 0),
+    };
     PtySize {
-        rows: rows.clamp(1, u16::MAX as usize) as u16,
-        cols: cols.clamp(1, u16::MAX as usize) as u16,
-        pixel_width: 0,
-        pixel_height: 0,
+        rows,
+        cols,
+        pixel_width,
+        pixel_height,
     }
 }
 

@@ -36,6 +36,19 @@ pub struct GlyphQuad {
     pub tex_bottom: f32,
 }
 
+/// A picture a program put on the screen (kitty graphics, iTerm2, sixel),
+/// drawn from its own texture.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineImageQuad {
+    /// Where it lands, already clipped to its pane. The colour's alpha is
+    /// how much of it shows -- an inactive pane dims its pictures with it.
+    pub glyph: GlyphQuad,
+    /// The picture's name, the key its texture is cached under.
+    pub image: String,
+    /// The pane it belongs to, so a missing texture can be fetched from it.
+    pub pane: usize,
+}
+
 /// How big a cell is and where its baseline sits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellMetrics {
@@ -88,6 +101,9 @@ pub struct FrameQuads {
     /// glyphs, and a photograph is not coverage.
     pub image: Option<GlyphQuad>,
     pub backgrounds: Vec<Quad>,
+    /// Pictures programs put on the screen: over the cell backgrounds, under
+    /// the text, the way kitty stacks them by default.
+    pub inline_images: Vec<InlineImageQuad>,
     pub glyphs: Vec<GlyphQuad>,
     /// Drawn after everything above, so a panel can cover what is behind it.
     ///

@@ -876,6 +876,8 @@ pub struct App {
     theme_id: Option<String>,
     /// The colours last handed to the kernel for programs that ask, and when.
     colors_reported: Option<(unterm_engine::next_core::color::TerminalColors, std::time::Instant)>,
+    /// The cell size last told to the kernel, and when.
+    cell_size_reported: Option<((u32, u32), std::time::Instant)>,
     /// Last Web Settings/CLI theme request observed by this window.
     ///
     /// Each native window is an independent observer of the process-local
@@ -1603,6 +1605,7 @@ impl App {
             started: std::time::Instant::now(),
             theme_id: crate::theme::remembered(),
             colors_reported: None,
+            cell_size_reported: None,
             theme_request_seen: 0,
             font_family: family,
             initial_cols: settings.initial_cols,
@@ -2025,6 +2028,7 @@ impl App {
                 .unwrap_or(snapshot);
             let background_start = quads.backgrounds.len();
             let glyph_start = quads.glyphs.len();
+            let image_start = quads.inline_images.len();
             if placement.session_id == session_id {
                 self.window.mouse_modes = snapshot.mouse;
                 self.note_bells(snapshot.bells);
@@ -2044,6 +2048,9 @@ impl App {
                 blink,
                 &mut quads,
             );
+            for image in &mut quads.inline_images[image_start..] {
+                image.pane = placement.session_id;
+            }
             if placement.session_id != session_id {
                 dim_pane_quads(
                     &mut quads,
@@ -2053,6 +2060,17 @@ impl App {
                     self.inactive_pane_hsb[1],
                     self.inactive_pane_hsb[2],
                 );
+                // A picture is dimmed with its pane: the shader multiplies it
+                // by its quad's colour, so white dimmed is the dimming.
+                let tint = transform_hsv(
+                    [1.0, 1.0, 1.0, 1.0],
+                    self.inactive_pane_hsb[0],
+                    self.inactive_pane_hsb[1],
+                    self.inactive_pane_hsb[2],
+                );
+                for image in &mut quads.inline_images[image_start..] {
+                    image.glyph.quad.color = tint;
+                }
             }
         }
         if placements.is_empty() {
@@ -2069,6 +2087,7 @@ impl App {
                 let origin = (self.terminal_left(), self.terminal_top());
                 screen_blink = crate::terminal::blinking_cells(&snapshot);
                 terminal_has_content = styled_snapshot_has_text(&snapshot);
+                let image_start = quads.inline_images.len();
                 crate::terminal::append_pane(
                     &snapshot,
                     &mut self.window.font,
@@ -2080,6 +2099,9 @@ impl App {
                     blink,
                     &mut quads,
                 );
+                for image in &mut quads.inline_images[image_start..] {
+                    image.pane = session_id;
+                }
             }
         }
         self.append_selection(&mut quads);
@@ -2191,6 +2213,7 @@ impl App {
         } else {
             self.window.colors.background
         };
+        upload_inline_images(&self.engine, &live.renderer, &quads);
         live.renderer.draw(
             &view,
             live.width,
@@ -2729,6 +2752,30 @@ impl App {
     ///
     /// On a change, and again every half minute: the Core may have been
     /// replaced since, and a fresh one starts out knowing only the default.
+    /// Hand the kernel the size of one cell in pixels: pictures are measured
+    /// in cells from it, and image tools ask for it (`CSI 14 t` / `16 t`,
+    /// and the pty's own pixel size). On a change -- a zoom, a move to a
+    /// screen of another density -- and again every half minute, like the
+    /// colours, for a Core that has been replaced since.
+    fn report_cell_size(&mut self) {
+        let metrics = self.window.font.metrics();
+        let size = (
+            metrics.width.round().max(1.0) as u32,
+            metrics.height.round().max(1.0) as u32,
+        );
+        let fresh = self.cell_size_reported.as_ref().is_some_and(|(sent, at)| {
+            *sent == size && at.elapsed() < std::time::Duration::from_secs(30)
+        });
+        if fresh {
+            return;
+        }
+        if let Err(err) = unterm_engine::SessionEngine::set_cell_pixel_size(&self.engine, size.0, size.1) {
+            // An older Core does not know the method.
+            log::debug!("could not report the cell size: {err:#}");
+        }
+        self.cell_size_reported = Some((size, std::time::Instant::now()));
+    }
+
     fn report_terminal_colors(&mut self) {
         use unterm_engine::next_core::color::{Rgb, TerminalColors};
         let rgb = |color: [f32; 4]| {
@@ -11296,6 +11343,7 @@ impl App {
             self.sync_frame();
             crate::engine_backend::keep_host_channel();
             self.report_terminal_colors();
+            self.report_cell_size();
             for text in crate::updates::take_notices() {
                 self.show_notice(text);
             }
@@ -14068,6 +14116,40 @@ fn mix(from: [f32; 4], to: [f32; 4], amount: f32) -> [f32; 4] {
         blend(from[2], to[2]),
         from[3],
     ]
+}
+
+/// Give the renderer the texture of every picture this frame shows that it
+/// does not have yet, fetched from the pane that holds it.
+///
+/// Pictures are named by their content, so a texture once uploaded is never
+/// stale; what goes is only what has not been on screen for a while, once
+/// enough have piled up to matter.
+fn upload_inline_images(
+    engine: &crate::engine_backend::AppEngine,
+    renderer: &unterm_render::gpu::Renderer,
+    quads: &unterm_render::quads::FrameQuads,
+) {
+    if quads.inline_images.is_empty() {
+        return;
+    }
+    for image in &quads.inline_images {
+        if renderer.has_inline_image(&image.image) {
+            continue;
+        }
+        match unterm_engine::ScreenEngine::read_inline_image(engine, image.pane, &image.image) {
+            Ok(Some(data)) => {
+                renderer.upload_inline_image(&data.image, data.width, data.height, &data.rgba)
+            }
+            Ok(None) => {}
+            Err(err) => log::debug!("could not fetch picture {}: {err:#}", image.image),
+        }
+    }
+    const KEEP: usize = 64;
+    if renderer.inline_image_count() > KEEP {
+        let shown: std::collections::HashSet<&str> =
+            quads.inline_images.iter().map(|image| image.image.as_str()).collect();
+        renderer.retain_inline_images(|name| shown.contains(name));
+    }
 }
 
 fn dim_pane_quads(

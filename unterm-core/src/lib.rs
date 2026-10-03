@@ -1125,6 +1125,22 @@ fn dispatch_inner(
             let pane_id = required_pane_id(request)?;
             serde_json::to_string(&response_ok(id, engine.read_styled_screen(pane_id)?))?
         }
+        // A picture's pixels, fetched once by a window that met its name in
+        // a snapshot. Snapshots carry only names: they are re-sent on every
+        // change, and pixels would make each one megabytes.
+        "session.inline_image" => {
+            let pane_id = required_pane_id(request)?;
+            let image = request
+                .params
+                .get("image")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("session.inline_image needs image"))?;
+            serde_json::to_string(&response_ok(id, engine.read_inline_image(pane_id, image)?))?
+        }
+        "session.inline_images" => {
+            let pane_id = required_pane_id(request)?;
+            serde_json::to_string(&response_ok(id, engine.read_inline_images(pane_id)?))?
+        }
         "session.styled_frame" => {
             let pane_id = required_pane_id(request)?;
             let since_revision = request
@@ -1498,6 +1514,19 @@ fn dispatch_inner(
                     .ok_or_else(|| anyhow::anyhow!("terminal.set_colors needs colors"))?,
             )?;
             engine.set_terminal_colors(colors)?;
+            serde_json::to_string(&response_ok(id, serde_json::json!({"set": true})))?
+        }
+        "terminal.set_cell_size" => {
+            let size = |key: &str| {
+                request
+                    .params
+                    .get(key)
+                    .and_then(|v| v.as_u64())
+                    .and_then(|v| u32::try_from(v).ok())
+                    .filter(|v| *v > 0)
+                    .ok_or_else(|| anyhow::anyhow!("terminal.set_cell_size needs {key}"))
+            };
+            engine.set_cell_pixel_size(size("width")?, size("height")?)?;
             serde_json::to_string(&response_ok(id, serde_json::json!({"set": true})))?
         }
         "session.close" => {
@@ -2621,11 +2650,36 @@ impl SessionEngine for CoreEngineClient {
             serde_json::json!({ "colors": colors }),
         )
     }
+
+    fn set_cell_pixel_size(&self, width: u32, height: u32) -> Result<()> {
+        self.call_unit(
+            "terminal.set_cell_size",
+            serde_json::json!({ "width": width, "height": height }),
+        )
+    }
 }
 
 impl ScreenEngine for CoreEngineClient {
     fn read_screen(&self, pane_id: usize) -> Result<ScreenSnapshot> {
         self.call("session.screen", serde_json::json!({"pane_id": pane_id}))
+    }
+
+    fn read_inline_image(
+        &self,
+        pane_id: usize,
+        image: &str,
+    ) -> Result<Option<unterm_engine::InlineImageData>> {
+        self.call(
+            "session.inline_image",
+            serde_json::json!({"pane_id": pane_id, "image": image}),
+        )
+    }
+
+    fn read_inline_images(
+        &self,
+        pane_id: usize,
+    ) -> Result<Vec<unterm_engine::ImagePlacementSnapshot>> {
+        self.call("session.inline_images", serde_json::json!({"pane_id": pane_id}))
     }
 
     fn erase_scrollback(&self, pane_id: usize, include_viewport: bool) -> Result<()> {

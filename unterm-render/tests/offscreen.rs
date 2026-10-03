@@ -524,3 +524,105 @@ fn offscreen_a_background_picture_is_dimmed_by_its_opacity() {
         "a quarter-strength white picture came out at {shown:?}"
     );
 }
+
+fn inline(image: &str, left: f32, width: f32, color: [f32; 4]) -> unterm_render::quads::InlineImageQuad {
+    unterm_render::quads::InlineImageQuad {
+        glyph: unterm_render::quads::GlyphQuad {
+            quad: Quad {
+                left,
+                top: 0.0,
+                width,
+                height: 8.0,
+                color,
+            },
+            tex_left: 0.0,
+            tex_top: 0.0,
+            tex_right: 1.0,
+            tex_bottom: 1.0,
+        },
+        image: image.to_string(),
+        pane: 1,
+    }
+}
+
+/// Pictures a program put on the screen: each from its own texture, over
+/// the cell backgrounds, and one whose texture has not arrived yet is
+/// simply not drawn rather than drawn from another picture's.
+#[test]
+fn offscreen_inline_pictures_draw_from_their_own_textures_over_backgrounds() {
+    let Some(target) = offscreen(12, 8) else {
+        return;
+    };
+    let atlas = empty_atlas(&target.renderer);
+    let red: Vec<u8> = (0..4).flat_map(|_| [255u8, 0, 0, 255]).collect();
+    let green: Vec<u8> = (0..4).flat_map(|_| [0u8, 255, 0, 255]).collect();
+    target.renderer.upload_inline_image("red", 2, 2, &red);
+    target.renderer.upload_inline_image("green", 2, 2, &green);
+    assert!(target.renderer.has_inline_image("red"));
+
+    let mut quads = FrameQuads::default();
+    // A blue cell background under the first picture.
+    quads.backgrounds.push(Quad {
+        left: 0.0,
+        top: 0.0,
+        width: 4.0,
+        height: 8.0,
+        color: [0.0, 0.0, 1.0, 1.0],
+    });
+    quads.inline_images.push(inline("red", 0.0, 4.0, [1.0; 4]));
+    quads.inline_images.push(inline("green", 4.0, 4.0, [1.0; 4]));
+    quads.inline_images.push(inline("not-uploaded", 8.0, 4.0, [1.0; 4]));
+
+    target.renderer.draw(
+        &target.view(),
+        target.width,
+        target.height,
+        &quads,
+        &atlas,
+        None,
+        [0.0, 0.0, 0.0, 1.0],
+    );
+
+    let pixels = target.read_pixels();
+    let left = target.pixel(&pixels, 2, 4);
+    assert!(left[0] > 200 && left[2] < 60, "red picture over the blue cell: {left:?}");
+    let middle = target.pixel(&pixels, 6, 4);
+    assert!(middle[1] > 200 && middle[0] < 60, "green picture from its own texture: {middle:?}");
+    let right = target.pixel(&pixels, 10, 4);
+    assert!(right[0] < 30 && right[1] < 30, "a missing texture draws nothing: {right:?}");
+
+    // Dropping what is not shown keeps only what was asked for.
+    target.renderer.retain_inline_images(|name| name == "red");
+    assert!(target.renderer.has_inline_image("red"));
+    assert!(!target.renderer.has_inline_image("green"));
+}
+
+/// An inactive pane dims its pictures with it: the quad's colour tints.
+#[test]
+fn offscreen_an_inline_picture_is_tinted_by_its_quad() {
+    let Some(target) = offscreen(4, 8) else {
+        return;
+    };
+    let atlas = empty_atlas(&target.renderer);
+    let white: Vec<u8> = (0..4).flat_map(|_| [255u8, 255, 255, 255]).collect();
+    target.renderer.upload_inline_image("white", 2, 2, &white);
+
+    let mut quads = FrameQuads::default();
+    quads.inline_images.push(inline("white", 0.0, 4.0, [0.5, 0.5, 0.5, 1.0]));
+    target.renderer.draw(
+        &target.view(),
+        target.width,
+        target.height,
+        &quads,
+        &atlas,
+        None,
+        [0.0, 0.0, 0.0, 1.0],
+    );
+
+    let pixels = target.read_pixels();
+    let shown = target.pixel(&pixels, 2, 4);
+    assert!(
+        shown[0] > 40 && shown[0] < 230,
+        "half-tinted white came out at {shown:?}"
+    );
+}

@@ -59,17 +59,11 @@ pub fn run_ls_fonts(json_out: bool) -> Result<()> {
 }
 
 pub fn run_imgcat(path: PathBuf) -> Result<()> {
-    // The bytes below are iTerm2's inline-image sequence, which Unterm's own
-    // terminal does not draw yet: inside an Unterm pane this printed nothing
-    // and reported success. Say so instead. Elsewhere -- iTerm2, WezTerm, an
-    // SSH session out of Unterm -- the sequence still does its job.
-    if std::env::var_os("UNTERM_PANE").is_some() {
-        anyhow::bail!(
-            "Unterm cannot display inline images yet, so `imgcat` would print nothing here. \
-             It still works in terminals that support iTerm2 inline images."
-        );
-    }
+    // iTerm2's inline-image sequence: drawn by Unterm itself (and iTerm2,
+    // WezTerm, and the rest that speak it), at the cursor, its natural size
+    // or the screen's width, whichever is smaller.
     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    let size = bytes.len();
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let name = path
         .file_name()
@@ -77,7 +71,12 @@ pub fn run_imgcat(path: PathBuf) -> Result<()> {
         .unwrap_or("image");
     let name = base64::engine::general_purpose::STANDARD.encode(name.as_bytes());
     let mut stdout = std::io::stdout().lock();
-    write!(stdout, "\x1b]1337;File=name={name};inline=1:{encoded}\x07")?;
+    // The cursor ends beside the picture's last row; the newline puts the
+    // prompt under it, as iTerm2's own imgcat does.
+    write!(
+        stdout,
+        "\x1b]1337;File=name={name};size={size};inline=1:{encoded}\x07\n"
+    )?;
     stdout.flush()?;
     Ok(())
 }

@@ -233,6 +233,11 @@ struct NextCoreScreen {
     saved_cursor_attr: CellAttributes,
     alternate: Option<ScreenState>,
     parser: TerminalParser,
+    /// Inline pictures: kitty graphics, iTerm2 images and sixel.
+    images: unterm_images::Images,
+    /// Bytes a picture command asked to send back (kitty replies), written
+    /// to the program after the chunk that asked.
+    replies: Vec<u8>,
 }
 
 /// What a synchronized update holds on to: when it began, and the picture
@@ -243,6 +248,7 @@ struct SynchronizedHold {
     cursor: CursorSnapshot,
     first_row: i64,
     lines: Vec<crate::StyledScreenLine>,
+    images: Vec<crate::ImagePlacementSnapshot>,
 }
 
 impl NextCoreScreen {
@@ -331,6 +337,7 @@ impl NextCoreScreen {
                 cursor: self.cursor_snapshot(),
                 first_row,
                 lines: self.styled_viewport_lines(first_row),
+                images: self.images.visible(first_row, self.rows),
             });
         }
         if !enabled {
@@ -593,8 +600,93 @@ impl NextCoreScreen {
         if removed == 0 {
             return;
         }
+        // Pictures are anchored to the same absolute rows as prompt marks.
+        self.images.history_trimmed(removed);
         self.prompt_rows.retain(|row| *row >= removed);
         self.prompt_rows.iter_mut().for_each(|row| *row -= removed);
+    }
+
+    /// Absolute row of the live screen's top line: what picture anchors and
+    /// snapshot rows are numbered from.
+    fn image_top_row(&self) -> i64 {
+        self.history.scrollback_rows() as i64
+    }
+
+    fn image_at(&self) -> unterm_images::At {
+        unterm_images::At {
+            row: self.image_top_row() + self.cursor_y as i64,
+            col: self.cursor_x,
+        }
+    }
+
+    fn image_geometry(&self) -> unterm_images::Geometry {
+        let (cell_width, cell_height) = terminal_queries::cell_pixels();
+        unterm_images::Geometry {
+            cols: self.cols,
+            rows: self.rows,
+            cell_width,
+            cell_height,
+            top_row: self.image_top_row(),
+        }
+    }
+
+    fn apply_image_outcome(&mut self, outcome: unterm_images::Outcome) {
+        if let Some(reply) = outcome.reply {
+            // A program that never reads its replies does not get to grow
+            // this without end.
+            if self.replies.len() + reply.len() <= 1 << 20 {
+                self.replies.extend(reply);
+            }
+        }
+        if let Some(cursor) = outcome.cursor {
+            for _ in 0..cursor.down {
+                self.index();
+            }
+            self.cursor_x = cursor.col.min(self.cols.saturating_sub(1));
+            self.mark_dirty_row(self.cursor_y);
+        }
+        if outcome.changed {
+            self.bump_revision();
+            self.mark_all_dirty();
+        }
+    }
+
+    /// `APC … ST`: the kitty graphics protocol, the only APC acted on.
+    pub(super) fn apply_apc(&mut self, body: &str) {
+        if body.starts_with('G') {
+            let outcome = self.images.kitty(body, self.image_at(), self.image_geometry());
+            self.apply_image_outcome(outcome);
+        }
+    }
+
+    /// `DCS … ST`: sixel pictures; every other DCS is ignored as before.
+    pub(super) fn apply_dcs(&mut self, body: &str) {
+        if unterm_images::sixel::is_sixel(body) {
+            let outcome = self.images.sixel(body, self.image_at(), self.image_geometry());
+            self.apply_image_outcome(outcome);
+        }
+    }
+
+    pub(super) fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replies)
+    }
+
+    /// The pictures a reader is shown with the viewport: held mid-update,
+    /// like the text beside them.
+    fn shown_images(&self) -> Vec<crate::ImagePlacementSnapshot> {
+        let first_row = self.viewport_first_row();
+        match self.held() {
+            Some(hold) if hold.first_row == first_row => hold.images.clone(),
+            _ => self.images.visible(first_row, self.rows),
+        }
+    }
+
+    pub(super) fn all_images(&self) -> Vec<crate::ImagePlacementSnapshot> {
+        self.images.all()
+    }
+
+    pub(super) fn inline_image(&self, image: &str) -> Option<crate::InlineImageData> {
+        self.images.image_data(image)
     }
 
     fn history_range(&self, start: usize, count: usize) -> Vec<&Vec<ScreenCell>> {
@@ -1033,6 +1125,8 @@ impl NextCoreScreen {
     }
 
     fn clear_screen(&mut self) {
+        let top = self.image_top_row();
+        self.images.rows_cleared(top, top + self.rows as i64 - 1);
         self.lines.clear();
         self.cursor_x = 0;
         self.cursor_y = 0;
@@ -1050,6 +1144,7 @@ impl NextCoreScreen {
         self.history.clear();
         if include_viewport {
             self.prompt_rows.clear();
+            self.images.history_trimmed(removed);
             self.clear_display();
         } else {
             self.trim_prompt_rows(removed);
@@ -1059,6 +1154,8 @@ impl NextCoreScreen {
     }
 
     fn clear_display(&mut self) {
+        let top = self.image_top_row();
+        self.images.rows_cleared(top, top + self.rows as i64 - 1);
         self.lines.clear();
         self.ensure_cursor_line();
         self.mark_all_dirty();
@@ -1377,6 +1474,8 @@ impl NextCoreScreen {
         match mode {
             0 => {
                 self.erase_in_line_with_protection(0, selective);
+                let top = self.image_top_row();
+                self.images.rows_cleared(top + self.cursor_y as i64 + 1, top + self.rows as i64 - 1);
                 let start = self.cursor_y + 1;
                 if start < self.rows {
                     if selective {
@@ -1392,6 +1491,8 @@ impl NextCoreScreen {
                 }
             }
             1 => {
+                let top = self.image_top_row();
+                self.images.rows_cleared(top, top + self.cursor_y as i64 - 1);
                 let end = self.cursor_y.min(self.lines.len().saturating_sub(1));
                 if selective {
                     for row in 0..self.cursor_y.min(self.lines.len()) {
@@ -1415,7 +1516,11 @@ impl NextCoreScreen {
                 }
             }
             3 => {
+                // The live rows' absolute numbers drop by what was cleared,
+                // so the marks anchored to them move with them.
+                let removed = self.history.scrollback_rows();
                 self.history.clear();
+                self.trim_prompt_rows(removed);
                 self.mark_all_dirty();
             }
             _ => {}
@@ -1613,6 +1718,13 @@ impl NextCoreScreen {
     }
 
     fn apply_osc(&mut self, sequence: &str) {
+        if let Some(body) = sequence.strip_prefix("1337;") {
+            if unterm_images::Images::is_iterm_image(body) {
+                let outcome = self.images.iterm(body, self.image_at(), self.image_geometry());
+                self.apply_image_outcome(outcome);
+                return;
+            }
+        }
         match osc_params::parse(sequence) {
             Some(osc_params::OscCommand::Title(title)) => self.title = Some(title),
             Some(osc_params::OscCommand::CurrentDir(cwd)) => self.current_dir = Some(cwd),
@@ -1683,6 +1795,12 @@ impl NextCoreScreen {
         };
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(self.cursor_y, bottom);
+        let top = self.image_top_row();
+        self.images.region_scrolled(
+            top + self.cursor_y as i64,
+            top + bottom as i64,
+            count.max(1) as i64,
+        );
         for _ in 0..count.max(1) {
             self.lines.insert(self.cursor_y, Vec::new());
             if self.lines.len() > bottom + 1 {
@@ -1700,6 +1818,12 @@ impl NextCoreScreen {
         };
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(self.cursor_y, bottom);
+        let top = self.image_top_row();
+        self.images.region_scrolled(
+            top + self.cursor_y as i64,
+            top + bottom as i64,
+            -(count.max(1) as i64),
+        );
         for _ in 0..count.max(1) {
             if self.cursor_y <= bottom && self.cursor_y < self.lines.len() {
                 self.lines.remove(self.cursor_y);
@@ -1722,6 +1846,14 @@ impl NextCoreScreen {
         }
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(top, bottom);
+        // Rows that go into the history keep their absolute numbers; rows
+        // that scroll inside a region (or on the alternate screen, which
+        // has no history) do not, and neither do the pictures on them.
+        if !(top == 0 && bottom + 1 >= self.rows && self.alternate.is_none()) {
+            let base = self.image_top_row();
+            self.images
+                .region_scrolled(base + top as i64, base + bottom as i64, -(count.max(1) as i64));
+        }
         for _ in 0..count.max(1) {
             let removed = self.lines.remove(top);
             let mut blank = Vec::new();
@@ -1748,6 +1880,9 @@ impl NextCoreScreen {
         }
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(top, bottom);
+        let base = self.image_top_row();
+        self.images
+            .region_scrolled(base + top as i64, base + bottom as i64, count.max(1) as i64);
         for _ in 0..count.max(1) {
             self.lines.remove(bottom);
             self.lines.insert(top, Vec::new());
@@ -1817,6 +1952,8 @@ impl NextCoreScreen {
                     .history
                     .extend_scrollback(drained, self.scrollback_limit);
                 self.trim_prompt_rows(trimmed);
+            } else {
+                self.images.region_scrolled(0, i64::MAX / 2, -(trim as i64));
             }
             self.cursor_y = self.cursor_y.saturating_sub(trim);
             self.saved_cursor_y = self.saved_cursor_y.saturating_sub(trim);
@@ -1855,6 +1992,7 @@ impl NextCoreScreen {
         self.cols = if wide { 132 } else { 80 };
         self.lines.clear();
         self.history.clear();
+        self.images.reset();
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.saved_cursor_x = 0;
@@ -2016,6 +2154,7 @@ impl NextCoreScreen {
             return;
         }
 
+        self.images.enter_alternate();
         let main = ScreenState {
             cols: self.cols,
             scrollback: self.history.take_scrollback(),
@@ -2102,6 +2241,7 @@ impl NextCoreScreen {
     }
 
     fn restore_main_screen(&mut self, main: ScreenState) {
+        self.images.leave_alternate();
         self.cols = main.cols;
         self.history.replace_scrollback(main.scrollback);
         self.lines = main.lines;
@@ -2270,12 +2410,39 @@ impl SessionEngine for NextCoreEngine {
         Ok(())
     }
 
+    fn set_cell_pixel_size(&self, width: u32, height: u32) -> Result<()> {
+        if unterm_images::cell_pixels() == Some((width, height)) {
+            return Ok(());
+        }
+        unterm_images::set_cell_pixels(width, height);
+        // The pty's pixel fields are set when it is sized; a pane opened
+        // before the window said how big a cell is would report zero until
+        // its next resize. Image tools read those fields, so size every pane
+        // again at its own grid -- the same rows and columns, now with pixels.
+        for session in runtime::list_sessions().unwrap_or_default() {
+            let _ = runtime::resize(session.id, session.cols, session.rows);
+        }
+        Ok(())
+    }
+
     fn set_split_ratio(&self, pane_id: usize, first_ratio: f64) -> Result<()> {
         runtime::set_split_ratio(pane_id, first_ratio)
     }
 }
 
 impl ScreenEngine for NextCoreEngine {
+    fn read_inline_image(&self, pane_id: usize, image: &str) -> Result<Option<crate::InlineImageData>> {
+        let screen = session_handles::screen_current(pane_id)?;
+        let data = screen.lock().inline_image(image);
+        Ok(data)
+    }
+
+    fn read_inline_images(&self, pane_id: usize) -> Result<Vec<crate::ImagePlacementSnapshot>> {
+        let screen = session_handles::screen_current(pane_id)?;
+        let all = screen.lock().all_images();
+        Ok(all)
+    }
+
     fn read_screen(&self, pane_id: usize) -> Result<ScreenSnapshot> {
         runtime::read_screen(pane_id)
     }
@@ -2613,7 +2780,7 @@ mod tests {
 
         assert_eq!(
             bytes.lock().as_slice(),
-            b"\x1b[0n\x1b[?1;1$y\x1b[?3;5R\x1b[4;160;640t\x1b[8;10;80t\x1b[3;5R\x1b[>0;0;0c\x1b[?64;1;2;6;9;15;18;21;22c"
+            b"\x1b[0n\x1b[?1;1$y\x1b[?3;5R\x1b[4;160;640t\x1b[8;10;80t\x1b[3;5R\x1b[>0;0;0c\x1b[?64;1;2;4;6;9;15;18;21;22c"
         );
     }
 
@@ -2632,7 +2799,7 @@ mod tests {
 
         assert_eq!(
             bytes.lock().as_slice(),
-            b"\x1b[?64;1;2;6;9;15;18;21;22c\x1b[3;5R\x1b[0n\x1b[>0;0;0c"
+            b"\x1b[?64;1;2;4;6;9;15;18;21;22c\x1b[3;5R\x1b[0n\x1b[>0;0;0c"
         );
     }
 
@@ -2703,7 +2870,7 @@ mod tests {
 
         answer_terminal_queries("\x1b[c", &screen, &writer);
 
-        assert_eq!(bytes.lock().as_slice(), b"\x1b[?64;1;2;6;9;15;18;21;22c");
+        assert_eq!(bytes.lock().as_slice(), b"\x1b[?64;1;2;4;6;9;15;18;21;22c");
     }
 
     #[test]
@@ -2718,7 +2885,7 @@ mod tests {
 
         answer_terminal_queries("\x1b[0c", &screen, &writer);
 
-        assert_eq!(bytes.lock().as_slice(), b"\x1b[?64;1;2;6;9;15;18;21;22c");
+        assert_eq!(bytes.lock().as_slice(), b"\x1b[?64;1;2;4;6;9;15;18;21;22c");
     }
 
     #[test]
@@ -8575,5 +8742,206 @@ mod tests {
             lines as f64 / elapsed.as_secs_f64().max(0.000_001)
         );
         assert_eq!(screen.scrollback_rows(), DEFAULT_SCROLLBACK_LINES);
+    }
+}
+
+#[cfg(test)]
+mod inline_image_tests {
+    use super::NextCoreScreen;
+    use base64::Engine as _;
+
+    /// A small PNG, made with the same crate the kernel decodes with.
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let rgba = vec![200u8; (width * height * 4) as usize];
+        let mut out = Vec::new();
+        image_png(&mut out, width, height, &rgba);
+        out
+    }
+
+    fn image_png(out: &mut Vec<u8>, width: u32, height: u32, rgba: &[u8]) {
+        // A stored (uncompressed) PNG written by hand keeps the engine free
+        // of an encoder dependency in its tests.
+        fn crc(data: &[u8]) -> u32 {
+            let mut crc = 0xffff_ffffu32;
+            for &byte in data {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+                }
+            }
+            !crc
+        }
+        fn adler(data: &[u8]) -> u32 {
+            let (mut a, mut b) = (1u32, 0u32);
+            for &byte in data {
+                a = (a + u32::from(byte)) % 65521;
+                b = (b + a) % 65521;
+            }
+            (b << 16) | a
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let mut body = kind.to_vec();
+            body.extend_from_slice(data);
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc(&body).to_be_bytes());
+        }
+        out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        chunk(out, b"IHDR", &ihdr);
+        let mut raw = Vec::new();
+        for row in rgba.chunks((width * 4) as usize) {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        let mut zlib = vec![0x78, 0x01];
+        for (index, block) in raw.chunks(65535).enumerate() {
+            let last = (index + 1) * 65535 >= raw.len();
+            zlib.push(u8::from(last));
+            zlib.extend_from_slice(&(block.len() as u16).to_le_bytes());
+            zlib.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+            zlib.extend_from_slice(block);
+        }
+        zlib.extend_from_slice(&adler(&raw).to_be_bytes());
+        chunk(out, b"IDAT", &zlib);
+        chunk(out, b"IEND", &[]);
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    fn screen() -> NextCoreScreen {
+        NextCoreScreen::new(80, 24)
+    }
+
+    #[test]
+    fn a_kitty_picture_is_placed_and_answered() {
+        let mut screen = screen();
+        // 8x16 cells (the nominal size before a front end reports one): a
+        // 16x32 picture covers 2 columns and 2 rows.
+        screen.feed(&format!("\x1b_Ga=T,f=100,i=5;{}\x1b\\", b64(&png(16, 32))));
+
+        assert_eq!(screen.take_replies(), b"\x1b_Gi=5;OK\x1b\\");
+        let shown = screen.shown_images();
+        assert_eq!(shown.len(), 1);
+        assert_eq!((shown[0].row, shown[0].col, shown[0].cols, shown[0].rows), (0, 0, 2, 2));
+        // The cursor went to the last row of the picture, beside it.
+        assert_eq!((screen.cursor_x, screen.cursor_y), (2, 1));
+    }
+
+    #[test]
+    fn the_c1_form_of_apc_works_too() {
+        let mut screen = screen();
+        screen.feed(&format!("\u{9f}Ga=T,f=100;{}\u{9c}", b64(&png(8, 16))));
+        assert_eq!(screen.shown_images().len(), 1);
+    }
+
+    #[test]
+    fn a_sixel_picture_is_placed() {
+        let mut screen = screen();
+        screen.feed("\x1bPq#1;2;100;0;0#1~~~~~~~~\x1b\\after");
+        let shown = screen.shown_images();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].protocol, crate::ImageProtocol::Sixel);
+        // Text after the picture still prints.
+        assert!(screen.snapshot_viewport_lines()[0].contains("after"));
+    }
+
+    #[test]
+    fn other_dcs_and_apc_are_still_ignored() {
+        let mut screen = screen();
+        screen.feed("\x1bP+q544e\x1b\\one\x1b_Xnot kitty\x1b\\two");
+        assert!(screen.shown_images().is_empty());
+        assert!(screen.take_replies().is_empty());
+        assert_eq!(screen.snapshot_viewport_lines()[0], "onetwo");
+    }
+
+    #[test]
+    fn an_escape_inside_a_control_string_cancels_it() {
+        let mut screen = screen();
+        screen.feed("\x1bPq~~\x1b[1mbold");
+        assert!(screen.shown_images().is_empty());
+        assert_eq!(screen.snapshot_viewport_lines()[0], "bold");
+    }
+
+    #[test]
+    fn an_iterm_picture_from_osc_1337() {
+        let mut screen = screen();
+        screen.feed(&format!("\x1b]1337;File=inline=1:{}\x07", b64(&png(16, 16))));
+        let shown = screen.shown_images();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].protocol, crate::ImageProtocol::Iterm);
+    }
+
+    #[test]
+    fn a_picture_scrolls_into_the_history_with_its_text() {
+        let mut screen = screen();
+        screen.feed("first\r\n");
+        screen.feed(&format!("\x1b_Ga=T,f=100;{}\x1b\\", b64(&png(8, 16))));
+        // Thirty lines on a 24-row screen push the picture's row into history.
+        screen.feed(&"x\r\n".repeat(30));
+
+        assert!(screen.shown_images().is_empty(), "scrolled off the screen");
+        let all = screen.all_images();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].row, 1, "still beside the row it was printed on");
+    }
+
+    #[test]
+    fn clearing_the_screen_removes_its_pictures() {
+        let mut screen = screen();
+        screen.feed(&format!("\x1b_Ga=T,f=100;{}\x1b\\", b64(&png(8, 16))));
+        screen.feed("\x1b[2J");
+        assert!(screen.shown_images().is_empty());
+    }
+
+    #[test]
+    fn the_alternate_screen_keeps_its_pictures_to_itself() {
+        let mut screen = screen();
+        screen.feed(&format!("\x1b_Ga=T,f=100;{}\x1b\\", b64(&png(8, 16))));
+        screen.feed("\x1b[?1049h");
+        assert!(screen.shown_images().is_empty());
+        screen.feed(&format!("\x1b_Ga=T,f=100;{}\x1b\\", b64(&png(16, 16))));
+        assert_eq!(screen.shown_images().len(), 1);
+        screen.feed("\x1b[?1049l");
+        let shown = screen.shown_images();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].cols, 1, "the main screen's picture is back");
+    }
+
+    #[test]
+    fn a_region_scroll_moves_a_picture_inside_it() {
+        let mut screen = screen();
+        // Region rows 5..=10 (1-based 6;11), picture on row 8.
+        screen.feed("\x1b[6;11r\x1b[9;1H");
+        screen.feed(&format!("\x1b_Ga=T,f=100,C=1;{}\x1b\\", b64(&png(8, 16))));
+        // Scroll the region up by two.
+        screen.feed("\x1b[2S");
+        let shown = screen.shown_images();
+        assert_eq!(shown[0].row, 6);
+    }
+
+    #[test]
+    fn the_snapshot_carries_the_pictures() {
+        let mut screen = screen();
+        screen.feed(&format!("\x1b_Ga=T,f=100;{}\x1b\\", b64(&png(8, 16))));
+        let meta_images = screen.shown_images();
+        let key = meta_images[0].image.clone();
+        let data = screen.inline_image(&key).expect("pixels by name");
+        assert_eq!((data.width, data.height), (8, 16));
+        assert_eq!(data.rgba.len(), 8 * 16 * 4);
+    }
+
+    #[test]
+    fn cell_size_queries_are_answered() {
+        let screen = screen();
+        assert_eq!(
+            super::terminal_queries::response_for_csi_for_tests("16t", &screen).unwrap(),
+            b"\x1b[6;16;8t"
+        );
     }
 }

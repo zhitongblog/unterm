@@ -5,6 +5,10 @@
 
 pub mod next_core;
 
+pub use unterm_images::{
+    ImageData as InlineImageData, ImageFit, ImagePlacementSnapshot, ImageProtocol,
+};
+
 use anyhow::Result;
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
@@ -398,6 +402,11 @@ pub struct StyledScreenSnapshot {
     /// exit status, and whether one is running now.
     #[serde(default)]
     pub commands: crate::CommandMarks,
+    /// Inline pictures on the rows of this snapshot (kitty graphics, iTerm2
+    /// inline images, sixel): where each sits, and the name to fetch its
+    /// pixels by. The pixels themselves never ride in a snapshot.
+    #[serde(default)]
+    pub images: Vec<ImagePlacementSnapshot>,
     /// What the program in this pane wants from the mouse.
     ///
     /// A front end has to ask before deciding what a click means: with
@@ -959,6 +968,11 @@ pub struct ScreenSnapshot {
     /// exit status, and whether one is running now.
     #[serde(default)]
     pub commands: crate::CommandMarks,
+    /// Inline pictures on the rows of this snapshot (kitty graphics, iTerm2
+    /// inline images, sixel): where each sits, and the name to fetch its
+    /// pixels by. The pixels themselves never ride in a snapshot.
+    #[serde(default)]
+    pub images: Vec<ImagePlacementSnapshot>,
     /// What the program in this pane wants from the mouse.
     ///
     /// A front end has to ask before deciding what a click means: with
@@ -1239,10 +1253,28 @@ pub trait SessionEngine {
     fn set_terminal_colors(&self, _colors: next_core::color::TerminalColors) -> Result<()> {
         anyhow::bail!("this engine does not answer colour queries")
     }
+
+    /// Tell the kernel how large one cell is in pixels, so pictures are
+    /// measured in cells correctly and programs asking for the pixel size
+    /// (`CSI 14 t`, `CSI 16 t`, the pty's own size) get the truth.
+    fn set_cell_pixel_size(&self, _width: u32, _height: u32) -> Result<()> {
+        anyhow::bail!("this engine does not place pictures")
+    }
 }
 
 pub trait ScreenEngine {
     fn read_screen(&self, pane_id: usize) -> Result<ScreenSnapshot>;
+
+    /// A picture's pixels, by the name a snapshot gave it. `None` once the
+    /// pane has forgotten it.
+    fn read_inline_image(&self, _pane_id: usize, _image: &str) -> Result<Option<InlineImageData>> {
+        Ok(None)
+    }
+
+    /// Every picture placed in a pane, scrollback included, top to bottom.
+    fn read_inline_images(&self, _pane_id: usize) -> Result<Vec<ImagePlacementSnapshot>> {
+        Ok(Vec::new())
+    }
 
     /// Throw away a pane's history, and the visible screen with it when asked.
     ///
@@ -2069,6 +2101,7 @@ mod tests {
                 scrollback_rows: 0,
                 revision: 11,
                 dirty_rows: Some(DirtyRows { start: 0, end: 0 }),
+                images: Vec::new(),
             })
         }
 
@@ -2949,6 +2982,7 @@ mod pane_pulse_tests {
             scrollback_rows: 0,
             revision,
             dirty_rows: None,
+            images: Vec::new(),
         }
     }
 

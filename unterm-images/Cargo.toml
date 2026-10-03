@@ -1,0 +1,16 @@
+[package]
+name = "unterm-images"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Inline images for Unterm: the kitty graphics protocol, iTerm2 inline images and sixel."
+
+[dependencies]
+base64 = { workspace = true, features = ["std"] }
+flate2 = "1"
+image.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+wezterm-escape-parser.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -19,6 +19,7 @@ pub(super) struct ScreenSnapshotMeta {
     pub(super) commands: crate::CommandMarks,
     pub(super) focus_reporting: bool,
     pub(super) clipboard_request: Option<String>,
+    pub(super) images: Vec<crate::ImagePlacementSnapshot>,
 }
 
 pub(super) fn plain_viewport(
@@ -52,6 +53,7 @@ pub(super) fn plain_viewport(
         commands: meta.commands,
         focus_reporting: meta.focus_reporting,
         clipboard_request: meta.clipboard_request.clone(),
+        images: meta.images.clone(),
     }
 }
 
@@ -75,6 +77,7 @@ pub(super) fn styled_viewport(
         commands: meta.commands,
         focus_reporting: meta.focus_reporting,
         clipboard_request: meta.clipboard_request.clone(),
+        images: meta.images.clone(),
     }
 }
 
@@ -155,6 +158,7 @@ mod tests {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         }
     }
 

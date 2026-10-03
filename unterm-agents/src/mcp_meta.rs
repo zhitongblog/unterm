@@ -292,6 +292,12 @@ pub const MCP_METHODS: &[McpMethod] = &[
         params: &[P_PANE_ID, P_SESSION_ID],
     },
     McpMethod {
+        name: "screen.images",
+        namespace: "screen",
+        summary: "List the inline pictures a pane shows (kitty graphics, iTerm2 images, sixel): where each sits, its size, protocol and file name.",
+        params: &[P_PANE_ID, P_SESSION_ID],
+    },
+    McpMethod {
         name: "screen.scrollback_text",
         namespace: "screen",
         summary: "Dump the entire scrollback + viewport as text (LLM hand-off).",
@@ -643,7 +649,7 @@ pub const CLI_COMMANDS: &[CliCommand] = &[
     CliCommand { name: "artifact", summary: "What tasks produced, addressed by content.", subcommands: &["list", "usage", "verify", "forget"] },
     CliCommand { name: "evidence", summary: "Export a task's evidence bundle, verify one, or check the audit chain.", subcommands: &["export", "verify", "audit"] },
     CliCommand { name: "provider", summary: "Bind, pause, diagnose and revoke capability providers.", subcommands: &["list", "bind", "pause", "resume", "unbind", "diagnose", "leases", "acquire", "call", "approvals", "revoke", "chain"] },
-    CliCommand { name: "session", summary: "Operate on a single live pane.", subcommands: &["list", "create", "split", "focus", "resize", "destroy", "record", "export", "input", "text", "cwd", "status", "errors", "history", "audit-log", "search", "suggest"] },
+    CliCommand { name: "session", summary: "Operate on a single live pane.", subcommands: &["list", "create", "split", "focus", "resize", "destroy", "record", "export", "input", "text", "images", "cwd", "status", "errors", "history", "audit-log", "search", "suggest"] },
     CliCommand { name: "exec", summary: "Run commands in a live pane via MCP.", subcommands: &["run", "wait", "status", "cancel", "signal"] },
     CliCommand { name: "sessions", summary: "Browse the recorded session archive.", subcommands: &["list", "read"] },
     CliCommand { name: "workspace", summary: "List, save, or restore named pane workspaces with metadata.", subcommands: &["list", "save", "restore"] },
@@ -697,7 +703,7 @@ mod tests {
         // that is the whole mechanism. A surface that grows without anyone
         // noticing is one where a method ships undocumented, unclassified and
         // untested, and the count is the only thing that makes a person look.
-        assert_eq!(MCP_METHODS.len(), 151);
+        assert_eq!(MCP_METHODS.len(), 152);
         let namespaces: std::collections::HashSet<_> = MCP_METHODS
             .iter()
             .filter_map(|method| method.name.split('.').next())

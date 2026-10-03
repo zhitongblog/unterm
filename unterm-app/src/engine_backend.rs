@@ -551,6 +551,10 @@ impl SessionEngine for AppEngine {
         route!(self, engine => engine.set_terminal_colors(colors))
     }
 
+    fn set_cell_pixel_size(&self, width: u32, height: u32) -> Result<()> {
+        route!(self, engine => engine.set_cell_pixel_size(width, height))
+    }
+
     fn set_split_ratio(&self, pane_id: usize, first_ratio: f64) -> Result<()> {
         route!(self, engine => engine.set_split_ratio(pane_id, first_ratio))
     }
@@ -559,6 +563,21 @@ impl SessionEngine for AppEngine {
 impl ScreenEngine for AppEngine {
     fn read_screen(&self, pane_id: usize) -> Result<ScreenSnapshot> {
         route!(self, engine => engine.read_screen(pane_id))
+    }
+
+    fn read_inline_image(
+        &self,
+        pane_id: usize,
+        image: &str,
+    ) -> Result<Option<unterm_engine::InlineImageData>> {
+        route!(self, engine => engine.read_inline_image(pane_id, image))
+    }
+
+    fn read_inline_images(
+        &self,
+        pane_id: usize,
+    ) -> Result<Vec<unterm_engine::ImagePlacementSnapshot>> {
+        route!(self, engine => engine.read_inline_images(pane_id))
     }
 
     fn erase_scrollback(&self, pane_id: usize, include_viewport: bool) -> Result<()> {
@@ -715,6 +734,10 @@ impl SessionEngine for CoreHostEngine {
         core_client().set_terminal_colors(colors)
     }
 
+    fn set_cell_pixel_size(&self, width: u32, height: u32) -> Result<()> {
+        core_client().set_cell_pixel_size(width, height)
+    }
+
     fn set_split_ratio(&self, pane_id: usize, first_ratio: f64) -> Result<()> {
         core_client().set_split_ratio(pane_id, first_ratio)
     }
@@ -723,6 +746,21 @@ impl SessionEngine for CoreHostEngine {
 impl ScreenEngine for CoreHostEngine {
     fn read_screen(&self, pane_id: usize) -> Result<ScreenSnapshot> {
         core_client().read_screen(pane_id)
+    }
+
+    fn read_inline_image(
+        &self,
+        pane_id: usize,
+        image: &str,
+    ) -> Result<Option<unterm_engine::InlineImageData>> {
+        core_client().read_inline_image(pane_id, image)
+    }
+
+    fn read_inline_images(
+        &self,
+        pane_id: usize,
+    ) -> Result<Vec<unterm_engine::ImagePlacementSnapshot>> {
+        core_client().read_inline_images(pane_id)
     }
 
     fn erase_scrollback(&self, pane_id: usize, include_viewport: bool) -> Result<()> {

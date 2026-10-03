@@ -10,7 +10,8 @@
 | `unterm-engine` | next-core 终端模型 + 前端要实现的 trait |
 | `unterm-app` | GUI 前端（winit + wgpu） |
 | `unterm-render` | GPU 渲染 |
-| `unterm-mcp` | 151 个 MCP 方法的 dispatcher 与 handler |
+| `unterm-images` | 内嵌图片：kitty 图形协议、iTerm2 `OSC 1337 File=`、sixel 的解析/解码/栅格化与按绝对行锚定的图片表。内核只调用它，不持有像素 |
+| `unterm-mcp` | 152 个 MCP 方法的 dispatcher 与 handler |
 | `unterm-cli` | `unterm-cli`，兼 `mcp-stdio` 桥接 |
 | `unterm-protocol` | 版本握手、state 目录、发现记录 |
 | `unterm-gateway` | Action Gateway：每个方法的风险分级 |

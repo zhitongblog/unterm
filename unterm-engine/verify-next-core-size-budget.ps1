@@ -60,13 +60,23 @@
     # (?2026), keeps the kitty keyboard and modifyOtherKeys modes, and
     # injects shell integration into the shells it starts. Measured 14664;
     # recalibrated to measured plus the usual headroom.
-    [int]$MaxCoreSourceLines = 14780,
+    # 14780 -> 15080, debug binary 8 MB -> 13 MB (2026-10-03): inline
+    # pictures. The parser keeps DCS and APC strings instead of dropping
+    # them, the screen tells the picture table what happened to its rows
+    # (trimmed, scrolled in a region, cleared, the alternate screen), kitty
+    # replies reach the pty, and the cell size reaches CSI 14t/16t and the
+    # pty's pixel fields. The protocols, decoding and sixel rasterizing live
+    # in unterm-images, outside this count; their PNG/JPEG/GIF/WebP/BMP
+    # decoders -- called by name so EXR, TIFF and the rest stay out -- are
+    # what the probe binary grew by. Measured 14962 core / 11.9 MB probe;
+    # recalibrated to measured plus the usual headroom.
+    [int]$MaxCoreSourceLines = 15080,
     [int]$MaxProbeSourceLines = 2800,
     [int]$MaxDirectDependencies = 10,
     # A debug binary carries its debug info, so this tracks the toolchain and
     # the C libraries far more than it tracks next-core. The real size control
     # is MaxCoreSourceLines; this one only catches a sudden jump.
-    [int]$MaxDebugBinaryBytes = 8000000,
+    [int]$MaxDebugBinaryBytes = 13000000,
     [switch]$SkipBinarySizeCheck
 )
 

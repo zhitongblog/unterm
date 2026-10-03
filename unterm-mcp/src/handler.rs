@@ -272,6 +272,7 @@ fn method_is_read_only(method: &str) -> bool {
             | "exec.status"
             | "screen.read"
             | "screen.text"
+            | "screen.images"
             | "screen.scrollback_text"
             | "screen.cursor"
             | "screen.search"
@@ -5771,6 +5772,7 @@ impl McpHandler {
             // Screen
             "screen.read" => self.screen_read(params),
             "screen.text" => self.screen_text(params),
+            "screen.images" => self.screen_images(params),
             // Full scrollback + viewport as text. AI-friendly alternative to a
             // rendered "long screenshot" — for long terminal output you want
             // to hand off to an LLM, this is strictly better than a PNG
@@ -9890,6 +9892,30 @@ impl McpHandler {
             "cols": screen.cols,
             "rows": screen.rows,
             "scrollback_rows": screen.scrollback_rows,
+        }))
+    }
+
+    /// The pictures in a pane, scrollback included: where each sits (the
+    /// same absolute rows `screen.scrollback_text` numbers lines with), how
+    /// many cells it covers, its size in pixels, the protocol and file name.
+    /// The pixels themselves are what `capture.window` shows.
+    fn screen_images(&self, params: &Value) -> Result<Value> {
+        let engine = self.engine();
+        let pane_id = self.resolve_pane_id(
+            engine.as_ref(),
+            params,
+            PaneResolutionOptions::REQUIRED_EXISTING,
+        )?;
+        let images = engine.read_inline_images(pane_id)?;
+        let screen = engine.read_screen(pane_id)?;
+        Ok(json!({
+            "pane_id": pane_id,
+            "count": images.len(),
+            "images": images,
+            // The live screen's top row in the same numbering, so a caller
+            // can tell which pictures are on screen and which scrolled away.
+            "screen_top_row": screen.scrollback_rows,
+            "rows": screen.rows,
         }))
     }
 

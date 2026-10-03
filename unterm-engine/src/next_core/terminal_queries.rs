@@ -7,6 +7,13 @@ const HEADLESS_CELL_WIDTH_PX: usize = 8;
 const HEADLESS_CELL_HEIGHT_PX: usize = 16;
 pub(super) const MAX_PENDING_TERMINAL_QUERY_BYTES: usize = 128;
 
+/// One cell in pixels: what the front end draws, once it has said, and a
+/// nominal 8x16 before that (a headless kernel has no pixels at all).
+pub(super) fn cell_pixels() -> (u32, u32) {
+    unterm_images::cell_pixels()
+        .unwrap_or((HEADLESS_CELL_WIDTH_PX as u32, HEADLESS_CELL_HEIGHT_PX as u32))
+}
+
 pub(super) fn answer_with_pending(
     chunk: &str,
     screen: &NextCoreScreen,
@@ -158,14 +165,23 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
         "?6n" => {
             Some(format!("\x1b[?{};{}R", screen.cursor_y + 1, screen.cursor_x + 1).into_bytes())
         }
-        "14t" => Some(
-            format!(
-                "\x1b[4;{};{}t",
-                screen.rows * HEADLESS_CELL_HEIGHT_PX,
-                screen.cols * HEADLESS_CELL_WIDTH_PX
+        // Image tools size their pictures from these two: the text area,
+        // and one cell, in pixels.
+        "14t" => {
+            let (width, height) = cell_pixels();
+            Some(
+                format!(
+                    "\x1b[4;{};{}t",
+                    screen.rows as u64 * u64::from(height),
+                    screen.cols as u64 * u64::from(width)
+                )
+                .into_bytes(),
             )
-            .into_bytes(),
-        ),
+        }
+        "16t" => {
+            let (width, height) = cell_pixels();
+            Some(format!("\x1b[6;{height};{width}t").into_bytes())
+        }
         "18t" => Some(format!("\x1b[8;{};{}t", screen.rows, screen.cols).into_bytes()),
         "5n" => Some(b"\x1b[0n".to_vec()),
         // The kitty keyboard query: the flags in force, of those supported.
@@ -177,7 +193,8 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
         ">q" | ">0q" => Some(
             format!("\x1bP>|Unterm {}\x1b\\", unterm_protocol::PRODUCT_VERSION).into_bytes(),
         ),
-        "c" | "0c" => Some(b"\x1b[?64;1;2;6;9;15;18;21;22c".to_vec()),
+        // 4: sixel graphics.
+        "c" | "0c" => Some(b"\x1b[?64;1;2;4;6;9;15;18;21;22c".to_vec()),
         _ => None,
     }
 }
@@ -257,7 +274,7 @@ mod tests {
         assert_eq!(response_for_csi("5n", &screen).unwrap(), b"\x1b[0n");
         assert_eq!(
             response_for_csi("c", &screen).unwrap(),
-            b"\x1b[?64;1;2;6;9;15;18;21;22c"
+            b"\x1b[?64;1;2;4;6;9;15;18;21;22c"
         );
         assert_eq!(response_for_csi(">0c", &screen).unwrap(), b"\x1b[>0;0;0c");
     }

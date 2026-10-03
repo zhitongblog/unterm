@@ -261,8 +261,12 @@ $Suites = @(
         Name = "offscreen render"
         Package = "unterm-render"
         Filter = "offscreen_"
-        ExpectedCount = 8
+        # 10 since inline pictures: each from its own texture, over the cell
+        # backgrounds, tinted with an inactive pane.
+        ExpectedCount = 10
         RequiredTests = @(
+            "offscreen_inline_pictures_draw_from_their_own_textures_over_backgrounds",
+            "offscreen_an_inline_picture_is_tinted_by_its_quad",
             "offscreen_a_background_quad_lands_where_it_was_put",
             "offscreen_the_top_left_of_a_quad_is_the_top_left_of_the_image",
             "offscreen_a_glyph_is_tinted_by_its_colour_and_shaped_by_the_atlas",
@@ -279,8 +283,12 @@ $Suites = @(
         Name = "app frame"
         Package = "unterm-app"
         Filter = "terminal::tests::"
-        ExpectedCount = 17
+        # 21 since inline pictures: where one lands, cut at the pane's edges.
+        ExpectedCount = 21
         RequiredTests = @(
+            "terminal::tests::a_picture_lands_on_its_cells",
+            "terminal::tests::a_picture_that_began_above_the_viewport_shows_its_lower_part",
+            "terminal::tests::a_picture_is_clipped_at_the_pane_edge_and_kept_in_shape",
             "terminal::tests::a_block_cursor_on_a_wide_character_covers_both_its_cells",
             "terminal::tests::a_window_sized_to_exactly_n_cells_gets_n",
             # Renamed in 0.69.1 along with what it asserts: the floor is no

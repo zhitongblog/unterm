@@ -86,6 +86,17 @@ pub fn build_vertices(quads: &FrameQuads) -> Vec<u8> {
     for quad in &quads.backgrounds {
         push_quad(&mut vertices, *quad, [0.0; 4], 0.0);
     }
+    // Pictures between the backgrounds and the text, six vertices each, each
+    // drawn with its own texture bound -- see `draw`.
+    for image in &quads.inline_images {
+        let glyph = &image.glyph;
+        push_quad(
+            &mut vertices,
+            glyph.quad,
+            [glyph.tex_left, glyph.tex_top, glyph.tex_right, glyph.tex_bottom],
+            2.0,
+        );
+    }
     for glyph in &quads.glyphs {
         push_quad(
             &mut vertices,
@@ -143,6 +154,7 @@ pub fn build_vertices(quads: &FrameQuads) -> Vec<u8> {
 pub fn vertex_count(quads: &FrameQuads) -> u32 {
     ((usize::from(quads.image.is_some())
         + quads.backgrounds.len()
+        + quads.inline_images.len()
         + quads.glyphs.len()
         + quads.overlay_backgrounds.len()
         + quads.overlay_glyphs.len()
@@ -160,6 +172,9 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     blank_image: wgpu::Texture,
     format: wgpu::TextureFormat,
+    /// Pictures programs put on the screen, by name. Uploaded once each; the
+    /// name is the content, so a cached texture is never stale.
+    inline_textures: std::cell::RefCell<std::collections::HashMap<String, wgpu::Texture>>,
 }
 
 impl Renderer {
@@ -290,7 +305,30 @@ impl Renderer {
             sampler,
             blank_image,
             format,
+            inline_textures: Default::default(),
         }
+    }
+
+    /// Whether a picture's texture is already here.
+    pub fn has_inline_image(&self, image: &str) -> bool {
+        self.inline_textures.borrow().contains_key(image)
+    }
+
+    /// Upload a picture under its name.
+    pub fn upload_inline_image(&self, image: &str, width: u32, height: u32, rgba: &[u8]) {
+        let texture = upload_image(&self.device, &self.queue, width, height, rgba);
+        self.inline_textures
+            .borrow_mut()
+            .insert(image.to_string(), texture);
+    }
+
+    /// Drop the textures of pictures no longer on any screen.
+    pub fn retain_inline_images(&self, keep: impl Fn(&str) -> bool) {
+        self.inline_textures.borrow_mut().retain(|name, _| keep(name));
+    }
+
+    pub fn inline_image_count(&self) -> usize {
+        self.inline_textures.borrow().len()
     }
 
     pub fn device(&self) -> &wgpu::Device {
@@ -396,28 +434,7 @@ impl Renderer {
                 .create_view(&wgpu::TextureViewDescriptor::default()),
         };
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("unterm-render bind group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&image_view),
-                },
-            ],
-        });
+        let bind_group = self.bind_group(&uniform_buffer, &view, &image_view);
 
         let mut encoder = self
             .device
@@ -449,11 +466,72 @@ impl Renderer {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                pass.draw(0..count, 0..1);
+                if quads.inline_images.is_empty() {
+                    pass.draw(0..count, 0..1);
+                } else {
+                    // Everything below the pictures, then each picture with
+                    // its own texture in the picture slot, then the rest.
+                    let below = ((usize::from(quads.image.is_some()) + quads.backgrounds.len())
+                        * 6) as u32;
+                    pass.draw(0..below, 0..1);
+                    let textures = self.inline_textures.borrow();
+                    let mut groups = Vec::with_capacity(quads.inline_images.len());
+                    for image in &quads.inline_images {
+                        let group = textures.get(&image.image).map(|texture| {
+                            let image_view =
+                                texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            self.bind_group(&uniform_buffer, &view, &image_view)
+                        });
+                        groups.push(group);
+                    }
+                    for (index, group) in groups.iter().enumerate() {
+                        // Not uploaded yet: skipped this frame, drawn the next.
+                        if let Some(group) = group {
+                            let first = below + index as u32 * 6;
+                            pass.set_bind_group(0, group, &[]);
+                            pass.draw(first..first + 6, 0..1);
+                        }
+                    }
+                    let above = below + quads.inline_images.len() as u32 * 6;
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    if above < count {
+                        pass.draw(above..count, 0..1);
+                    }
+                }
             }
         }
 
         self.queue.submit(Some(encoder.finish()));
+    }
+
+    fn bind_group(
+        &self,
+        uniform_buffer: &wgpu::Buffer,
+        atlas_view: &wgpu::TextureView,
+        image_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("unterm-render bind group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(image_view),
+                },
+            ],
+        })
     }
 
     fn create_buffer(

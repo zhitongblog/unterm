@@ -36,13 +36,22 @@ pub(super) fn apply_chunk(
     {
         let mut screen = handles.screen.lock();
         screen.feed(chunk);
-        let terminal_response_bytes = terminal_queries::answer_with_pending(
+        let mut terminal_response_bytes = terminal_queries::answer_with_pending(
             chunk,
             &screen,
             handles.writer,
             pending_terminal_query,
         );
+        // Picture commands answer from inside the parser (kitty's `OK` and
+        // errors): sent after the chunk that asked, like the queries above.
+        let replies = screen.take_replies();
         drop(screen);
+        if !replies.is_empty() {
+            let mut writer = handles.writer.lock();
+            if writer.write_all(&replies).and_then(|_| writer.flush()).is_ok() {
+                terminal_response_bytes += replies.len();
+            }
+        }
 
         let recorded = if let Some(recording) = handles.recording.lock().as_mut() {
             recording_output::append_now(recording, chunk);

@@ -12,7 +12,7 @@ Cross-platform terminal (macOS / Linux / Windows) built on Unterm's native
 `next-core` terminal engine, with one design bet: the terminal itself is
 controllable from the outside by any AI agent over MCP. Claude Code, Codex,
 Gemini CLI, Cursor, Aider, your own scripts — they all get the same JSON-RPC
-surface (**151 authenticated methods plus `auth.login`**) to spawn shells, run
+surface (**152 authenticated methods plus `auth.login`**) to spawn shells, run
 commands, read pane state, capture screenshots, record sessions, and run the
 Agent Cockpit. (Theme, language and `unterm.conf` are not on MCP; they are set
 through Web Settings, `unterm-cli`, or the file.)
@@ -122,7 +122,7 @@ Run the MSI installer; it places `unterm.exe` in `Program Files\Unterm` and crea
   task / always". Workspaces are roots that cannot see each other, and a
   shell that `cd`s out stops being inside. The audit trail is hash-chained,
   so an edit to it disagrees with the next line. `unterm-cli provider |
-  scope | artifact | evidence | system` — 46 new MCP methods (149 total at the time; 151 today).
+  scope | artifact | evidence | system` — 46 new MCP methods (149 total at the time; 152 today).
 - **v0.57 — Fleet verification loop + new brand mark.** Review now verifies each fleet member automatically (Cargo / Go / npm / pnpm / yarn / Python / Maven / Gradle / .NET inferred, or your own command), ranks members by verification and change size, gates squash-merge on a passing run (audited `force` override), and retries failed members in their existing worktree without losing work — `review.verify` / `fleet.retry` over MCP + CLI. The sidebar gains repository-grouped navigation with always-on fuzzy search. Every logo surface moves to the new command-loop mark.
 - **v0.55 — Agent Cockpit.** The terminal now sees the agents inside it: live per-pane state with tab badges and a cross-window tally, the waiting-first Agent Inbox (`Ctrl+Shift+A`), fleets running one task across N agents in N isolated worktrees, and a Review page with checkpoints, diffs, rollback, and squash-merge. 12 new MCP methods, 3 new CLI families.
 - **v0.54 — 2.8× faster cold start** (~780ms → ~280ms) via five startup-path wins, and no more CPU core burned on Windows output floods (~91% → ~4%); MCP stays responsive mid-flood.
@@ -158,9 +158,10 @@ This README is the short version. The site is the long version.
 ## Features
 
 - **GPU-accelerated rendering** on all three platforms through wgpu: Metal on macOS, Direct3D 12 on Windows and Vulkan on Linux. If the hardware path fails, Unterm tries OpenGL, then the same two in software (WARP on Windows), and on Windows finally Vulkan — so a machine with no usable graphics driver still opens a window. `UNTERM_GPU_BACKEND=dx12|vulkan|gl|metal` pins one backend.
+- **Pictures in the terminal** — the kitty graphics protocol, iTerm2 inline images (`OSC 1337 File=`) and sixel, so `chafa`, `img2sixel`, `viu`, `timg` and `unterm-cli imgcat` show the image itself. Pictures scroll with their text, stay in the scrollback, are clipped at pane edges and keep to the screen (main or alternate) they were drawn on. `screen.images` / `unterm-cli session images` list them for agents.
 - **MCP server** on `127.0.0.1:<auto-port>` (default 19876) —
   line-delimited JSON-RPC over TCP, loopback-only and auth-token gated. It
-  exposes 151 authenticated methods plus `auth.login`; `meta.surface` (or
+  exposes 152 authenticated methods plus `auth.login`; `meta.surface` (or
   `unterm-cli reference`) returns the authoritative live inventory in one
   call.
 - **Agent Cockpit** — per-pane agent state, waiting-first Inbox, worktree fleets, checkpoint + review. See the section above.

@@ -6247,6 +6247,7 @@ dependencies = [
  "serde",
  "serde_json",
  "termwiz",
+ "unterm-images",
  "unterm-protocol",
 ]
 
@@ -6256,6 +6257,18 @@ version = "0.71.17"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "unterm-images"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "image",
+ "serde",
+ "serde_json",
+ "wezterm-escape-parser",
 ]
 
 [[package]]

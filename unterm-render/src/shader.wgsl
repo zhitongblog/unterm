@@ -54,8 +54,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // A picture, in its own colours. The quad's alpha is how much of it
         // shows through -- a background at full strength is a background you
         // cannot read text on.
+        // The quad's colour tints it: white for a picture shown as it is,
+        // grey for one in an inactive pane.
         let texel = textureSample(image_texture, atlas_sampler, input.tex_coord);
-        return vec4<f32>(texel.rgb, texel.a * input.color.a);
+        return vec4<f32>(texel.rgb * input.color.rgb, texel.a * input.color.a);
     }
     // The atlas stores coverage, not colour: the glyph takes the cell's
     // foreground and the texture decides only how much of it lands.

@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Pictures in the terminal.** Unterm draws inline images sent with the kitty
+  graphics protocol, iTerm2's `OSC 1337 File=` (and its multipart form) and
+  sixel — so `chafa`, `img2sixel`, ImageMagick's `sixel:` output, `viu`,
+  `timg` and `unterm-cli imgcat` show the picture itself. Pictures scroll with
+  the text beside them, stay in the scrollback, are cut cleanly at a pane's
+  edges, keep to the alternate screen they were drawn on, and go when the
+  screen is cleared. PNG, JPEG, GIF, WebP and BMP; raw RGB/RGBA and zlib for
+  kitty; transmission by file and temporary file; replies to kitty queries.
+  Programs that ask for the cell or window size in pixels (`CSI 14 t`,
+  `CSI 16 t`, the pty's pixel size) now get the real one, and the device
+  attributes report sixel support.
+- **`screen.images`** (MCP) and **`unterm-cli session images`**: the pictures in
+  a pane — where each sits, its size, protocol and file name. 152 MCP methods.
+- **"Share a post you wrote about Unterm"** in the command palette and in Web
+  Settings → About, beside the optional **Star on GitHub** entry; both only
+  there, never pushed at anyone.
+
+### Fixed
+
+- **`[platform.windows]` / `[platform.macos]` / `[platform.linux]` sections were
+  ignored** and reported as unknown keys. They now apply on their platform
+  (with `[platform.other]` for the rest).
+- **`[window] close_confirmation` did nothing**: the code read only the
+  top-level `window_close_confirmation`. Both are read now.
+- **`path_append` and `[env]` missed shells started by a Core** that no window
+  had launched (the CLI, headless). The Core applies them itself.
+- **Settings that do nothing say so.** WezTerm-era keys such as `[tab_bar]`,
+  `[title_button]` and `colors.tab_bar_lift` are reported with the reason,
+  instead of being silently accepted; a non-boolean `decorations` is flagged.
+- **The packaged example `unterm.conf`** no longer carries keys that do nothing.
+
 ## v0.71.17 — 2026-10-01
 
 ### Added

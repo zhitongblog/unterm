@@ -8,7 +8,7 @@ use unterm_engine::next_core::font_raster::FontFace;
 use unterm_engine::next_core::{config::Config, font_discovery};
 use unterm_engine::{StyledBlink, StyledCell, StyledScreenSnapshot};
 use unterm_render::atlas::{GlyphAtlas, GlyphKey};
-use unterm_render::quads::{build_row, CellMetrics, FrameColors, FrameQuads, Quad};
+use unterm_render::quads::{build_row, CellMetrics, FrameColors, FrameQuads, GlyphQuad, Quad};
 
 /// Pixels per em for a size in points on a display at `scale`.
 ///
@@ -795,6 +795,75 @@ pub fn append_pane(
             }
         }
     }
+
+    push_inline_images(snapshot, metrics, origin, quads);
+}
+
+/// Where the pictures on a pane go, clipped to it.
+///
+/// A picture is anchored to an absolute row; the snapshot's first line says
+/// which absolute row the pane's top is, so one that started above the
+/// viewport is drawn with its top cut off rather than not at all. The pane
+/// field is left for the caller, which knows which pane this was.
+pub fn push_inline_images(
+    snapshot: &StyledScreenSnapshot,
+    metrics: CellMetrics,
+    origin: (f32, f32),
+    quads: &mut FrameQuads,
+) {
+    let Some(first_row) = snapshot.lines.first().map(|line| line.row) else {
+        return;
+    };
+    let pane_right = origin.0 + snapshot.cols as f32 * metrics.width;
+    let pane_bottom = origin.1 + snapshot.lines.len() as f32 * metrics.height;
+    for image in &snapshot.images {
+        let [sx, sy, sw, sh] = image
+            .source
+            .unwrap_or([0, 0, image.width, image.height])
+            .map(|v| v as f32);
+        if sw <= 0.0 || sh <= 0.0 || image.width == 0 || image.height == 0 {
+            continue;
+        }
+        let box_left = origin.0 + image.col as f32 * metrics.width;
+        let box_top = origin.1 + (image.row - first_row) as f32 * metrics.height;
+        let box_w = image.cols as f32 * metrics.width;
+        let box_h = image.rows as f32 * metrics.height;
+        let (draw_w, draw_h) = match image.fit {
+            unterm_engine::ImageFit::Fill => (box_w, box_h),
+            unterm_engine::ImageFit::Contain => {
+                let scale = (box_w / sw).min(box_h / sh);
+                (sw * scale, sh * scale)
+            }
+        };
+        // Clip the drawn rectangle to the pane, moving the texture
+        // coordinates in step so the visible part samples the right pixels.
+        let (left, top) = (box_left.max(origin.0), box_top.max(origin.1));
+        let right = (box_left + draw_w).min(pane_right);
+        let bottom = (box_top + draw_h).min(pane_bottom);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        let (iw, ih) = (image.width as f32, image.height as f32);
+        let u = |x: f32| (sx + (x - box_left) / draw_w * sw) / iw;
+        let v = |y: f32| (sy + (y - box_top) / draw_h * sh) / ih;
+        quads.inline_images.push(unterm_render::quads::InlineImageQuad {
+            glyph: GlyphQuad {
+                quad: Quad {
+                    left,
+                    top,
+                    width: right - left,
+                    height: bottom - top,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                tex_left: u(left),
+                tex_top: v(top),
+                tex_right: u(right),
+                tex_bottom: v(bottom),
+            },
+            image: image.image.clone(),
+            pane: 0,
+        });
+    }
 }
 
 /// Add a run of plain text at `origin`, in the given colour.
@@ -1248,6 +1317,88 @@ mod tests {
         TerminalFont::open(16).ok()
     }
 
+    fn picture(row: i64, col: usize, cols: usize, rows: usize) -> unterm_engine::ImagePlacementSnapshot {
+        unterm_engine::ImagePlacementSnapshot {
+            image: "pic".to_string(),
+            row,
+            col,
+            cols,
+            rows,
+            z: 0,
+            width: 16,
+            height: 32,
+            source: None,
+            fit: unterm_engine::ImageFit::Contain,
+            protocol: unterm_engine::ImageProtocol::Kitty,
+            name: None,
+        }
+    }
+
+    /// Three rows of ten columns, the first of them absolute row 10.
+    fn three_rows(images: Vec<unterm_engine::ImagePlacementSnapshot>) -> StyledScreenSnapshot {
+        let mut snap = snapshot("0123456789");
+        snap.lines = (10..13)
+            .map(|row| StyledScreenLine {
+                row,
+                wrapped: false,
+                cells: snap.lines[0].cells.clone(),
+            })
+            .collect();
+        snap.rows = 3;
+        snap.images = images;
+        snap
+    }
+
+    const METRICS: CellMetrics = CellMetrics {
+        width: 8.0,
+        height: 16.0,
+        baseline: 12.0,
+    };
+
+    #[test]
+    fn a_picture_lands_on_its_cells() {
+        let mut quads = FrameQuads::default();
+        push_inline_images(&three_rows(vec![picture(11, 2, 2, 2)]), METRICS, (100.0, 50.0), &mut quads);
+
+        let quad = &quads.inline_images[0].glyph;
+        assert_eq!((quad.quad.left, quad.quad.top), (116.0, 66.0));
+        assert_eq!((quad.quad.width, quad.quad.height), (16.0, 32.0));
+        assert_eq!((quad.tex_left, quad.tex_top, quad.tex_right, quad.tex_bottom), (0.0, 0.0, 1.0, 1.0));
+        assert_eq!(quads.inline_images[0].image, "pic");
+    }
+
+    #[test]
+    fn a_picture_that_began_above_the_viewport_shows_its_lower_part() {
+        let mut quads = FrameQuads::default();
+        // Rows 9..10: the top half is above row 10, where the pane starts.
+        push_inline_images(&three_rows(vec![picture(9, 0, 2, 2)]), METRICS, (0.0, 0.0), &mut quads);
+
+        let quad = &quads.inline_images[0].glyph;
+        assert_eq!((quad.quad.top, quad.quad.height), (0.0, 16.0));
+        assert_eq!((quad.tex_top, quad.tex_bottom), (0.5, 1.0));
+    }
+
+    #[test]
+    fn a_picture_is_clipped_at_the_pane_edge_and_kept_in_shape() {
+        let mut quads = FrameQuads::default();
+        // Columns 9..10 of a ten-column pane: the right half is cut. Given
+        // 4x4 cells (32x64 px) for a 16x32 picture, Contain scales it to fit
+        // without stretching: 32x64 exactly, cut to 8 px wide.
+        push_inline_images(&three_rows(vec![picture(10, 9, 4, 4)]), METRICS, (0.0, 0.0), &mut quads);
+
+        let quad = &quads.inline_images[0].glyph;
+        assert_eq!((quad.quad.left, quad.quad.width), (72.0, 8.0));
+        assert_eq!(quad.quad.height, 48.0, "cut at the bottom of the three-row pane");
+        assert_eq!(quad.tex_right, 0.25);
+    }
+
+    #[test]
+    fn a_picture_wholly_outside_the_pane_draws_nothing() {
+        let mut quads = FrameQuads::default();
+        push_inline_images(&three_rows(vec![picture(20, 0, 2, 2)]), METRICS, (0.0, 0.0), &mut quads);
+        assert!(quads.inline_images.is_empty());
+    }
+
     fn snapshot(text: &str) -> StyledScreenSnapshot {
         StyledScreenSnapshot {
             lines: vec![StyledScreenLine {
@@ -1281,6 +1432,7 @@ mod tests {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         }
     }
 
@@ -1863,6 +2015,7 @@ mod fallback_fit_tests {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         }
     }
 
@@ -2117,6 +2270,7 @@ mod missing_glyph_regression {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         };
 
         append_pane(
@@ -2193,6 +2347,7 @@ mod cursor_inversion_tests {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         }
     }
 
@@ -2551,6 +2706,7 @@ mod focus_cursor_tests {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         }
     }
 
@@ -2755,6 +2911,7 @@ mod text_blink_tests {
             commands: Default::default(),
             focus_reporting: false,
             clipboard_request: None,
+            images: Vec::new(),
         }
     }
 

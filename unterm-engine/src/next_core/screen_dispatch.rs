@@ -378,6 +378,7 @@ fn meta(screen: &super::NextCoreScreen) -> ScreenSnapshotMeta {
         commands: screen.commands,
         focus_reporting: screen.focus_event_reporting,
         clipboard_request: screen.clipboard_request.clone(),
+        images: screen.shown_images(),
     }
 }
 

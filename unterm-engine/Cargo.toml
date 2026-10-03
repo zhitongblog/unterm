@@ -20,3 +20,4 @@ freetype.workspace = true
 harfbuzz.workspace = true
 termwiz.workspace = true
 unterm-protocol.workspace = true
+unterm-images.workspace = true
