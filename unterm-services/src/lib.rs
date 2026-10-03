@@ -21,6 +21,7 @@ pub mod install;
 pub mod interrupt;
 pub mod launch_env;
 pub mod path_scope;
+pub mod process_env;
 pub mod power;
 pub mod providers;
 pub mod workspace_scope;

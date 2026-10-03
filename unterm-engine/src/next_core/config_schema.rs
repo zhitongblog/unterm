@@ -7,7 +7,6 @@
 //! config only reveals what it sets by running.
 
 use super::config::{Config, ConfigError, Value};
-use super::tab_title;
 
 /// Every setting the engine reads.
 ///
@@ -101,6 +100,39 @@ pub const SETTINGS: &[&str] = &[
     "shell_integration",
 ];
 
+/// Settings that are accepted but do nothing in this terminal, and why.
+///
+/// They came from the WezTerm-era config (and the unterm.lua conversion still
+/// writes some of them), so rejecting them as unknown would be wrong -- but a
+/// key that silently does nothing is the failure the schema exists to catch.
+/// Each one is named with the reason, once, where the config is checked.
+pub const INERT: &[(&str, &str)] = &[
+    ("use_ime", "the input method is always enabled"),
+    ("colors.tab_bar_lift", TABS_IN_SIDEBAR),
+    ("colors.inactive_dim", TABS_IN_SIDEBAR),
+    ("colors.tab_bar.inactive_tab.bg_color", TABS_IN_SIDEBAR),
+    ("colors.tab_bar.inactive_tab_hover.fg_color", TABS_IN_SIDEBAR),
+    ("colors.tab_bar.new_tab.bg_color", TABS_IN_SIDEBAR),
+    ("colors.tab_bar.new_tab.fg_color", TABS_IN_SIDEBAR),
+    ("colors.tab_bar.new_tab_hover.bg_color", TABS_IN_SIDEBAR),
+    ("colors.tab_bar.new_tab_hover.fg_color", TABS_IN_SIDEBAR),
+    ("tab_bar.position", TABS_IN_SIDEBAR),
+    ("tab_bar.max_width", TABS_IN_SIDEBAR),
+    ("tab_bar.hide_if_only_one_tab", TABS_IN_SIDEBAR),
+    ("tab_bar.show_index", TABS_IN_SIDEBAR),
+    ("tab_bar.show_new_tab_button", TABS_IN_SIDEBAR),
+    ("tab_bar.title_format", TABS_IN_SIDEBAR),
+    ("tab_bar.fallback_title", TABS_IN_SIDEBAR),
+    ("tab_bar.strip_extension", TABS_IN_SIDEBAR),
+    ("tab_bar.capitalize", TABS_IN_SIDEBAR),
+    ("title_button.style", BUTTONS_FOLLOW_PLATFORM),
+    ("title_button.alignment", BUTTONS_FOLLOW_PLATFORM),
+    ("title_button.buttons", BUTTONS_FOLLOW_PLATFORM),
+    ("window_frame.button_bg", BUTTONS_FOLLOW_PLATFORM),
+];
+const TABS_IN_SIDEBAR: &str = "tabs are listed in the sidebar, which takes its look from the theme";
+const BUTTONS_FOLLOW_PLATFORM: &str = "the window buttons follow the platform";
+
 /// Sections whose keys the user invents.
 ///
 /// Environment variable names and key chords cannot be listed in advance, so
@@ -126,27 +158,24 @@ pub fn check(config: &Config) -> Vec<ConfigError> {
         })
         .collect();
 
-    if let Some(line) = config.line_of("tab_bar.title_format") {
-        match config.str_of("tab_bar.title_format") {
-            Ok(Some(format)) => {
-                for name in tab_title::unknown_placeholders(format) {
-                    // A template rendering `{tittle}` literally is the same
-                    // failure as a key that does nothing.
-                    errors.push(ConfigError {
-                        line,
-                        message: format!(
-                            "`{{{name}}}` is not a tab title placeholder -- try {}",
-                            tab_title::PLACEHOLDERS
-                                .iter()
-                                .map(|known| format!("`{{{known}}}`"))
-                                .collect::<Vec<_>>()
-                                .join(" or ")
-                        ),
-                    });
-                }
-            }
-            Ok(None) => {}
-            Err(error) => errors.push(error),
+    for (key, why) in INERT {
+        if let Some(line) = config.line_of(key) {
+            errors.push(ConfigError {
+                line,
+                message: format!("`{key}` has no effect in Unterm: {why}"),
+            });
+        }
+    }
+
+    // `decorations` is a switch; the WezTerm spelling of it is a string of
+    // flags, which would otherwise be dropped without a word.
+    if let Some(line) = config.line_of("window.decorations") {
+        if !matches!(config.bool_of("window.decorations"), Ok(Some(_))) {
+            errors.push(ConfigError {
+                line,
+                message: "`window.decorations` should be true (system title bar) or false (Unterm's own)"
+                    .to_string(),
+            });
         }
     }
 
@@ -252,9 +281,8 @@ mod tests {
             fade_in_function = "EaseIn"
             fade_out_function = "EaseOut"
             target = "BackgroundColor"
-            [tab_bar]
-            position = "Left"
-            title_format = "  {title}  "
+            [window]
+            decorations = false
             "#,
         );
 
@@ -294,15 +322,22 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_title_placeholder_is_rejected_with_the_real_ones() {
-        let errors = check_source("[tab_bar]\ntitle_format = \"{tittle}\"");
+    fn a_setting_that_does_nothing_says_so_and_why() {
+        let errors = check_source("[tab_bar]\nposition = \"Left\"\n[title_button]\nstyle = \"Gnome\"");
 
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].message.contains("{title}"),
-            "{}",
-            errors[0].message
-        );
+        // Accepted, so not "unknown" -- but not silently ignored either.
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].message.contains("no effect") && errors[0].message.contains("sidebar"));
+        assert!(errors[1].message.contains("no effect"));
+    }
+
+    #[test]
+    fn the_flag_string_spelling_of_decorations_is_reported() {
+        let errors = check_source("[window]\ndecorations = \"INTEGRATED_BUTTONS|RESIZE\"");
+
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].message.contains("true"), "{}", errors[0].message);
+        assert!(check_source("[window]\ndecorations = true").is_empty());
     }
 
     #[test]
@@ -364,17 +399,17 @@ mod tests {
             assert!(errors.is_empty(), "{}: {:?}", platform, errors);
         }
 
-        // The platform branch the Lua version wrote as if/elseif/else.
-        let style = |platform: &str| {
+        // The one platform-specific value it carries lands only on Windows.
+        let path_append = |platform: &str| {
             config
                 .resolve_platform(platform)
-                .str_of("title_button.style")
+                .list_of("path_append")
                 .unwrap()
-                .map(str::to_string)
+                .is_some()
         };
-        assert_eq!(style("macos").as_deref(), Some("MacOsCustom"));
-        assert_eq!(style("windows").as_deref(), Some("Windows"));
-        assert_eq!(style("linux").as_deref(), Some("Gnome"));
+        assert!(path_append("windows"));
+        assert!(!path_append("macos"));
+        assert!(!path_append("linux"));
     }
 
     #[test]

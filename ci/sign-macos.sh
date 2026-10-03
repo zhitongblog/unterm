@@ -94,9 +94,8 @@ mkdir -p "$stagedir/Unterm.app/Contents/MacOS"
 mkdir -p "$stagedir/Unterm.app/Contents/Resources"
 cp -r assets/shell-integration/* "$stagedir/Unterm.app/Contents/Resources"
 cp -r assets/shell-completion "$stagedir/Unterm.app/Contents/Resources"
-# Product-default config: the terminal looks up Contents/Resources/unterm.conf as
-# the LOWEST-priority fallback, so installs get the out-of-box look while any
-# user config still wins. Without this, installs run on bare compiled defaults.
+# The example config, shipped for reference. Unterm reads only
+# ~/.unterm/unterm.conf; this copy is never loaded on its own.
 cp assets/unterm.conf "$stagedir/Unterm.app/Contents/Resources/unterm.conf"
 # The bundled faces: the chrome's icon language (Symbols Nerd Font), emoji,
 # and the DEFAULT terminal font (JetBrains Mono Regular, opened by file name).

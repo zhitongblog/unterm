@@ -394,7 +394,12 @@ pub fn load(path: Option<PathBuf>) -> (Config, Vec<ConfigError>) {
         // A key the schema does not know is a setting doing nothing — the
         // exact silent failure the schema was written to catch, and until
         // now nothing ever asked it.
+        // `[platform.<os>]` and `[platform.other]` are folded in here, once,
+        // so every reader sees the keys for this machine under their plain
+        // names. Nothing resolved them before: a platform section was stored
+        // as `platform.windows.path_append` and did nothing anywhere.
         Ok(config) => {
+            let config = config.resolve_platform(std::env::consts::OS);
             let warnings = unterm_engine::next_core::config_schema::check(&config);
             (config, warnings)
         }
@@ -445,6 +450,38 @@ mod tests {
             McpInputConfirmation::Never,
             "the BOM swallowed the whole config"
         );
+    }
+
+    #[test]
+    fn a_section_for_this_platform_applies_and_one_for_another_does_not() {
+        let dir = std::env::temp_dir().join(format!(
+            "unterm-platform-test-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("unterm.conf");
+        let other = if std::env::consts::OS == "windows" { "macos" } else { "windows" };
+        std::fs::write(
+            &path,
+            format!(
+                "[platform.{}]\nshell_integration = false\n[platform.{other}]\nfont_size = 30\n",
+                std::env::consts::OS
+            ),
+        )
+        .expect("write config");
+
+        let (config, errors) = load(Some(path));
+        std::fs::remove_dir_all(&dir).ok();
+
+        // Before, both stayed under `platform.*`, did nothing, and were
+        // reported as unknown keys.
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(!shell_integration(&config));
+        assert_eq!(config.int_of("font_size").unwrap(), None);
     }
 
     #[test]

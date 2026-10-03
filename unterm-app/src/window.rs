@@ -856,8 +856,8 @@ pub struct App {
     visual_bell: crate::terminal::VisualBell,
     /// The config's `default_cwd`, when nothing else names a directory.
     config_default_cwd: Option<std::path::PathBuf>,
-    /// `window_close_confirmation = "NeverPrompt"` turns the close
-    /// confirmation off, exactly as it always had.
+    /// `[window] close_confirmation = "NeverPrompt"` (or the older top-level
+    /// `window_close_confirmation`) turns the close confirmation off.
     close_prompts: bool,
     /// `window.decorations = true` asks for the system frame back.
     system_decorations: bool,
@@ -1572,10 +1572,12 @@ impl App {
                 .ok()
                 .flatten()
                 .map(std::path::PathBuf::from),
-            close_prompts: config
-                .str_of("window_close_confirmation")
-                .ok()
-                .flatten()
+            // `[window] close_confirmation` is the documented key, and the
+            // one the unterm.lua conversion writes; the top-level spelling is
+            // what this read alone, so both are honoured.
+            close_prompts: ["window.close_confirmation", "window_close_confirmation"]
+                .iter()
+                .find_map(|key| config.str_of(key).ok().flatten())
                 .map(|value| !value.eq_ignore_ascii_case("neverprompt"))
                 .unwrap_or(true),
             // Asked for, not assumed: the composition path has only been run

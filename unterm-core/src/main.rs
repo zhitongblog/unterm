@@ -74,6 +74,10 @@ fn main() -> Result<()> {
         eprintln!("unterm-core: config line {}: {}", error.line, error.message);
     }
     unterm_services::settings::set_current(&config);
+    // Shells are spawned here, so `path_append` and `[env]` have to be in
+    // this process's environment -- a Core started by the CLI or headless
+    // inherits nothing from any window that would otherwise have set them.
+    unterm_services::process_env::apply(&config);
     unterm_engine::next_core::NextCoreEngine::set_new_session_scrollback_lines(
         unterm_services::settings::scrollback_lines(&config),
     );
