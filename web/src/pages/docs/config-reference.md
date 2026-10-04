@@ -99,7 +99,7 @@ An unquoted word such as `font_family = Cascadia` is a parse error. The message 
 
 **Platform sections.** The format defines `[platform.windows]`, `[platform.macos]`, `[platform.linux]` and `[platform.other]`. Keys inside them are meant to apply only on that platform: the base value first, then `[platform.other]` (used only when the file has no section for the current platform), then the named platform's section. `assets/unterm.conf` uses them for `title_button.*` and the Windows `path_append`.
 
-**Caveat, current build:** the config loader (`unterm-services/src/settings.rs` `load()`) does not apply this platform logic. No production code calls `Config::resolve_platform`. A key such as `[platform.windows] path_append` is therefore stored as `platform.windows.path_append`, logged as an unknown setting, and has no effect on any platform. Until that changes, put platform-specific values in the main part of the file.
+Platform sections are folded in when the file is loaded: the section for this machine (`[platform.windows]`, `[platform.macos]` or `[platform.linux]`) applies, and `[platform.other]` applies only when the file has no section for this machine. A key set both in the main part and in the platform section takes the platform value. (Up to v0.71.17 platform sections were ignored and reported as unknown keys.)
 
 ## Top-level keys
 
@@ -122,7 +122,7 @@ An unquoted word such as `font_family = Cascadia` is a parse error. The message 
 | `audible_bell` | string | on | Whether the bell also beeps. `"Disabled"` (any case) turns the beep off, and any other string leaves it on. The value must be a string: `audible_bell = false` is ignored, so the beep stays on. The beep is the Windows system sound (`MessageBeep`). On macOS and Linux nothing is played. |
 | `status_bar` | bool | `false` | Shows a status strip below the terminal. Off by default. It is read once at startup so that the number of terminal rows does not change while running. |
 | `window_background_image` | string (file path) | none | A picture drawn behind the terminal. It is scaled to cover the window and cropped from the centre. Its opacity comes from `[window] background_opacity`. A missing or unreadable file is logged and skipped. |
-| `use_ime` | bool | — | Accepted but currently has no effect. The input method is always enabled for the window. |
+| `use_ime` | bool | — | Has no effect in Unterm; the config check logs a warning saying so and why. The input method is always enabled for the window. |
 
 ## `[colors]`
 
@@ -132,8 +132,8 @@ Colours are hex strings: `"#rrggbb"`, `"#rgb"`, or the same without `#`. A value
 |---|---|---|---|
 | `background` | colour | the theme's background (packaged copy: `"#111315"`) | The terminal background. It overrides the active theme's background even after you pick another theme. |
 | `foreground` | colour | the theme's foreground (packaged copy: `"#e8eaed"`) | The default text colour. It also overrides the theme. |
-| `tab_bar_lift` | number | — (packaged copy: `0.05`) | Accepted but currently has no effect. |
-| `inactive_dim` | number | — (packaged copy: `0.35`) | Accepted but currently has no effect. |
+| `tab_bar_lift` | number | — (packaged copy: `0.05`) | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `inactive_dim` | number | — (packaged copy: `0.35`) | Has no effect in Unterm; the config check logs a warning saying so and why. |
 
 ## `[colors.tab_bar]` and its subsections
 
@@ -144,14 +144,14 @@ These colour the title bar and tab strip. They are applied on top of the compute
 | `[colors.tab_bar]` `background` | colour | computed | The bar surface (title bar, footer, group background). Used only when `[window_frame] active_titlebar_bg` is not set. |
 | `[colors.tab_bar.active_tab]` `bg_color` | colour | computed | Background of the selected row or tab. |
 | `[colors.tab_bar.active_tab]` `fg_color` | colour | theme foreground | The bar's text colour in a focused window. Used only when `[window_frame] active_titlebar_fg` is not set. Like all chrome text colours, it applies only while no theme has been picked (see `[window_frame]`). |
-| `[colors.tab_bar.inactive_tab]` `bg_color` | colour | — | Accepted but currently has no effect. |
+| `[colors.tab_bar.inactive_tab]` `bg_color` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
 | `[colors.tab_bar.inactive_tab]` `fg_color` | colour | computed | Colour of dimmed (secondary) text in the bar. Falls back to `[window_frame] inactive_titlebar_fg`. |
 | `[colors.tab_bar.inactive_tab_hover]` `bg_color` | colour | computed | The hover background in the bar. Falls back to `[window_frame] button_hover_bg`. |
-| `[colors.tab_bar.inactive_tab_hover]` `fg_color` | colour | — | Accepted but currently has no effect. |
-| `[colors.tab_bar.new_tab]` `bg_color` | colour | — | Accepted but currently has no effect. |
-| `[colors.tab_bar.new_tab]` `fg_color` | colour | — | Accepted but currently has no effect. |
-| `[colors.tab_bar.new_tab_hover]` `bg_color` | colour | — | Accepted but currently has no effect. |
-| `[colors.tab_bar.new_tab_hover]` `fg_color` | colour | — | Accepted but currently has no effect. |
+| `[colors.tab_bar.inactive_tab_hover]` `fg_color` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `[colors.tab_bar.new_tab]` `bg_color` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `[colors.tab_bar.new_tab]` `fg_color` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `[colors.tab_bar.new_tab_hover]` `bg_color` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `[colors.tab_bar.new_tab_hover]` `fg_color` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
 
 ## `[window_frame]`
 
@@ -165,7 +165,7 @@ Title bar and window-button colours, as hex strings. These win over the matching
 | `inactive_titlebar_fg` | colour | `active_titlebar_fg` | Bar text in an unfocused window. It is also the fallback for dimmed text. |
 | `active_titlebar_border_bottom` | colour | computed | The window's outer edge line when focused. |
 | `inactive_titlebar_border_bottom` | colour | `active_titlebar_border_bottom` | The outer edge line when unfocused. |
-| `button_bg` | colour | — | Accepted but currently has no effect. |
+| `button_bg` | colour | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
 | `button_fg` | colour | style default | Glyph colour of the drawn minimise, maximise and close buttons. |
 | `button_hover_bg` | colour | style default | Hover fill of the minimise and maximise buttons (not close). It is also the fallback hover background for the bar. |
 | `button_hover_fg` | colour | `button_fg` | Button glyph colour on hover (not for the close button). |
@@ -188,14 +188,14 @@ With both durations at 0 (the default), the screen does not flash when the bell 
 |---|---|---|---|
 | `background_opacity` | number 0–1 | `0.25` (packaged copy: `1.0`) | How strongly `window_background_image` shows. The value used is capped at 0.5 so text stays readable. It has no effect without a background image and does not make the window transparent. The older top-level spelling `window_background_opacity` is also read. |
 | `backdrop` | string | off | `"mica"`, `"on"` or `"true"` (any case, written as a string) asks for the Windows 11 Mica backdrop. It applies only on Windows with DX12, with `decorations` off and no background image. It does nothing on other platforms. |
-| `decorations` | bool | `false` | `true` uses the operating system's title bar and frame. `false` lets Unterm draw its own. The packaged copy sets the string `"INTEGRATED_BUTTONS\|RESIZE"`, which is not a boolean, so it is ignored and behaves as `false`. |
+| `decorations` | bool | `false` | `true` uses the operating system's title bar and frame. `false` lets Unterm draw its own. A value that is not `true` or `false` (such as WezTerm's `"INTEGRATED_BUTTONS\|RESIZE"`) is reported by the config check and behaves as `false`. |
 | `initial_cols` | integer | `80` (packaged copy: `120`) | Columns for the first window's terminal area. Values below 1 become 1. |
 | `initial_rows` | integer | `24` (packaged copy: `30`) | Rows for the first window. Values below 1 become 1. |
 | `padding_left` | number (logical px) | `12` | Space between the window edge and the text. Negative values become 0. |
 | `padding_right` | number | `12` | Same, right side. |
 | `padding_top` | number | `8` | Same, top. |
 | `padding_bottom` | number | `8` | Same, bottom. |
-| `close_confirmation` | string | — (packaged copy: `"NeverPrompt"`) | Accepted but currently has no effect. The code reads the top-level key `window_close_confirmation` instead (see [Keys read outside the schema](#keys-read-outside-the-schema)). The unterm.lua conversion writes this key, so a converted setting also has no effect. |
+| `close_confirmation` | string | asks | `"NeverPrompt"` (any case) closes without asking. Any other value keeps the prompt shown when closing would end tabs or running programs. The older top-level `window_close_confirmation` is still read. (Up to v0.71.17 this key had no effect.) |
 
 ## `[inactive_pane]`
 
@@ -213,15 +213,15 @@ None of these keys is read by the current front end. Tab titles come from fixed 
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
-| `position` | string | — (packaged copy: `"Left"`) | Accepted but currently has no effect. |
-| `max_width` | integer | — (packaged copy: `32`) | Accepted but currently has no effect. |
-| `hide_if_only_one_tab` | bool | — | Accepted but currently has no effect. |
-| `show_index` | bool | — | Accepted but currently has no effect. |
-| `show_new_tab_button` | bool | — | Accepted but currently has no effect. |
-| `title_format` | string | — (packaged copy: `"  {title}  "`) | Accepted but currently has no effect. It is still checked: placeholders other than `{title}` and `{index}` cause a warning. |
-| `fallback_title` | string | — | Accepted but currently has no effect. |
-| `strip_extension` | bool | — | Accepted but currently has no effect. |
-| `capitalize` | bool | — | Accepted but currently has no effect. |
+| `position` | string | — (packaged copy: `"Left"`) | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `max_width` | integer | — (packaged copy: `32`) | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `hide_if_only_one_tab` | bool | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `show_index` | bool | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `show_new_tab_button` | bool | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `title_format` | string | — (packaged copy: `"  {title}  "`) | Has no effect in Unterm; the config check logs a warning saying so and why.  |
+| `fallback_title` | string | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `strip_extension` | bool | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `capitalize` | bool | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
 
 ## `[stats]`
 
@@ -258,9 +258,9 @@ None of these keys is read by the current front end. The packaged copy sets them
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
-| `style` | string | — | Accepted but currently has no effect. |
-| `alignment` | string | — | Accepted but currently has no effect. |
-| `buttons` | list of strings | — | Accepted but currently has no effect. |
+| `style` | string | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `alignment` | string | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
+| `buttons` | list of strings | — | Has no effect in Unterm; the config check logs a warning saying so and why. |
 
 ## `[env]`
 
@@ -390,4 +390,4 @@ The converted text is written to `~/.unterm/unterm.conf`. The Lua file is not ch
 
 **What is reported instead of converted:** functions (including key bindings and event handlers written as Lua callbacks), anything inside other `if`/`for`/`do` blocks, `local` variables, calls into `wezterm.*` or `require`, strings built with `..`, tables with named fields written on one line, and a key that ends up set twice (for example, by two platform branches). Re-create these by hand, using `[keys]` for bindings and `[env]` for `set_environment_variables`.
 
-After the conversion, check the log for unknown-setting warnings. Some converted keys, such as `[window] close_confirmation` and the `[tab_bar]` keys, are accepted but currently have no effect, as the tables above note.
+After the conversion, check the log for unknown-setting warnings. Some converted keys, such as the `[tab_bar]` keys, are accepted but have no effect in Unterm; the config check names each one with the reason.

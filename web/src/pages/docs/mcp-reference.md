@@ -7,7 +7,7 @@ date: 2026-07-20
 ---
 
 This page explains the JSON-RPC surface exposed by a running Unterm instance.
-The current native `next-core` build exposes 151 authenticated methods plus
+The current native `next-core` build exposes 152 authenticated methods plus
 `auth.login`. The authoritative inventory lives in
 `unterm-agents/src/mcp_meta.rs`, dispatch is in
 `unterm-mcp/src/handler.rs`, and the connection handshake is in
@@ -416,6 +416,28 @@ Same as `screen.read` but the rows come back as a flat `lines: string[]` instead
 **Params:** `id`/`session_id`.
 
 **Returns:** `{ lines: string[], cursor: { x, y }, cols, rows }`
+
+### `screen.images`
+
+The pictures a pane shows — kitty graphics, iTerm2 inline images (`OSC 1337 File=`) and sixel — scrollback included, top to bottom. Pixels are not returned; `capture.window` shows them.
+
+**Params:** `id`/`session_id`.
+
+**Returns:** `{ pane_id, count, images: [...], screen_top_row, rows }`. Each image:
+
+| Field | Meaning |
+|---|---|
+| `image` | The picture's name (a hash of its pixels). The same picture shown twice has the same name. |
+| `row`, `col` | Top-left cell, as an absolute row in the same numbering `screen.scrollback_text` uses. A picture with `row` below `screen_top_row` has scrolled into the history. |
+| `cols`, `rows` | Cells it covers. |
+| `width`, `height` | Its size in pixels. |
+| `source` | `[x, y, w, h]` when only part of it is shown (kitty source rectangles), else `null`. |
+| `fit` | `contain` (shape kept) or `fill` (stretched to `cols` × `rows`, when the program named both). |
+| `protocol` | `kitty`, `iterm` or `sixel`. |
+| `name` | The file name the program sent, if any. |
+| `z` | Stacking order among pictures. |
+
+See [Inline images](/docs/inline-images).
 
 ### `screen.cursor`
 
@@ -1536,4 +1558,4 @@ bundles for somebody who was not there, and the process/snapshot/uninstall
 surface. See the [CLI reference](/docs/cli-reference/) for the shell-level
 versions.
 
-That's 151 authenticated methods plus `auth.login`. If you find a method in the codebase that isn't listed here, file an issue — the `MCP_METHODS` table in `unterm-agents/src/mcp_meta.rs`, exposed by `meta.surface` and dispatched in `unterm-mcp/src/handler.rs`, is the source of truth and this page should track it.
+That's 152 authenticated methods plus `auth.login`. If you find a method in the codebase that isn't listed here, file an issue — the `MCP_METHODS` table in `unterm-agents/src/mcp_meta.rs`, exposed by `meta.surface` and dispatched in `unterm-mcp/src/handler.rs`, is the source of truth and this page should track it.

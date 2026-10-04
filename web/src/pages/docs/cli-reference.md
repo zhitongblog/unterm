@@ -234,6 +234,7 @@ unterm-cli session record status [--pane-id <ID>]
 unterm-cli session export       [--pane-id <ID>] [-o FILE]
 unterm-cli session input        [--pane-id <ID>] [--stdin] [--enter] <TEXT...>
 unterm-cli session text         [--pane-id <ID>]
+unterm-cli session images       [--pane-id <ID>]
 unterm-cli session cwd          [--pane-id <ID>]
 unterm-cli session status       [--pane-id <ID>]
 unterm-cli session errors       [--pane-id <ID>]
@@ -403,6 +404,22 @@ ok
 ```sh
 $ unterm-cli session text --pane-id 0
 ```
+
+### `session images`
+
+The pictures in a pane, through MCP `screen.images`. `ROW` counts from the top of the screen; a negative row has scrolled into the history.
+
+```sh
+$ unterm-cli session images --pane-id 1
+ROW      COL   CELLS     PIXELS      PROTOCOL NAME
+-4       0     20x5      320x170     kitty    -
+2        0     13x6      208x204     sixel    -
+9        0     25x6      400x200     iterm    quad.png
+```
+
+### `imgcat`
+
+`unterm-cli imgcat <FILE>` prints a picture inline with iTerm2's `OSC 1337 File=` sequence, at its natural size or the pane's width, whichever is smaller. Unterm draws it, and so do iTerm2, WezTerm and other terminals that speak the sequence. See [Inline images](/docs/inline-images).
 
 ### `session cwd` / `status` / `errors` / `history` / `audit-log` / `search`
 

@@ -53,7 +53,7 @@ unterm
 └── PTY I/O workers owned by next-core sessions
 ```
 
-Both listeners are loopback-only. The MCP connection must call `auth.login` before any of the 151 authenticated methods. The Web application can bootstrap locally, but all `/api/*` routes require the same bearer token.
+Both listeners are loopback-only. The MCP connection must call `auth.login` before any of the 152 authenticated methods. The Web application can bootstrap locally, but all `/api/*` routes require the same bearer token.
 
 Runtime discovery is stored under `~/.unterm/`:
 
@@ -81,7 +81,7 @@ Runtime discovery is stored under `~/.unterm/`:
 | `unterm-app` | Native window, input/IME, chrome, tabs, panes, overlays, Composer, Agent Cockpit, Fleet, Review entry points, and clipboard integration. |
 | `unterm-services` | Shared product state: instance discovery, settings, i18n, proxy detection, launch environment, recording archive/redaction, capture, and cross-window messaging. |
 | `unterm-agents` | Agent hooks and the authoritative MCP metadata inventory used by `meta.surface`. |
-| `unterm-mcp` | Authenticated JSON-RPC listener and dispatch for the 151 public methods. |
+| `unterm-mcp` | Authenticated JSON-RPC listener and dispatch for the 152 public methods. |
 | `unterm-settings` | Loopback Web Settings/Review server and bundled SPA. |
 | `unterm-cli` | Human- and agent-friendly command-line client over the MCP protocol. |
 | `unterm-profile` / `unterm-proxy` | Persistent launch profiles and proxy identities applied at spawn time. |

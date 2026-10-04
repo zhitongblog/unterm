@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Doc.astro
 title: Product roadmap
-subtitle: "What is being built now, what comes after it, and what Unterm will not become. Current release: v0.71.17."
+subtitle: "What is being built now, what comes after it, and what Unterm will not become. Current release: v0.71.18."
 kicker: Docs / Product roadmap
 date: 2026-10-01
 ---
@@ -11,6 +11,16 @@ date: 2026-10-01
 Unterm is a terminal that agents can drive and that shows you what the agents inside it are doing — local-first, MCP-driven, and vendor-neutral.
 
 Most of what follows is terminal groundwork: the protocols modern command-line tools expect, and the install and update paths people expect from a daily driver. The agent surface (MCP, CLI, Agent Cockpit) already ships; see the [MCP reference](/docs/mcp-reference) and [Agent Cockpit](/docs/agent-cockpit).
+
+## Shipped in v0.71.18
+
+### Pictures
+
+- **Inline images** — the kitty graphics protocol, iTerm2's inline images (`OSC 1337 File=`, and its multipart form) and sixel. Pictures scroll with their text, stay in the scrollback, are clipped at pane edges and keep to the screen they were drawn on. Programs that ask for the cell size in pixels get the real one. Agents list them with `screen.images`. See [Inline images](/docs/inline-images).
+
+### Configuration
+
+- `[platform.*]` sections apply; `[window] close_confirmation` works; `path_append` and `[env]` reach shells a Core starts on its own; settings that do nothing are reported with the reason.
 
 ## Shipped in v0.71.17
 
@@ -34,7 +44,6 @@ Most of what follows is terminal groundwork: the protocols modern command-line t
 
 ## Later
 
-- **Inline images** — sixel, the kitty graphics protocol, and iTerm2's inline images.
 - **SSH sessions** — remote panes that Unterm knows are remote, rather than a local `ssh` process.
 - **Screen-reader accessibility.**
 
