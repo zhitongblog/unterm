@@ -14739,6 +14739,38 @@ mod palette_entry_tests {
         }
     }
 
+    /// Git Bash and each registered WSL distribution get a row of their own
+    /// when this machine has them, launched the way the row says.
+    #[cfg(windows)]
+    #[test]
+    fn the_launcher_offers_git_bash_and_each_wsl_distribution_installed() {
+        let rows: Vec<(String, String, Vec<String>)> = launcher_entries()
+            .into_iter()
+            .filter_map(|entry| match entry.command {
+                crate::palette::Command::Launch { program, args } => Some((entry.label, program, args)),
+                _ => None,
+            })
+            .collect();
+        if let Some(bash) = git_bash() {
+            let (_, program, args) = rows
+                .iter()
+                .find(|(label, ..)| label == "Git Bash")
+                .unwrap_or_else(|| panic!("{} is installed but has no row: {:?}", bash.display(), rows));
+            assert_eq!(std::path::Path::new(program), bash.as_path());
+            assert_eq!(args, &["--login"]);
+        }
+        let distributions = wsl_distributions();
+        for name in &distributions {
+            let (_, program, args) = rows
+                .iter()
+                .find(|(label, ..)| *label == format!("WSL: {name}"))
+                .unwrap_or_else(|| panic!("WSL distribution {name} has no row: {:?}", rows));
+            assert_eq!(program, "wsl.exe");
+            assert_eq!(args, &["--distribution", name.as_str(), "--cd", "~"]);
+        }
+        assert!(distributions.iter().all(|name| !name.starts_with("docker-desktop")));
+    }
+
     #[test]
     fn this_machine_has_at_least_one_shell_to_offer() {
         // An empty launcher is indistinguishable from a broken one.
