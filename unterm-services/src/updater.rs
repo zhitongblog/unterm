@@ -580,7 +580,11 @@ fn schedule_msi(
         let helper = work.join("update.ps1");
         std::fs::write(&helper, script)?;
         use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        // A console of its own that is never shown -- not DETACHED_PROCESS:
+        // powershell.exe started with no console at all exits before running
+        // a line of the script, so the MSI was downloaded and never installed
+        // (seen on Windows 11 26200; the same script ran fine by hand).
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         let mut command = std::process::Command::new("powershell.exe");
@@ -590,9 +594,9 @@ fn schedule_msi(
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
         if command.spawn().is_err() {
-            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+            command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
             command.spawn().context("start the update helper")?;
         }
         Ok(Scheduled {

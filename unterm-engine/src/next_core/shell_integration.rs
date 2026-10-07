@@ -189,8 +189,16 @@ pub(super) fn apply(command: &mut portable_pty::CommandBuilder) {
             if !args.iter().any(|arg| arg.eq_ignore_ascii_case("-noexit")) {
                 command.arg("-NoExit");
             }
+            // Read as text and run as a script block, not dot-sourced as a
+            // file: Windows' default execution policy (Restricted) refuses
+            // to run a .ps1, which printed a red UnauthorizedAccess error at
+            // the top of every new tab and left the tab unmarked. A policy
+            // is about script files; this leaves the user's policy as it is.
             command.arg("-Command");
-            command.arg(format!(". '{}'", script.display().to_string().replace('\'', "''")));
+            command.arg(format!(
+                "try {{ . ([ScriptBlock]::Create([IO.File]::ReadAllText('{}'))) }} catch {{ }}",
+                script.display().to_string().replace('\'', "''")
+            ));
         }
     }
 }
@@ -268,6 +276,26 @@ mod tests {
         assert!(argv.iter().any(|arg| arg == "--rcfile"), "{:?}", argv);
         assert_eq!(command.get_env("UNTERM_BASH_LOGIN").and_then(|v| v.to_str()), Some("1"));
         assert_eq!(command.get_env("KEEP_ME").and_then(|v| v.to_str()), Some("1"));
+    }
+
+    /// PowerShell gets the script as text, never `. 'file.ps1'`: the default
+    /// execution policy on Windows refuses script files.
+    #[test]
+    fn powershell_loads_the_script_whatever_the_execution_policy() {
+        let mut command = portable_pty::CommandBuilder::new("powershell.exe");
+        command.arg("-NoLogo");
+        apply(&mut command);
+        let argv: Vec<String> = command
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&argv[..3], ["powershell.exe", "-NoLogo", "-NoExit"], "{:?}", argv);
+        assert_eq!(argv[3], "-Command");
+        let load = &argv[4];
+        assert!(load.starts_with("try { . ([ScriptBlock]::Create([IO.File]::ReadAllText('"), "{}", load);
+        assert!(load.contains("unterm.ps1"), "{}", load);
+        assert!(!load.starts_with(". '"), "{}", load);
     }
 
     #[test]

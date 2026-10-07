@@ -5,9 +5,17 @@ if (-not $global:__UntermIntegration) {
     $global:__UntermOriginalPrompt = $function:prompt
     $global:__UntermFirstPrompt = $true
 
+    $global:__UntermLastError = if ($global:Error.Count) { $global:Error[0] } else { $null }
+
     function global:prompt {
         $ok = $?
-        $code = if ($ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }
+        # A cmdlet that failed left a new error record; a program that failed
+        # left only its exit code. $LASTEXITCODE alone would be a stale one
+        # from some earlier program whenever a cmdlet fails.
+        $newest = if ($global:Error.Count) { $global:Error[0] } else { $null }
+        $cmdletFailed = $null -ne $newest -and -not [object]::ReferenceEquals($newest, $global:__UntermLastError)
+        $global:__UntermLastError = $newest
+        $code = if ($ok) { 0 } elseif (-not $cmdletFailed -and $global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }
         $esc = [char]27
         $bel = [char]7
         $marks = ''
@@ -25,9 +33,12 @@ if (-not $global:__UntermIntegration) {
     }
 
     # Mark where a command starts running -- only when Enter still does what
-    # PSReadLine ships with, so a user's own binding is left alone.
+    # PSReadLine ships with, so a user's own binding is left alone. `-Bound`
+    # rather than `-Chord`: Windows PowerShell 5.1 ships PSReadLine 2.0,
+    # which has no `-Chord`.
     if (Get-Module -Name PSReadLine) {
-        $enter = Get-PSReadLineKeyHandler -Chord Enter -ErrorAction SilentlyContinue | Select-Object -First 1
+        $enter = Get-PSReadLineKeyHandler -Bound -ErrorAction SilentlyContinue |
+            Where-Object { $_.Key -eq 'Enter' } | Select-Object -First 1
         if ($enter -and $enter.Function -eq 'AcceptLine') {
             Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
                 [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
