@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.71.19 — 2026-10-08
+
+### Fixed
+
+- **Windows: updates downloaded but never installed.** The helper that runs the
+  installer was started without a console and exited before running a line, so
+  the MSI sat in a temporary folder and the version never changed. It is
+  started so that it runs now. The fault is in the version doing the updating,
+  so **on Windows, install 0.71.19 by hand once** from the download page; updates
+  from 0.71.19 on install themselves.
+- **Windows: PowerShell integration failed to load** under the default
+  `Restricted` execution policy, printing a red `UnauthorizedAccess` at the top
+  of every new tab. It no longer depends on the policy, and Unterm does not
+  change yours. Windows PowerShell 5.1's own PSReadLine is supported too.
+- **Windows: the exit status of a failed cmdlet** was reported as the previous
+  program's `$LASTEXITCODE`; it is now 1.
+- **macOS: Cmd+Q quit without asking** while programs were running, ending
+  every shell and agent with it — though the window's close button asked
+  first. Cmd+Q, the Dock's Quit and an AppleScript `quit` now ask the same
+  question, also with several windows open. With nothing running it still
+  quits at once; logging out, restarting and shutting down are not held up.
+- **winget manifests** now validate (all four files on schema 1.12.0).
+
 ## v0.71.18 — 2026-10-04
 
 ### Added

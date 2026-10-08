@@ -595,5 +595,7 @@
   "home.amb": "写过关于 Unterm 的文章？",
   "home.amb_cta": "提交链接，展示在官网",
   "whatsnew.update718.title": "终端里直接显示图片",
-  "whatsnew.update718.body": "Unterm 现在能显示<strong>内嵌图片</strong>——kitty 图形协议、iTerm2 内嵌图片和 sixel，<code class=\"font-mono text-xs\">chafa</code>、<code class=\"font-mono text-xs\">img2sixel</code>、<code class=\"font-mono text-xs\">viu</code>、<code class=\"font-mono text-xs\">timg</code> 和 <code class=\"font-mono text-xs\">unterm-cli imgcat</code> 都会直接显示图片本身。图片随旁边的文字一起滚动、留在回滚历史里、在窗格边缘干净裁切，并只属于绘制它的那一屏（含备用屏）。查询像素格子大小的程序会得到真实值。Agent 可以用 <code class=\"font-mono text-xs\">screen.images</code> 列出图片。另外：配置里的 <code class=\"font-mono text-xs\">[platform.*]</code> 分段现在生效，<code class=\"font-mono text-xs\">close_confirmation</code> 可用，无效的设置会说明原因。"
+  "whatsnew.update718.body": "Unterm 现在能显示<strong>内嵌图片</strong>——kitty 图形协议、iTerm2 内嵌图片和 sixel，<code class=\"font-mono text-xs\">chafa</code>、<code class=\"font-mono text-xs\">img2sixel</code>、<code class=\"font-mono text-xs\">viu</code>、<code class=\"font-mono text-xs\">timg</code> 和 <code class=\"font-mono text-xs\">unterm-cli imgcat</code> 都会直接显示图片本身。图片随旁边的文字一起滚动、留在回滚历史里、在窗格边缘干净裁切，并只属于绘制它的那一屏（含备用屏）。查询像素格子大小的程序会得到真实值。Agent 可以用 <code class=\"font-mono text-xs\">screen.images</code> 列出图片。另外：配置里的 <code class=\"font-mono text-xs\">[platform.*]</code> 分段现在生效，<code class=\"font-mono text-xs\">close_confirmation</code> 可用，无效的设置会说明原因。",
+  "whatsnew.update719.title": "更新真的会装上，Cmd+Q 也会先问",
+  "whatsnew.update719.body": "<strong>Windows：</strong>应用内更新下载后从不安装——已修复，但缺陷在发起更新的那个版本里，所以<strong>这一次请手动安装 0.71.19</strong>，之后的更新会自己装好。PowerShell 集成在默认的 <code class=\"font-mono text-xs\">Restricted</code> 执行策略下也能加载，且不改动你的策略。<strong>macOS：</strong>Cmd+Q 不再不问就结束正在运行的 shell 和 agent——它会问和关窗一样的问题，开着几扇窗都一样。"
 }
