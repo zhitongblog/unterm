@@ -7653,6 +7653,43 @@ impl App {
             self.perform_close(CloseOutcome::EndSessions, Leaving::Process);
             return;
         }
+        self.open_close_prompt();
+    }
+
+    /// Cmd+Q, the Dock's Quit, an AppleScript `quit`: the application is
+    /// leaving, not this window.
+    ///
+    /// So unlike a close, other windows being open is no reason to skip the
+    /// question -- quitting takes their shells too. Nothing running anywhere
+    /// leaves at once, as Cmd+Q always has.
+    #[cfg(target_os = "macos")]
+    fn quit_pressed(&mut self) {
+        if self.window.state.is_none() {
+            // Parked or windowless: there is no window to ask in, and the
+            // only ways to send Cmd+Q here are the Dock and AppleScript.
+            // Leave the way `unterm-cli quit` does.
+            self.window.tray = None;
+            self.window.close_confirmed = true;
+            let outcome = match &self.engine {
+                crate::engine_backend::AppEngine::Local(_) => CloseOutcome::EndSessions,
+                crate::engine_backend::AppEngine::Core { .. } => CloseOutcome::KeepSessions,
+            };
+            self.perform_close(outcome, Leaving::Process);
+            return;
+        }
+        if self.window.close_confirmed || !self.quit_needs_confirmation() {
+            self.window.close_confirmed = true;
+            self.perform_close(CloseOutcome::EndSessions, Leaving::Process);
+            return;
+        }
+        self.open_close_prompt();
+        if let Some(live) = self.window.state.as_ref() {
+            live.window.request_redraw();
+        }
+    }
+
+    /// The question asked before leaving: what becomes of the sessions.
+    fn open_close_prompt(&mut self) {
         use unterm_services::i18n::t;
         // What is actually at stake, counted rather than implied: "2
         // agents waiting, 3 sessions running" is a sentence someone
@@ -7722,14 +7759,20 @@ impl App {
     /// Whether closing now would take something down with it: several tabs,
     /// or any pane whose foreground program is not just its own idle shell.
     fn close_needs_confirmation(&self) -> bool {
-        if !self.close_prompts {
-            return false;
-        }
         // With another window still open, closing this one closes a view.
         // Nothing has to be decided about the sessions behind it, because
         // this process is not going anywhere and neither are they -- so the
         // prompt would be asking a question that has no consequences.
         if self.window_count() > 1 {
+            return false;
+        }
+        self.quit_needs_confirmation()
+    }
+
+    /// Whether ending the whole application now would take something down
+    /// with it, in any window: several sessions, or one running a program.
+    fn quit_needs_confirmation(&self) -> bool {
+        if !self.close_prompts {
             return false;
         }
         let sessions =
@@ -7796,10 +7839,13 @@ impl App {
     /// D3 of the multi-window design: the platforms disagree and both are
     /// right. On Windows and Linux an application is its windows, so the last
     /// one closing ends it -- unless the user chose to keep the sessions
-    /// running, which is what the tray is for. On macOS an application
-    /// outlives its windows: it stays in the Dock, and Cmd+Q is what ends it.
-    /// Making one of those the rule everywhere would break the habit of
-    /// whichever platform lost.
+    /// running, which is what the tray is for. On macOS an application can
+    /// outlive its windows in the Dock.
+    ///
+    /// Only one close takes that branch on macOS: "keep running in the
+    /// background" with no menu-bar icon to park behind. Closing the last
+    /// window with nothing running still quits there too -- decided after
+    /// D3 was written, on the machine, 2026-10-08 -- and Cmd+Q asks first.
     fn last_window_close_ends_process() -> bool {
         !cfg!(target_os = "macos")
     }
@@ -7870,10 +7916,10 @@ impl App {
         if let Some(live) = self.window.state.as_ref() {
             live.window.set_visible(false);
         }
-        // macOS keeps the application when its last window goes: it stays in
-        // the Dock, and clicking it there brings a window back through
-        // `resumed`. Ending the process would make the icon lie. Everywhere
-        // else an application is its windows, so this goes on to exit.
+        // macOS can keep the application when its last window goes: it
+        // stays in the Dock, and clicking it there brings a window back
+        // through the wake latch. Only "keep running" without a menu-bar
+        // icon comes here asking for that; everything else goes on to exit.
         if close_leaves_process_running(
             leaving,
             outcome,
@@ -7957,6 +8003,14 @@ impl App {
         if let Some(live) = self.window.state.take() {
             live.window.set_visible(false);
             drop(live);
+        }
+        // Closing a window only reaches the prompt as the last one, but
+        // Cmd+Q reaches it with others still up. They go too: their sessions
+        // stay with the Core, and the window that comes back adopts them.
+        for mut parked in self.parked.drain(..) {
+            if let Some(live) = parked.state.state.take() {
+                live.window.set_visible(false);
+            }
         }
         crate::tray::set_dock_visible(false);
         log::info!(
@@ -12796,6 +12850,10 @@ impl ApplicationHandler for App {
                 crate::engine_backend::AppEngine::Core { .. } => CloseOutcome::KeepSessions,
             };
             self.perform_close(outcome, Leaving::Process);
+        }
+        #[cfg(target_os = "macos")]
+        if !self.window.closing && crate::macos_open::take_quit_request() {
+            self.quit_pressed();
         }
         if self.window.closing {
             // The close button was pressed. There is no native title bar to

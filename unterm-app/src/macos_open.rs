@@ -12,6 +12,7 @@
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{class, msg_send, sel};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static PENDING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
@@ -69,6 +70,50 @@ extern "C" fn open_urls(_this: *mut AnyObject, _cmd: Sel, _app: *mut AnyObject, 
             crate::tray::request_wake();
         }
     }
+}
+
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether Cmd+Q (or the Dock's Quit) has asked since the last look.
+pub fn take_quit_request() -> bool {
+    QUIT_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
+/// Cmd+Q, the Dock's Quit, an AppleScript `quit`: AppKit asking whether it
+/// may end the application now.
+///
+/// Without this, winit's delegate let every one of them through at once --
+/// the Core stopped and every shell and agent in it went with it, unasked,
+/// while the red button on the same window asked first. The answer here is
+/// "not yet": the event loop gets the request and puts it through the same
+/// prompt a close does, and leaves by itself if nothing is at stake.
+///
+/// A log out, restart or shutdown is let through. Cancelling one would make
+/// macOS report that Unterm interrupted it, and the user would have to start
+/// over for a prompt they cannot answer from the login window anyway.
+extern "C" fn should_terminate(_this: *mut AnyObject, _cmd: Sel, _app: *mut AnyObject) -> usize {
+    const TERMINATE_CANCEL: usize = 0;
+    const TERMINATE_NOW: usize = 1;
+    // `'why?'`, kAEQuitReason: present only when the system is the one
+    // quitting us (log out, restart, shutdown).
+    const QUIT_REASON: u32 = u32::from_be_bytes(*b"why?");
+    // SAFETY: called by AppKit on the main thread; we only read the Apple
+    // event being handled, if there is one.
+    let system_quit = unsafe {
+        let manager: *mut AnyObject =
+            msg_send![class!(NSAppleEventManager), sharedAppleEventManager];
+        let event: *mut AnyObject = msg_send![manager, currentAppleEvent];
+        !event.is_null() && {
+            let reason: *mut AnyObject =
+                msg_send![event, attributeDescriptorForKeyword: QUIT_REASON];
+            !reason.is_null()
+        }
+    };
+    if system_quit {
+        return TERMINATE_NOW;
+    }
+    QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    TERMINATE_CANCEL
 }
 
 /// The Dock, Finder or Spotlight asking an already-running Unterm for a
@@ -279,6 +324,19 @@ pub fn install() {
         );
         if !reopened.as_bool() {
             log::warn!("could not add reopen handler (already present?)");
+        }
+        let terminate_types = std::ffi::CString::new("Q@:@").unwrap();
+        let terminating = objc2::ffi::class_addMethod(
+            class as *const _ as *mut _,
+            sel!(applicationShouldTerminate:),
+            std::mem::transmute::<
+                extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) -> usize,
+                unsafe extern "C-unwind" fn(),
+            >(should_terminate),
+            terminate_types.as_ptr(),
+        );
+        if !terminating.as_bool() {
+            log::warn!("could not add the quit handler (already present?); Cmd+Q will not ask");
         }
         // The Info.plist has promised "New Unterm Tab Here" / "New Unterm
         // Window Here" in the Services menu since v0.40; nothing ever

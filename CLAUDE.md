@@ -61,7 +61,9 @@ escape-parser / bidi）。上游 MIT，义务跟随代码来源而非 crate 命�
   退出（D2）。
 
 设计与逐条验收：`docs/plans/2026-08-20-single-process-multi-window-design.md`。
-其中 **macOS 的 D3 退出分支代码写了但没在真机跑过**，崩溃隔离也没验。
+macOS 的 D3 与崩溃隔离已于 2026-10-08 真机验收（见该文档第 8 节）：
+关最后一扇空闲窗口在 macOS 上也是退出（改拍板，不留 Dock）；Cmd+Q 有程序
+在跑时要确认，多扇窗也问。
 
 ## 无头
 
