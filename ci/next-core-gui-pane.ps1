@@ -1061,10 +1061,12 @@ $Suites = @(
         Package = "unterm-app"
         Filter = "window::palette_entry_tests::"
         # 7 since the "share a post you wrote" entry opens the ambassador page
-        # in the UI's language.
-        ExpectedCount = 7
+        # in the UI's language; 8 here, because this gate runs on Windows and
+        # the Git Bash / WSL row test is Windows-only.
+        ExpectedCount = 8
         RequiredTests = @(
             "window::palette_entry_tests::the_ambassador_page_opens_in_the_ui_language",
+            "window::palette_entry_tests::the_launcher_offers_git_bash_and_each_wsl_distribution_installed",
             "window::palette_entry_tests::the_palette_lists_what_the_keys_do",
             "window::palette_entry_tests::the_launcher_offers_only_shells_that_exist",
             "window::palette_entry_tests::this_machine_has_at_least_one_shell_to_offer"
