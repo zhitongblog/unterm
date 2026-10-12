@@ -964,17 +964,35 @@ fn push_cursor(
         return None;
     }
 
+    // Shapes as the escape sequences name them, falling back to what the
+    // config asked for. An unknown shape draws a block rather than nothing: a
+    // missing cursor is worse than an unexpected one.
+    let named = if cursor.shape.trim().is_empty() {
+        match style.shape {
+            CursorShape::Bar => "Bar",
+            CursorShape::Underline => "Underline",
+            CursorShape::Block => "Block",
+        }
+    } else {
+        cursor.shape.as_str()
+    };
+    let is_bar = named.contains("Bar");
+
     // A wide character owns two columns and its cursor must own both: a
     // one-cell block on a hanzi reads as a cursor wedged against half the
     // glyph. A cursor reported on the continuation cell snaps back to the
     // lead so the block covers the character rather than its tail.
+    // For a bar cursor (|), the bar sits between characters, so it must
+    // draw at the exact column requested and never snap back.
     let mut x = cursor.x;
     let mut cells_wide = 1;
-    if let Some(line) = snapshot.lines.get(row) {
-        if x > 0 && line.cells.get(x).map_or(false, |cell| cell.width == 0) {
-            x -= 1;
+    if !is_bar {
+        if let Some(line) = snapshot.lines.get(row) {
+            if x > 0 && line.cells.get(x).map_or(false, |cell| cell.width == 0) {
+                x -= 1;
+            }
+            cells_wide = line.cells.get(x).map_or(1, |cell| cell.width.max(1));
         }
-        cells_wide = line.cells.get(x).map_or(1, |cell| cell.width.max(1));
     }
     let left = origin.0 + x as f32 * metrics.width;
     let top = origin.1 + row as f32 * metrics.height;
@@ -996,18 +1014,6 @@ fn push_cursor(
         return None;
     }
 
-    // Shapes as the escape sequences name them, falling back to what the
-    // config asked for. An unknown shape draws a block rather than nothing: a
-    // missing cursor is worse than an unexpected one.
-    let named = if cursor.shape.trim().is_empty() {
-        match style.shape {
-            CursorShape::Bar => "Bar",
-            CursorShape::Underline => "Underline",
-            CursorShape::Block => "Block",
-        }
-    } else {
-        cursor.shape.as_str()
-    };
     let quad = match named {
         shape if shape.contains("Bar") => Quad {
             left,
@@ -1783,6 +1789,37 @@ mod tests {
             .glyphs
             .iter()
             .all(|glyph| glyph.quad.color == colors.foreground));
+    }
+
+    #[test]
+    fn a_bar_cursor_on_wide_character_continuation_cell_draws_at_cursor_column() {
+        let Some(mut font) = font() else {
+            return;
+        };
+        let mut atlas = GlyphAtlas::new(256, 256);
+        let colors = FrameColors {
+            foreground: [1.0; 4],
+            background: [0.0, 0.0, 0.0, 1.0],
+            palette: &unterm_render::quads::DEFAULT_PALETTE,
+        };
+        let metrics = font.metrics();
+
+        // "你abc": "你" is wide (width 2, cols 0 and 1).
+        // A bar cursor at x = 1 (continuation cell) should be drawn at column 1,
+        // not snapped back to column 0.
+        let quads = frame_quads(
+            &snapshot_with_cursor("你abc", 1, 0, true, "SteadyBar"),
+            &mut font,
+            &mut atlas,
+            colors,
+        );
+
+        let cursor = quads
+            .backgrounds
+            .iter()
+            .find(|quad| quad.color == colors.foreground)
+            .expect("a bar cursor should be drawn");
+        assert_eq!(cursor.left, metrics.width);
     }
 
     #[test]
