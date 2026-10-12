@@ -864,6 +864,15 @@ impl NextCoreScreen {
         self.mark_dirty_row(old_y);
     }
 
+    fn line_feed(&mut self) {
+        let old_y = self.cursor_y;
+        if !self.synchronized_output {
+            self.cursor_x = 0;
+        }
+        self.index();
+        self.mark_dirty_row(old_y);
+    }
+
     fn index(&mut self) {
         let old_y = self.cursor_y;
         if self.cursor_y == self.scroll_bottom {
@@ -7732,6 +7741,27 @@ mod tests {
         assert!(!screen.synchronized_output);
         screen.feed("\x1b[?2026h\x1b[!p");
         assert!(!screen.synchronized_output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn screen_buffer_preserves_cursor_column_on_linefeed_during_synchronized_output() -> Result<()> {
+        let _guard = test_guard();
+        let _runtime_guard = reset_state_for_test();
+        let mut screen = NextCoreScreen::new(80, 24);
+
+        // Simulate ConPTY spinner update during synchronized output:
+        // Position at (10, 1), write prompt, enter synchronized output, move to col 0,
+        // up 2 rows, draw 2-col spinner ("* "), down 2 rows via \n\n, move right 6 cols via \x1b[6C.
+        // When \n preserves column during ?2026, 2 + 6 = 8.
+        screen.feed("\x1b[10;1H> hello\x1b[?2026h\r\x1b[2A* \n\n\x1b[6C\x1b[?2026l");
+        assert_eq!(screen.cursor_x, 8);
+
+        // Also test CBT (\x1b[Z) after down 2 rows:
+        // 12 columns text, down 2 rows via \n\n, \x1b[Z back-tabs from 12 to 8.
+        screen.feed("\x1b[?2026h\r\x1b[2A123456789012\n\n\x1b[Z\x1b[?2026l");
+        assert_eq!(screen.cursor_x, 8);
 
         Ok(())
     }

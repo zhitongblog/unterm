@@ -33,7 +33,7 @@ impl TerminalParser {
                 '\u{009b}' => self.state = ParserState::Csi(String::new()),
                 '\u{009d}' => self.state = ParserState::Osc(String::new()),
                 '\r' => screen.carriage_return(),
-                '\n' | '\x0b' | '\x0c' => screen.newline(),
+                '\n' | '\x0b' | '\x0c' => screen.line_feed(),
                 '\x07' => screen.ring_bell(),
                 '\x08' => screen.backspace(),
                 '\t' => screen.horizontal_tab(),
