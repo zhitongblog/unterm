@@ -596,5 +596,7 @@
   "whatsnew.update718.title": "終端機裡直接顯示圖片",
   "whatsnew.update718.body": "Unterm 現在能顯示<strong>內嵌圖片</strong>——kitty 圖形協定、iTerm2 內嵌圖片和 sixel，<code class=\"font-mono text-xs\">chafa</code>、<code class=\"font-mono text-xs\">img2sixel</code>、<code class=\"font-mono text-xs\">viu</code>、<code class=\"font-mono text-xs\">timg</code> 和 <code class=\"font-mono text-xs\">unterm-cli imgcat</code> 都會直接顯示圖片本身。圖片隨旁邊的文字一起捲動、留在回捲歷史裡、在窗格邊緣乾淨裁切，並只屬於繪製它的那一屏（含備用屏）。查詢像素格子大小的程式會得到真實值。Agent 可以用 <code class=\"font-mono text-xs\">screen.images</code> 列出圖片。另外：設定裡的 <code class=\"font-mono text-xs\">[platform.*]</code> 分段現在生效，<code class=\"font-mono text-xs\">close_confirmation</code> 可用，無效的設定會說明原因。",
   "whatsnew.update719.title": "更新真的會裝上，Cmd+Q 也會先問",
-  "whatsnew.update719.body": "<strong>Windows：</strong>應用內更新下載後從不安裝——已修正，但缺陷在發起更新的那個版本裡，所以<strong>這一次請手動安裝 0.71.19</strong>，之後的更新會自己裝好。PowerShell 整合在預設的 <code class=\"font-mono text-xs\">Restricted</code> 執行原則下也能載入，且不更動你的原則。<strong>macOS：</strong>Cmd+Q 不再不問就結束正在執行的 shell 和 agent——它會問和關閉視窗一樣的問題，開著幾個視窗都一樣。"
+  "whatsnew.update719.body": "<strong>Windows：</strong>應用內更新下載後從不安裝——已修正，但缺陷在發起更新的那個版本裡，所以<strong>這一次請手動安裝 0.71.19</strong>，之後的更新會自己裝好。PowerShell 整合在預設的 <code class=\"font-mono text-xs\">Restricted</code> 執行原則下也能載入，且不更動你的原則。<strong>macOS：</strong>Cmd+Q 不再不問就結束正在執行的 shell 和 agent——它會問和關閉視窗一樣的問題，開著幾個視窗都一樣。",
+  "whatsnew.update720.title": "修復 agy 輸入框與游標亂跳，MSI 支援同版本覆蓋",
+  "whatsnew.update720.body": "<strong>Antigravity (agy)：</strong>徹底修復終端機內輸入框亂跑和游標錯位——同步輸出模式下換行保留游標欄座標、寬字元上的豎線游標不再錯誤前跳、並對 agy 停用 Shell 幽靈預測文字以防覆蓋輸入框。側邊欄與狀態列已正式識別 agy。<strong>Windows：</strong>Win11 (22621+) 啟用 ConPTY 直通模式，避免 TUI 渲染被轉譯雜訊干擾；MSI 安裝包支援同版本覆蓋安裝。"
 }

@@ -110,9 +110,12 @@ pub(super) fn prepare_command(
 /// already present wins, so a launch that inherited a real `TERM`, or
 /// was handed one explicitly, keeps it.
 pub(crate) fn ensure_term_env(command: &mut portable_pty::CommandBuilder) {
-    let present = |key: &str| command.get_env(key).map_or(false, |value| !value.is_empty());
-    let needs_term = !present("TERM");
-    let needs_colorterm = !present("COLORTERM");
+    let needs_term = command
+        .get_env("TERM")
+        .map_or(true, |value| value.is_empty() || value == "dumb");
+    let needs_colorterm = command
+        .get_env("COLORTERM")
+        .map_or(true, |value| value.is_empty());
     if needs_term {
         command.env("TERM", "xterm-256color");
     }
@@ -344,6 +347,17 @@ mod tests {
     fn an_empty_term_is_treated_as_absent() {
         let mut command = portable_pty::CommandBuilder::new_default_prog();
         command.env("TERM", "");
+        ensure_term_env(&mut command);
+        assert_eq!(
+            command.get_env("TERM").and_then(|value| value.to_str()),
+            Some("xterm-256color")
+        );
+    }
+
+    #[test]
+    fn a_dumb_term_is_treated_as_absent() {
+        let mut command = portable_pty::CommandBuilder::new_default_prog();
+        command.env("TERM", "dumb");
         ensure_term_env(&mut command);
         assert_eq!(
             command.get_env("TERM").and_then(|value| value.to_str()),

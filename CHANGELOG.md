@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.71.20 — 2026-10-13
+
+### Fixed
+
+- **Antigravity (`agy`): cursor jumping and input box dislocation.** When
+  interactive TUI programs update spinners or status lines in synchronized output
+  mode (`CSI ? 2026 h/l`), linefeed (`\n`) now preserves the active cursor column
+  instead of resetting to column 0.
+- **Bar cursor on wide character continuation cells** no longer snaps back to
+  the lead cell, drawing at the exact boundary between characters.
+- **Ghost text auto-prediction** is automatically disabled when running `agy` or
+  `antigravity` so predictive gray text does not overwrite or disrupt the agent's
+  prompt box.
+- **Agent detection:** `agy` and `antigravity` are now recognized as first-class
+  agents in the sidebar and status bar.
+- **Windows: ConPTY passthrough mode** is now attempted first on Windows 11
+  (Build 22621+), eliminating translation artifacts and flicker for complex
+  TUIs like Charm/Bubble Tea.
+- **Windows: MSI same-version upgrades.** The MSI installer now enables
+  `AllowSameVersionUpgrades="yes"` to allow reinstalling or updating builds with
+  the same version number.
+- **Environment: `TERM=dumb` fallback correction.** If Unterm inherits `TERM=dumb`
+  from an IDE, agent runner, or background process, it automatically corrects it
+  to `xterm-256color` and `COLORTERM=truecolor` so interactive CLI tools don't
+  degrade to dumb terminal mode.
+
 ## v0.71.19 — 2026-10-08
 
 ### Fixed
