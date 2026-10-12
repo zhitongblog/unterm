@@ -326,7 +326,7 @@ impl NextCoreScreen {
     ///
     /// A program that turns `?2026` on and dies -- or simply forgets -- must
     /// not freeze the pane. Other terminals pick the same order of magnitude.
-    const SYNCHRONIZED_HOLD: std::time::Duration = std::time::Duration::from_millis(150);
+    const SYNCHRONIZED_HOLD: std::time::Duration = std::time::Duration::from_millis(350);
 
     /// `CSI ? 2026 h/l`.
     fn set_synchronized_output(&mut self, enabled: bool) {

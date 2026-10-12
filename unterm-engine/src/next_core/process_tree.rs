@@ -178,6 +178,7 @@ fn detect_known_agent_name(name: &str) -> Option<&'static str> {
         "trae" | "trae-cli" | "trae_agent" | "trae-agent" => Some("trae"),
         "zcode" | "z-code" | "z code" => Some("zcode"),
         "cursor-agent" | "cursoragent" => Some("cursor-agent"),
+        "agy" | "antigravity" => Some("antigravity"),
         _ => None,
     }
 }
@@ -359,5 +360,12 @@ mod tests {
         assert_eq!(snapshot.foreground_process, "codex");
         assert_eq!(snapshot.detected_agent.as_deref(), Some("codex"));
         assert_eq!(snapshot.child_count, 0);
+    }
+
+    #[test]
+    fn fallback_reports_antigravity_agent() {
+        let snapshot = snapshot(None, "agy.exe").expect("fallback snapshot");
+        assert_eq!(snapshot.foreground_process, "agy.exe");
+        assert_eq!(snapshot.detected_agent.as_deref(), Some("antigravity"));
     }
 }

@@ -47,9 +47,20 @@ fn ensure_manifest_flags_loading() {
 /// process, matched against the agent manifests), so a keystroke never waits
 /// on the process table.
 pub fn pane_takes_predictions(pane_id: u64) -> bool {
-    crate::statsbar::known_facts(pane_id as usize)
-        .agent_id
-        .is_none()
+    let facts = crate::statsbar::known_facts(pane_id as usize);
+    if facts.agent_id.is_some() {
+        return false;
+    }
+    let title = facts.title.to_ascii_lowercase();
+    let proc = facts.process.to_ascii_lowercase();
+    if title.contains("agy")
+        || title.contains("antigravity")
+        || proc.contains("agy")
+        || proc.contains("antigravity")
+    {
+        return false;
+    }
+    true
 }
 
 /// Feed a key that reached the PTY to the predictor.
@@ -278,5 +289,48 @@ mod tests {
             color([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]),
             [0.52, 0.52, 0.52, 1.0]
         );
+    }
+
+    #[test]
+    fn pane_with_agy_or_antigravity_does_not_take_predictions() {
+        let pane = 910_004;
+        unterm_services::ghost_text::forget(pane);
+        crate::statsbar::forget(pane as usize);
+
+        // Default facts without agent: takes predictions
+        assert!(pane_takes_predictions(pane));
+
+        // When title indicates agy, takes_predictions must be false
+        crate::statsbar::set_facts_for_test(
+            pane as usize,
+            crate::statsbar::Facts {
+                title: "agy".into(),
+                ..Default::default()
+            },
+        );
+        assert!(!pane_takes_predictions(pane));
+
+        // When process indicates agy.exe, takes_predictions must be false
+        crate::statsbar::set_facts_for_test(
+            pane as usize,
+            crate::statsbar::Facts {
+                process: "agy.exe".into(),
+                ..Default::default()
+            },
+        );
+        assert!(!pane_takes_predictions(pane));
+
+        // When agent_id indicates antigravity, takes_predictions must be false
+        crate::statsbar::set_facts_for_test(
+            pane as usize,
+            crate::statsbar::Facts {
+                agent_id: Some("antigravity".into()),
+                ..Default::default()
+            },
+        );
+        assert!(!pane_takes_predictions(pane));
+
+        crate::statsbar::forget(pane as usize);
+        unterm_services::ghost_text::forget(pane);
     }
 }

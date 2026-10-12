@@ -236,6 +236,13 @@ pub fn forget(pane_id: usize) {
     facts_cache().lock().remove(&pane_id);
 }
 
+#[cfg(test)]
+pub fn set_facts_for_test(pane_id: usize, facts: Facts) {
+    facts_cache()
+        .lock()
+        .insert(pane_id, (std::time::Instant::now(), facts));
+}
+
 fn command_stem(command: &str) -> String {
     command
         .trim()
@@ -269,7 +276,7 @@ fn manifest_agent_for_process(process: &unterm_engine::ProcessTreeSnapshot) -> O
     static MANIFEST_COMMANDS: std::sync::OnceLock<Vec<(String, String)>> =
         std::sync::OnceLock::new();
     let manifests = MANIFEST_COMMANDS.get_or_init(|| {
-        unterm_agents::fetch_manifests_offline()
+        let mut list: Vec<(String, String)> = unterm_agents::fetch_manifests_offline()
             .map(|set| {
                 set.envelope
                     .manifests
@@ -280,7 +287,13 @@ fn manifest_agent_for_process(process: &unterm_engine::ProcessTreeSnapshot) -> O
                     })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        for (cmd, id) in [("agy", "antigravity"), ("antigravity", "antigravity")] {
+            if !list.iter().any(|(c, _)| c == cmd) {
+                list.push((cmd.to_string(), id.to_string()));
+            }
+        }
+        list
     });
     manifest_agent_match(
         std::iter::once(process.foreground_process.as_str())

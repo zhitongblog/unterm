@@ -28,7 +28,6 @@ pub const PSUEDOCONSOLE_INHERIT_CURSOR: DWORD = 0x1;
 pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x2;
 #[allow(dead_code)]
 pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x4;
-#[allow(dead_code)]
 pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
 
 shared_library!(ConPtyFuncs,
@@ -82,15 +81,32 @@ impl Drop for PsuedoCon {
 impl PsuedoCon {
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
-        let result = unsafe {
+        // Attempt passthrough mode first (Windows 11 Build 22621+), which allows
+        // differential rendering escape sequences from TUI engines (e.g. Bubble Tea / Charm)
+        // to stream directly to the terminal emulator without ConPTY buffer-translation artifacts.
+        let mut result = unsafe {
             (CONPTY.CreatePseudoConsole)(
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
-                PSUEDOCONSOLE_INHERIT_CURSOR | PSEUDOCONSOLE_RESIZE_QUIRK,
+                PSUEDOCONSOLE_INHERIT_CURSOR
+                    | PSEUDOCONSOLE_RESIZE_QUIRK
+                    | PSEUDOCONSOLE_PASSTHROUGH_MODE,
                 &mut con,
             )
         };
+        // Fall back to standard flags if passthrough mode is unsupported on this Windows build.
+        if result != S_OK {
+            result = unsafe {
+                (CONPTY.CreatePseudoConsole)(
+                    size,
+                    input.as_raw_handle() as _,
+                    output.as_raw_handle() as _,
+                    PSUEDOCONSOLE_INHERIT_CURSOR | PSEUDOCONSOLE_RESIZE_QUIRK,
+                    &mut con,
+                )
+            };
+        }
         ensure!(
             result == S_OK,
             "failed to create psuedo console: HRESULT {}",
