@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$ListOnly
 )
 
@@ -8,7 +8,7 @@ $CiDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $CiDir "..")
 
 $TestFilter = "screen_buffer_"
-$ExpectedCount = 114
+$ExpectedCount = 115
 $RequiredTests = @(
     "next_core::tests::screen_buffer_tracks_wide_character_cells",
     "next_core::tests::screen_buffer_preserves_combining_marks_on_base_cells",
