@@ -23,7 +23,7 @@
          blank. Afterwards, the old product's removal only drops its reference
          to components the new one shares (every GUID below is fixed), so it
          deletes nothing the new version installed. -->
-    <MajorUpgrade
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
       Schedule="afterInstallExecute"
       DowngradeErrorMessage="A newer version of Unterm is already installed." />
     <!-- Force every file in the package onto disk, whatever is there already.
@@ -263,3 +263,4 @@
     <?endif?>
   </Package>
 </Wix>
+
