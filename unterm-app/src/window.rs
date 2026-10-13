@@ -965,6 +965,7 @@ impl WindowState {
             startup_terminal_content_marked: false,
             preedit: crate::ime::Preedit::default(),
             last_ime_event: None,
+            last_ime_commit: None,
             search: None,
             bells_seen: 0,
             bell_at: None,
@@ -1184,6 +1185,9 @@ struct WindowState {
     /// quiet is an orphan; one that talked milliseconds ago is live, and
     /// winit hands us KeyboardInput alongside Ime events either way.
     last_ime_event: Option<std::time::Instant>,
+    /// When an IME commit last occurred. Used to suppress spurious
+    /// confirmation keys (Space, Enter, Tab, candidate digits) leaked by winit.
+    last_ime_commit: Option<std::time::Instant>,
     /// The open search, if there is one.
     search: Option<crate::search::Search>,
     /// How many bells the pane had rung when we last drew.
@@ -11843,6 +11847,7 @@ impl ApplicationHandler for App {
                     }
                     Ime::Commit(text) => {
                         self.window.preedit = crate::ime::Preedit::default();
+                        self.window.last_ime_commit = Some(std::time::Instant::now());
                         // A palette/search owns committed IME text while it is
                         // open.  Only an unclaimed commit belongs to the PTY.
                         if self.commit_ime_to_modal(&text) {
@@ -11913,6 +11918,31 @@ impl ApplicationHandler for App {
                 // this gate shut.
                 if !self.window.preedit.is_empty() {
                     return;
+                }
+
+                // When an IME composition commits, Windows (via winit) sends
+                // Ime::Commit(text) followed immediately by the KeyboardInput
+                // event of the key that triggered the commit (Space, Enter,
+                // Tab, candidate selection digits '1'..='9', etc.).
+                // If forwarded to the shell or PTY, this spurious keystroke
+                // introduces stray spaces (e.g. "过程 "), unwanted newlines
+                // that tear input lines and misplace the cursor, or trailing digits.
+                // Swallow any confirmation key that arrives within 100ms of an IME commit.
+                if let Some(commit_time) = self.window.last_ime_commit {
+                    if commit_time.elapsed() < std::time::Duration::from_millis(100) {
+                        if matches!(
+                            &event.logical_key,
+                            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Process)
+                        ) {
+                            return;
+                        }
+                        if is_ime_commit_confirmation_key(&event.logical_key, event.text.as_deref()) {
+                            self.window.last_ime_commit = None;
+                            return;
+                        }
+                    } else {
+                        self.window.last_ime_commit = None;
+                    }
                 }
 
                 use winit::keyboard::Key;
@@ -15084,3 +15114,58 @@ mod idle_cost_tests {
         assert!(super::MAX_GPU_VIEW_DESCRIPTORS < wgpu::Limits::default().max_non_sampler_bindings);
     }
 }
+
+pub(crate) fn is_ime_commit_confirmation_key(
+    logical_key: &winit::keyboard::Key,
+    text: Option<&str>,
+) -> bool {
+    use winit::keyboard::{Key, NamedKey};
+    let logical_matched = match logical_key {
+        Key::Named(NamedKey::Space | NamedKey::Enter | NamedKey::Tab) => true,
+        Key::Character(s) => {
+            s == " "
+                || s == "\r"
+                || s == "\n"
+                || (s.len() == 1
+                    && s.chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_digit()))
+        }
+        _ => false,
+    };
+    logical_matched || text.map_or(false, |t| t == " " || t == "\r" || t == "\n")
+}
+
+#[cfg(test)]
+mod ime_tests {
+    use super::*;
+    use winit::keyboard::{Key, NamedKey};
+
+    #[test]
+    fn ime_confirmation_keys_are_recognized() {
+        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::Space), None));
+        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::Enter), None));
+        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::Tab), None));
+        assert!(is_ime_commit_confirmation_key(&Key::Character(" ".into()), None));
+        assert!(is_ime_commit_confirmation_key(&Key::Character("\r".into()), None));
+        assert!(is_ime_commit_confirmation_key(&Key::Character("\n".into()), None));
+        for digit in 0..=9 {
+            assert!(is_ime_commit_confirmation_key(
+                &Key::Character(digit.to_string().into()),
+                None
+            ));
+        }
+        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::ArrowDown), Some(" ")));
+    }
+
+    #[test]
+    fn regular_keys_are_not_mistaken_for_ime_confirmation() {
+        assert!(!is_ime_commit_confirmation_key(&Key::Named(NamedKey::ArrowLeft), None));
+        assert!(!is_ime_commit_confirmation_key(&Key::Named(NamedKey::Escape), None));
+        assert!(!is_ime_commit_confirmation_key(&Key::Named(NamedKey::Backspace), None));
+        assert!(!is_ime_commit_confirmation_key(&Key::Character("a".into()), Some("a")));
+        assert!(!is_ime_commit_confirmation_key(&Key::Character("z".into()), Some("z")));
+        assert!(!is_ime_commit_confirmation_key(&Key::Character("中".into()), Some("中")));
+    }
+}
+

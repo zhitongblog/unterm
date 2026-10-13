@@ -1,6 +1,6 @@
 [package]
 name = "unterm-settings"
-version = "0.71.20"
+version = "0.71.21"
 edition = "2021"
 publish = false
 

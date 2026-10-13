@@ -1816,6 +1816,7 @@ impl NextCoreScreen {
                 self.lines.remove(bottom + 1);
             }
         }
+        self.cursor_x = self.active_left_margin();
     }
 
     fn delete_lines(&mut self, count: usize) {
@@ -1842,6 +1843,7 @@ impl NextCoreScreen {
                 self.lines.truncate(self.rows);
             }
         }
+        self.cursor_x = self.active_left_margin();
         self.ensure_cursor_line();
     }
 
@@ -8499,6 +8501,32 @@ mod tests {
         assert_eq!(screen.cursor.y, 2);
 
         engine.destroy_session(session.id)?;
+        Ok(())
+    }
+
+    #[test]
+    fn screen_buffer_insert_and_delete_lines_return_cursor_to_left_margin() -> Result<()> {
+        let _guard = test_guard();
+        let _runtime_guard = reset_state_for_test();
+        let mut screen = NextCoreScreen::new(80, 24);
+
+        // Move to (10, 5) - row 5, col 10
+        screen.feed("\x1b[6;11H");
+        assert_eq!(screen.cursor_x, 10);
+        assert_eq!(screen.cursor_y, 5);
+
+        // IL (Insert Line: CSI L) should move cursor to column 0
+        screen.feed("\x1b[1L");
+        assert_eq!(screen.cursor_x, 0);
+        assert_eq!(screen.cursor_y, 5);
+
+        // Move to col 15, then DL (Delete Line: CSI M) should move cursor to column 0
+        screen.feed("\x1b[15C");
+        assert_eq!(screen.cursor_x, 15);
+        screen.feed("\x1b[1M");
+        assert_eq!(screen.cursor_x, 0);
+        assert_eq!(screen.cursor_y, 5);
+
         Ok(())
     }
 
