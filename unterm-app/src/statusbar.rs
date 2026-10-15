@@ -231,7 +231,7 @@ fn tilde(path: &str) -> String {
 }
 
 /// Shorten a label to `columns`, cutting the middle.
-fn middle(text: &str, columns: usize) -> String {
+pub(crate) fn middle(text: &str, columns: usize) -> String {
     let width: usize = text.chars().map(crate::terminal::column_width).sum();
     if columns == 0 || width <= columns {
         return text.to_string();

@@ -2543,6 +2543,52 @@ impl App {
         }
         let metrics = self.window.font.metrics();
         let height = self.window.state.as_ref().map(|live| live.height).unwrap_or(600) as f32;
+
+        if !self.status_bar_enabled {
+            // Persistent status bar is disabled. If there is a transient notice,
+            // render it as an overlay toast banner at the bottom over the terminal.
+            let Some(notice) = self.active_notice() else {
+                return;
+            };
+            if notice.trim().is_empty() {
+                return;
+            }
+            let pt = self.chrome_pt();
+            let pad = (crate::ui_tokens::STATUS_BAR_VERTICAL_PADDING * pt)
+                .round()
+                .max(2.0);
+            let bar_height = (metrics.height + pad * 2.0).round().max(1.0);
+            let top = height - bar_height;
+            let left = self.dock_width(metrics);
+            let strip_width = (window_width - left).max(0.0);
+            let columns = (strip_width / metrics.width.max(1.0)).floor().max(0.0) as usize;
+            let chrome = self.chrome();
+
+            quads.backgrounds.push(unterm_render::quads::Quad {
+                left,
+                top,
+                width: strip_width,
+                height: bar_height,
+                color: chrome.surface,
+            });
+            quads.backgrounds.push(unterm_render::quads::Quad {
+                left,
+                top,
+                width: strip_width,
+                height: 1.0,
+                color: chrome.outer_edge,
+            });
+
+            let text_top = top
+                + ((bar_height - metrics.height) / 2.0
+                    + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+                    .max(0.0);
+            let pen = left + (crate::ui_tokens::CHROME_PANEL_INSET * pt).round();
+            let display_text = format!("\u{2713} {}", crate::statusbar::middle(&notice, columns.saturating_sub(4)));
+            self.append_mono(&display_text, self.window.colors.foreground, (pen, text_top), quads);
+            return;
+        }
+
         let bar_height = self.status_bar_height();
         let top = height - bar_height;
         let columns = (window_width / metrics.width.max(1.0)).floor().max(0.0) as usize;
@@ -7386,13 +7432,16 @@ impl App {
         while let Ok(result) = self.clipboard_rx.try_recv() {
             match result {
                 ClipboardResult::Read { pane_id, result } => match result {
-                    Ok(text) if !text.is_empty() => match self.engine.paste_input(pane_id, &text) {
-                        Ok(_) => self.show_notice(unterm_services::i18n::t("interaction.pasted")),
-                        Err(err) => {
-                            log::warn!("could not paste: {err:#}");
-                            self.show_notice(unterm_services::i18n::t("interaction.paste_failed"));
+                    Ok(text) if !text.is_empty() => {
+                        let _ = self.engine.scroll_viewport_to(pane_id, isize::MAX);
+                        match self.engine.paste_input(pane_id, &text) {
+                            Ok(_) => self.show_notice(unterm_services::i18n::t("interaction.pasted")),
+                            Err(err) => {
+                                log::warn!("could not paste: {err:#}");
+                                self.show_notice(unterm_services::i18n::t("interaction.paste_failed"));
+                            }
                         }
-                    },
+                    }
                     Ok(_) => {}
                     Err(err) => {
                         log::warn!("could not read the clipboard: {err}");
@@ -7428,16 +7477,29 @@ impl App {
                         ));
                     }
                 },
-                ClipboardResult::ScreenshotFinished { mode, result } => match result {
-                    Ok(path) => self.show_notice(unterm_services::i18n::t_args(
-                        "screenshot.saved",
-                        &[("mode", &mode), ("path", &path.display().to_string())],
-                    )),
-                    Err(err) => self.show_notice(unterm_services::i18n::t_args(
-                        "screenshot.failed",
-                        &[("mode", &mode), ("err", &err)],
-                    )),
-                },
+                ClipboardResult::ScreenshotFinished { mode, result } => {
+                    #[cfg(windows)]
+                    if let Some(live) = self.window.state.as_ref() {
+                        live.window.set_minimized(false);
+                        live.window.focus_window();
+                    }
+                    let pane = self.focused_session();
+                    let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
+                    self.window.drawn_revision = None;
+                    if let Some(live) = self.window.state.as_ref() {
+                        live.window.request_redraw();
+                    }
+                    match result {
+                        Ok(path) => self.show_notice(unterm_services::i18n::t_args(
+                            "screenshot.saved",
+                            &[("mode", &mode), ("path", &path.display().to_string())],
+                        )),
+                        Err(err) => self.show_notice(unterm_services::i18n::t_args(
+                            "screenshot.failed",
+                            &[("mode", &mode), ("err", &err)],
+                        )),
+                    }
+                }
                 ClipboardResult::ExportFinished(result) => match result {
                     Ok(path) => self.show_notice(unterm_services::i18n::t_args(
                         "recording.exported",
@@ -7448,13 +7510,21 @@ impl App {
                         &[("err", &err)],
                     )),
                 },
-                ClipboardResult::ScrollbackCaptured(result) => match result {
-                    Ok(path) => self.show_notice(format!("✓ {}", path.display())),
-                    Err(err) => self.show_notice(unterm_services::i18n::t_args(
-                        "scrollshot.failed",
-                        &[("err", &err)],
-                    )),
-                },
+                ClipboardResult::ScrollbackCaptured(result) => {
+                    let pane = self.focused_session();
+                    let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
+                    self.window.drawn_revision = None;
+                    if let Some(live) = self.window.state.as_ref() {
+                        live.window.request_redraw();
+                    }
+                    match result {
+                        Ok(path) => self.show_notice(format!("✓ {}", path.display())),
+                        Err(err) => self.show_notice(unterm_services::i18n::t_args(
+                            "scrollshot.failed",
+                            &[("err", &err)],
+                        )),
+                    }
+                }
             }
         }
     }
@@ -9625,6 +9695,12 @@ impl App {
             "screenshot.started",
             &[("mode", &mode)],
         ));
+        #[cfg(windows)]
+        if hide_window {
+            if let Some(live) = self.window.state.as_ref() {
+                live.window.set_minimized(true);
+            }
+        }
         let tx = self.clipboard_tx.clone();
         crate::clipboard::run(tx, move || ClipboardResult::ScreenshotFinished {
             mode,
@@ -11856,6 +11932,7 @@ impl ApplicationHandler for App {
                             }
                         } else if let Some(live) = self.window.state.as_ref() {
                             let pane = self.focused_session();
+                            let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
                             if self.engine.write_input(pane, &text).is_ok() {
                                 crate::ghost::observe_text(pane as u64, &text);
                             }
@@ -12143,6 +12220,7 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
+                    let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
                     if self.engine.write_input(pane, &text).is_ok() {
                         if crate::ghost::observe_key(
                             pane as u64,
