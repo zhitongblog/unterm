@@ -9,6 +9,7 @@ where
 {
     std::thread::spawn(move || {
         let _ = tx.send(operation());
+        crate::mcp_host::wake_loop();
     });
 }
 

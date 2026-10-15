@@ -7478,9 +7478,11 @@ impl App {
                     }
                 },
                 ClipboardResult::ScreenshotFinished { mode, result } => {
+                    self.window.occluded = false;
                     #[cfg(windows)]
                     if let Some(live) = self.window.state.as_ref() {
-                        live.window.set_minimized(false);
+                        live.window.set_visible(true);
+                        crate::win_chrome::bring_to_front(&live.window);
                         live.window.focus_window();
                     }
                     let pane = self.focused_session();
@@ -9698,7 +9700,7 @@ impl App {
         #[cfg(windows)]
         if hide_window {
             if let Some(live) = self.window.state.as_ref() {
-                live.window.set_minimized(true);
+                live.window.set_visible(false);
             }
         }
         let tx = self.clipboard_tx.clone();

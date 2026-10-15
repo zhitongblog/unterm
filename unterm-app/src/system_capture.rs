@@ -29,18 +29,57 @@ fn capture_file_name(hide_window: bool) -> String {
 }
 
 #[cfg(windows)]
+fn is_snipping_host_running() -> bool {
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::tlhelp32::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        let mut found = false;
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                if name.eq_ignore_ascii_case("ScreenClippingHost.exe") {
+                    found = true;
+                    break;
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+        found
+    }
+}
+
+#[cfg(windows)]
 pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::PathBuf> {
     use std::os::windows::process::CommandExt;
 
     let output_path = output_dir()?.join(capture_file_name(hide_window));
 
-    // Brief sleep if we minimized the window so DWM completes the animation
+    // Brief sleep if we hid the window so DWM completes the transition
     if hide_window {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
     // Get initial clipboard sequence number before triggering screenclip
-    let initial_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+    let mut last_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
 
     // Launch native Windows snipping overlay (Win+Shift+S experience)
     let mut cmd = std::process::Command::new("cmd");
@@ -52,15 +91,17 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
     }
 
     // Wait for the user to complete the snip or cancel.
-    // 25s timeout prevents hanging forever while giving plenty of time.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+    // 20s timeout prevents hanging forever while giving plenty of time.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let mut captured_image = None;
+    let mut host_seen = false;
 
     while std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(150));
 
         let current_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
-        if current_seq != initial_seq {
+        if current_seq != last_seq {
+            last_seq = current_seq;
             // Clipboard sequence number changed: check if an image is present on clipboard
             if let Ok(mut board) = arboard::Clipboard::new() {
                 if let Ok(image) = board.get_image() {
@@ -68,6 +109,25 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
                     break;
                 }
             }
+        }
+
+        // Track ScreenClippingHost lifecycle. If it appeared and has now exited,
+        // either the snip finished or user cancelled (e.g. pressed Esc).
+        let host_running = is_snipping_host_running();
+        if host_running {
+            host_seen = true;
+        } else if host_seen {
+            // Host finished or was dismissed. Give clipboard a tiny moment (150ms) to settle.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let final_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+            if final_seq != last_seq {
+                if let Ok(mut board) = arboard::Clipboard::new() {
+                    if let Ok(image) = board.get_image() {
+                        captured_image = Some(image);
+                    }
+                }
+            }
+            break;
         }
     }
 

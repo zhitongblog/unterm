@@ -89,6 +89,26 @@ mod imp {
         }
     }
 
+    pub fn bring_to_front(window: &Window) {
+        if let Some(hwnd) = hwnd(window) {
+            unsafe {
+                winuser::ShowWindow(hwnd, winuser::SW_RESTORE);
+                let fg_hwnd = winuser::GetForegroundWindow();
+                let cur_tid = winapi::um::processthreadsapi::GetCurrentThreadId();
+                let fg_tid = winuser::GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut());
+                if cur_tid != fg_tid && fg_tid != 0 {
+                    winuser::AttachThreadInput(cur_tid, fg_tid, 1);
+                    winuser::SetForegroundWindow(hwnd);
+                    winuser::BringWindowToTop(hwnd);
+                    winuser::AttachThreadInput(cur_tid, fg_tid, 0);
+                } else {
+                    winuser::SetForegroundWindow(hwnd);
+                    winuser::BringWindowToTop(hwnd);
+                }
+            }
+        }
+    }
+
     pub fn set_dark(window: &Window, dark: bool) {
         if let Some(hwnd) = hwnd(window) {
             unsafe { set_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, dark as BOOL as u32) };
@@ -369,6 +389,7 @@ mod imp {
         }
     }
     pub fn round_corners(_: &Window) {}
+    pub fn bring_to_front(_: &Window) {}
     pub fn set_dark(_: &Window, _: bool) {}
     pub fn set_border(_: &Window, _: [f32; 4]) {}
     pub fn enable_mica_alt(_: &Window) -> bool {
@@ -389,6 +410,11 @@ mod imp {
 }
 
 pub use imp::Composition;
+
+/// Bring the window to foreground and activate it.
+pub fn bring_to_front(window: &Window) {
+    imp::bring_to_front(window);
+}
 
 /// Rounded corners, as every other Windows 11 window has.
 pub fn round_corners(window: &Window) {
