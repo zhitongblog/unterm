@@ -11997,28 +11997,28 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                if matches!(
+                    &event.logical_key,
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Process)
+                ) {
+                    self.window.last_ime_commit = None;
+                    return;
+                }
+
                 // When an IME composition commits, Windows (via winit) sends
-                // Ime::Commit(text) followed immediately by the KeyboardInput
-                // event of the key that triggered the commit (Space, Enter,
-                // Tab, candidate selection digits '1'..='9', etc.).
+                // Ime::Commit(text) followed immediately in the same message batch
+                // by the physical confirmation keystroke that triggered the commit
+                // (typically Space or Enter).
                 // If forwarded to the shell or PTY, this spurious keystroke
-                // introduces stray spaces (e.g. "过程 "), unwanted newlines
-                // that tear input lines and misplace the cursor, or trailing digits.
-                // Swallow any confirmation key that arrives within 100ms of an IME commit.
-                if let Some(commit_time) = self.window.last_ime_commit {
-                    if commit_time.elapsed() < std::time::Duration::from_millis(100) {
-                        if matches!(
-                            &event.logical_key,
-                            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Process)
-                        ) {
-                            return;
-                        }
-                        if is_ime_commit_confirmation_key(&event.logical_key, event.text.as_deref()) {
-                            self.window.last_ime_commit = None;
-                            return;
-                        }
-                    } else {
-                        self.window.last_ime_commit = None;
+                // introduces stray spaces or unwanted newlines.
+                // We consume only the single immediately-following confirmation key
+                // arriving within 20ms of the commit. Normal subsequent typing,
+                // numeric keys (0..=9), and letters are NEVER swallowed.
+                if let Some(commit_time) = self.window.last_ime_commit.take() {
+                    if commit_time.elapsed() < std::time::Duration::from_millis(20)
+                        && is_ime_commit_confirmation_key(&event.logical_key, event.text.as_deref())
+                    {
+                        return;
                     }
                 }
 
@@ -15200,15 +15200,7 @@ pub(crate) fn is_ime_commit_confirmation_key(
     use winit::keyboard::{Key, NamedKey};
     let logical_matched = match logical_key {
         Key::Named(NamedKey::Space | NamedKey::Enter | NamedKey::Tab) => true,
-        Key::Character(s) => {
-            s == " "
-                || s == "\r"
-                || s == "\n"
-                || (s.len() == 1
-                    && s.chars()
-                        .next()
-                        .map_or(false, |c| c.is_ascii_digit()))
-        }
+        Key::Character(s) => s == " " || s == "\r" || s == "\n",
         _ => false,
     };
     logical_matched || text.map_or(false, |t| t == " " || t == "\r" || t == "\n")
@@ -15227,12 +15219,6 @@ mod ime_tests {
         assert!(is_ime_commit_confirmation_key(&Key::Character(" ".into()), None));
         assert!(is_ime_commit_confirmation_key(&Key::Character("\r".into()), None));
         assert!(is_ime_commit_confirmation_key(&Key::Character("\n".into()), None));
-        for digit in 0..=9 {
-            assert!(is_ime_commit_confirmation_key(
-                &Key::Character(digit.to_string().into()),
-                None
-            ));
-        }
         assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::ArrowDown), Some(" ")));
     }
 
@@ -15244,6 +15230,13 @@ mod ime_tests {
         assert!(!is_ime_commit_confirmation_key(&Key::Character("a".into()), Some("a")));
         assert!(!is_ime_commit_confirmation_key(&Key::Character("z".into()), Some("z")));
         assert!(!is_ime_commit_confirmation_key(&Key::Character("中".into()), Some("中")));
+        // Digits 0..=9 must never be swallowed as IME confirmation keys
+        for digit in 0..=9 {
+            assert!(!is_ime_commit_confirmation_key(
+                &Key::Character(digit.to_string().into()),
+                None
+            ));
+        }
     }
 }
 

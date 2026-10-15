@@ -1816,7 +1816,6 @@ impl NextCoreScreen {
                 self.lines.remove(bottom + 1);
             }
         }
-        self.cursor_x = self.active_left_margin();
     }
 
     fn delete_lines(&mut self, count: usize) {
@@ -1843,7 +1842,6 @@ impl NextCoreScreen {
                 self.lines.truncate(self.rows);
             }
         }
-        self.cursor_x = self.active_left_margin();
         self.ensure_cursor_line();
     }
 
@@ -8505,7 +8503,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_buffer_insert_and_delete_lines_return_cursor_to_left_margin() -> Result<()> {
+    fn screen_buffer_insert_and_delete_lines_preserve_cursor_column() -> Result<()> {
         let _guard = test_guard();
         let _runtime_guard = reset_state_for_test();
         let mut screen = NextCoreScreen::new(80, 24);
@@ -8515,16 +8513,16 @@ mod tests {
         assert_eq!(screen.cursor_x, 10);
         assert_eq!(screen.cursor_y, 5);
 
-        // IL (Insert Line: CSI L) should move cursor to column 0
+        // IL (Insert Line: CSI L) conforms to ECMA-48: active position is not affected
         screen.feed("\x1b[1L");
-        assert_eq!(screen.cursor_x, 0);
+        assert_eq!(screen.cursor_x, 10);
         assert_eq!(screen.cursor_y, 5);
 
-        // Move to col 15, then DL (Delete Line: CSI M) should move cursor to column 0
+        // Move right 15 columns (to col 25), then DL (Delete Line: CSI M) also preserves cursor column
         screen.feed("\x1b[15C");
-        assert_eq!(screen.cursor_x, 15);
+        assert_eq!(screen.cursor_x, 25);
         screen.feed("\x1b[1M");
-        assert_eq!(screen.cursor_x, 0);
+        assert_eq!(screen.cursor_x, 25);
         assert_eq!(screen.cursor_y, 5);
 
         Ok(())

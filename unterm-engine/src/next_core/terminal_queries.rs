@@ -163,7 +163,9 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
 
     match csi {
         "?6n" => {
-            Some(format!("\x1b[?{};{}R", screen.cursor_y + 1, screen.cursor_x + 1).into_bytes())
+            let row = (screen.cursor_y + 1).min(screen.rows);
+            let col = (screen.cursor_x + 1).min(screen.cols);
+            Some(format!("\x1b[?{row};{col}R").into_bytes())
         }
         // Image tools size their pictures from these two: the text area,
         // and one cell, in pixels.
@@ -186,7 +188,11 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
         "5n" => Some(b"\x1b[0n".to_vec()),
         // The kitty keyboard query: the flags in force, of those supported.
         "?u" => Some(format!("\x1b[?{}u", screen.kitty_keyboard_flags()).into_bytes()),
-        "6n" => Some(format!("\x1b[{};{}R", screen.cursor_y + 1, screen.cursor_x + 1).into_bytes()),
+        "6n" => {
+            let row = (screen.cursor_y + 1).min(screen.rows);
+            let col = (screen.cursor_x + 1).min(screen.cols);
+            Some(format!("\x1b[{row};{col}R").into_bytes())
+        }
         ">c" | ">0c" => Some(b"\x1b[>0;0;0c".to_vec()),
         // XTVERSION. What a program checks before relying on anything newer
         // than the DA answers can say.
