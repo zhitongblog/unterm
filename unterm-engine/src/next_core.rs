@@ -915,10 +915,14 @@ impl NextCoreScreen {
 
     fn backspace(&mut self) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = self
-            .cursor_x
-            .min(self.active_right_margin())
-            .saturating_sub(1);
+        if self.cursor_x > self.active_right_margin() {
+            self.cursor_x = self.active_right_margin();
+        } else {
+            self.cursor_x = self
+                .cursor_x
+                .saturating_sub(1)
+                .max(self.active_left_margin());
+        }
     }
 
     fn horizontal_tab(&mut self) {
@@ -9025,7 +9029,7 @@ mod inline_image_tests {
         let mut screen = NextCoreScreen::new(5, 3);
         screen.feed("ABCDE");
         assert_eq!(screen.cursor_x, 5);
-        // Backspace from pending-wrap at col 5 must land on col 3 (index of 'D'), not col 4 ('E').
+        // Backspace from pending-wrap at col 5 must land on col 4 (index of 'E'), not col 3 ('D').
         screen.feed("\x08X");
         assert_eq!(screen.snapshot_viewport_lines()[0], "ABCDX");
 
