@@ -691,16 +691,37 @@ pub fn read() -> InstanceInfo {
 
 /// Read this current process's instance file (or default if not yet written).
 pub fn read_current() -> InstanceInfo {
+    static LAST_DISK_READ: std::sync::OnceLock<Mutex<Option<(String, std::time::Instant)>>> =
+        std::sync::OnceLock::new();
     let id = match current_instance_id() {
         Some(id) => id,
         None => return InstanceInfo::default(),
     };
+    let last_read = LAST_DISK_READ.get_or_init(|| Mutex::new(None));
+    if let Some(cached) = current_info().lock().clone() {
+        if cached.id == id {
+            let fresh = last_read
+                .lock()
+                .as_ref()
+                .is_some_and(|(cached_id, at)| {
+                    cached_id == &id && at.elapsed() < std::time::Duration::from_millis(1000)
+                });
+            if fresh {
+                return cached;
+            }
+        }
+    }
     let _g = file_lock().lock();
-    fs::read_to_string(instance_file(&id))
+    let info = fs::read_to_string(instance_file(&id))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .or_else(|| current_info().lock().clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if !info.id.is_empty() {
+        *current_info().lock() = Some(info.clone());
+        *last_read.lock() = Some((id, std::time::Instant::now()));
+    }
+    info
 }
 
 /// Initial write at MCP server startup: claim a NATO name, generate

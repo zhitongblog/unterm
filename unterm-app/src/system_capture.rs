@@ -29,11 +29,17 @@ fn capture_file_name(hide_window: bool) -> String {
 }
 
 #[cfg(windows)]
-fn is_snipping_host_running() -> bool {
+fn is_snipping_overlay_active() -> bool {
+    use winapi::shared::minwindef::{BOOL, DWORD, LPARAM, TRUE};
+    use winapi::shared::windef::HWND;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
     use winapi::um::tlhelp32::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
+    };
+    use winapi::um::winuser::{
+        EnumWindows, GetForegroundWindow, GetWindowLongW, GetWindowThreadProcessId,
+        IsWindowVisible, GWL_EXSTYLE, WS_EX_TOPMOST,
     };
 
     unsafe {
@@ -44,7 +50,8 @@ fn is_snipping_host_running() -> bool {
         let mut entry: PROCESSENTRY32W = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
-        let mut found = false;
+        let mut host_running = false;
+        let mut snipping_pids: Vec<DWORD> = Vec::new();
         if Process32FirstW(snapshot, &mut entry) != 0 {
             loop {
                 let len = entry
@@ -54,8 +61,11 @@ fn is_snipping_host_running() -> bool {
                     .unwrap_or(entry.szExeFile.len());
                 let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
                 if name.eq_ignore_ascii_case("ScreenClippingHost.exe") {
-                    found = true;
+                    host_running = true;
                     break;
+                }
+                if name.eq_ignore_ascii_case("SnippingTool.exe") {
+                    snipping_pids.push(entry.th32ProcessID);
                 }
                 if Process32NextW(snapshot, &mut entry) == 0 {
                     break;
@@ -63,7 +73,52 @@ fn is_snipping_host_running() -> bool {
             }
         }
         CloseHandle(snapshot);
-        found
+
+        if host_running {
+            return true;
+        }
+        if snipping_pids.is_empty() {
+            return false;
+        }
+
+        // On Windows 11, SnippingTool.exe stays resident in the background with no
+        // visible windows when idle, and displays a foreground/topmost overlay window
+        // while `ms-screenclip:` is active.
+        let fg_hwnd = GetForegroundWindow();
+        if !fg_hwnd.is_null() {
+            let mut fg_pid: DWORD = 0;
+            GetWindowThreadProcessId(fg_hwnd, &mut fg_pid);
+            if snipping_pids.contains(&fg_pid) && IsWindowVisible(fg_hwnd) != 0 {
+                return true;
+            }
+        }
+
+        struct SearchCtx<'a> {
+            pids: &'a [DWORD],
+            active: bool,
+        }
+        unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let ctx = &mut *(lparam as *mut SearchCtx<'_>);
+            if IsWindowVisible(hwnd) != 0 {
+                let mut pid: DWORD = 0;
+                GetWindowThreadProcessId(hwnd, &mut pid);
+                if ctx.pids.contains(&pid) {
+                    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+                    if (ex_style & WS_EX_TOPMOST) != 0 {
+                        ctx.active = true;
+                        return 0;
+                    }
+                }
+            }
+            TRUE
+        }
+
+        let mut ctx = SearchCtx {
+            pids: &snipping_pids,
+            active: false,
+        };
+        EnumWindows(Some(enum_proc), &mut ctx as *mut SearchCtx<'_> as LPARAM);
+        ctx.active
     }
 }
 
@@ -73,9 +128,14 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
 
     let output_path = output_dir()?.join(capture_file_name(hide_window));
 
-    // Brief sleep if we hid the window so DWM completes the transition
+    // Brief pause if we cloaked the window so DWM composites the frame behind us
     if hide_window {
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
+
+    // Clear any stale Esc key state before launching the snipping overlay
+    unsafe {
+        let _ = winapi::um::winuser::GetAsyncKeyState(winapi::um::winuser::VK_ESCAPE);
     }
 
     // Get initial clipboard sequence number before triggering screenclip
@@ -90,19 +150,17 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
         anyhow::bail!("failed to launch ms-screenclip: {status}");
     }
 
-    // Wait for the user to complete the snip or cancel.
-    // 20s timeout prevents hanging forever while giving plenty of time.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(30);
     let mut captured_image = None;
-    let mut host_seen = false;
+    let mut overlay_seen = false;
 
     while std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(std::time::Duration::from_millis(60));
 
         let current_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
         if current_seq != last_seq {
             last_seq = current_seq;
-            // Clipboard sequence number changed: check if an image is present on clipboard
             if let Ok(mut board) = arboard::Clipboard::new() {
                 if let Ok(image) = board.get_image() {
                     captured_image = Some(image);
@@ -111,22 +169,38 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
             }
         }
 
-        // Track ScreenClippingHost lifecycle. If it appeared and has now exited,
-        // either the snip finished or user cancelled (e.g. pressed Esc).
-        let host_running = is_snipping_host_running();
-        if host_running {
-            host_seen = true;
-        } else if host_seen {
-            // Host finished or was dismissed. Give clipboard a tiny moment (150ms) to settle.
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            let final_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
-            if final_seq != last_seq {
-                if let Ok(mut board) = arboard::Clipboard::new() {
-                    if let Ok(image) = board.get_image() {
-                        captured_image = Some(image);
+        let esc_pressed = (unsafe {
+            winapi::um::winuser::GetAsyncKeyState(winapi::um::winuser::VK_ESCAPE)
+        } as u16
+            & 0x8000)
+            != 0;
+        if esc_pressed && (overlay_seen || started.elapsed() > std::time::Duration::from_millis(250))
+        {
+            break;
+        }
+
+        let active = is_snipping_overlay_active();
+        if active {
+            overlay_seen = true;
+        } else if overlay_seen {
+            // Overlay closed (either selection completed, Esc pressed, or toolbar X clicked).
+            // Poll briefly (up to 350ms) in case SnippingTool is still writing the bitmap to the clipboard.
+            for _ in 0..7 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let final_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
+                if final_seq != last_seq {
+                    last_seq = final_seq;
+                    if let Ok(mut board) = arboard::Clipboard::new() {
+                        if let Ok(image) = board.get_image() {
+                            captured_image = Some(image);
+                            break;
+                        }
                     }
                 }
             }
+            break;
+        } else if started.elapsed() > std::time::Duration::from_millis(3000) {
+            // Overlay never appeared within 3 seconds; do not leave the window cloaked.
             break;
         }
     }
@@ -139,7 +213,8 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
         image.width as u32,
         image.height as u32,
         image.bytes.into_owned(),
-    ).ok_or_else(|| anyhow::anyhow!("image dimensions mismatch"))?;
+    )
+    .ok_or_else(|| anyhow::anyhow!("image dimensions mismatch"))?;
 
     rgba.save_with_format(&output_path, image::ImageFormat::Png)?;
 

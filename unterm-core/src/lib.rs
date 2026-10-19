@@ -2817,6 +2817,8 @@ pub struct FrameCache {
 
 struct FrameCacheInner {
     frames: std::sync::RwLock<std::collections::HashMap<usize, StyledScreenSnapshot>>,
+    sessions: std::sync::RwLock<Vec<SessionSnapshot>>,
+    sessions_refreshed_at: std::sync::Mutex<Option<std::time::Instant>>,
     generation: std::sync::atomic::AtomicU64,
     stopping: AtomicBool,
     /// False once the event feed ends for a reason other than being
@@ -2857,7 +2859,37 @@ impl FrameCacheInner {
         }
     }
 
+    fn refresh_sessions(&self) {
+        if let Ok(sessions) = self.client.list_sessions() {
+            *self
+                .sessions
+                .write()
+                .expect("frame cache sessions lock poisoned") = sessions;
+            *self
+                .sessions_refreshed_at
+                .lock()
+                .expect("frame cache sessions timer lock poisoned") =
+                Some(std::time::Instant::now());
+            self.bump();
+        }
+    }
+
+    fn refresh_sessions_if_older_than(&self, max_age: Duration) {
+        let due = self
+            .sessions_refreshed_at
+            .lock()
+            .expect("frame cache sessions timer lock poisoned")
+            .map_or(true, |at| at.elapsed() >= max_age);
+        if due {
+            self.refresh_sessions();
+        }
+    }
+
     fn evict(&self, pane_id: usize) {
+        self.sessions
+            .write()
+            .expect("frame cache sessions lock poisoned")
+            .retain(|s| s.id != pane_id);
         if self
             .frames
             .write()
@@ -2890,9 +2922,18 @@ impl FrameCacheInner {
             .write()
             .expect("frame cache lock poisoned")
             .clear();
-        for session in sessions {
+        for session in &sessions {
             self.refresh(session.id);
         }
+        *self
+            .sessions
+            .write()
+            .expect("frame cache sessions lock poisoned") = sessions;
+        *self
+            .sessions_refreshed_at
+            .lock()
+            .expect("frame cache sessions timer lock poisoned") =
+            Some(std::time::Instant::now());
         self.bump();
     }
 }
@@ -2963,6 +3004,8 @@ impl FrameCache {
         events.set_read_timeout(Some(Duration::from_millis(200)))?;
         let inner = Arc::new(FrameCacheInner {
             frames: std::sync::RwLock::new(std::collections::HashMap::new()),
+            sessions: std::sync::RwLock::new(Vec::new()),
+            sessions_refreshed_at: std::sync::Mutex::new(None),
             generation: std::sync::atomic::AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             live: AtomicBool::new(true),
@@ -2971,9 +3014,18 @@ impl FrameCache {
             notify,
         });
         if let Ok(sessions) = inner.client.list_sessions() {
-            for session in sessions {
+            for session in &sessions {
                 inner.refresh(session.id);
             }
+            *inner
+                .sessions
+                .write()
+                .expect("frame cache sessions lock poisoned") = sessions;
+            *inner
+                .sessions_refreshed_at
+                .lock()
+                .expect("frame cache sessions timer lock poisoned") =
+                Some(std::time::Instant::now());
         }
         let worker_inner = inner.clone();
         let worker = std::thread::Builder::new()
@@ -2983,21 +3035,31 @@ impl FrameCache {
                     break;
                 }
                 match events.next_event() {
-                    Ok(Some(CoreEvent::SessionCreated { pane_id }))
-                    | Ok(Some(CoreEvent::ScreenUpdated { pane_id, .. })) => {
-                        worker_inner.refresh(pane_id)
+                    Ok(Some(CoreEvent::SessionCreated { pane_id })) => {
+                        worker_inner.refresh(pane_id);
+                        worker_inner.refresh_sessions();
+                    }
+                    Ok(Some(CoreEvent::ScreenUpdated { pane_id, .. })) => {
+                        worker_inner.refresh(pane_id);
+                        worker_inner.refresh_sessions_if_older_than(Duration::from_millis(400));
                     }
                     Ok(Some(CoreEvent::SessionClosed { pane_id })) => {
-                        worker_inner.evict(pane_id)
+                        worker_inner.evict(pane_id);
+                        worker_inner.refresh_sessions();
                     }
-                    Ok(Some(CoreEvent::SessionDead { .. }))
-                    | Ok(Some(CoreEvent::Draining)) => {}
+                    Ok(Some(CoreEvent::SessionDead { .. })) => {
+                        worker_inner.refresh_sessions();
+                    }
+                    Ok(Some(CoreEvent::Draining)) => {}
                     // A read timeout is the loop's own heartbeat, not
                     // a failure: it is how this thread gets to check
                     // whether it has been asked to stop. It has to be
                     // matched before the catch-all below, or an idle
                     // feed reads as a dead Core within 200ms.
-                    Err(err) if is_timeout_error(&err) => continue,
+                    Err(err) if is_timeout_error(&err) => {
+                        worker_inner.refresh_sessions_if_older_than(Duration::from_millis(800));
+                        continue;
+                    }
                     // The feed ended without being asked to. The Core
                     // is gone -- say so at once, rather than letting the
                     // last frames sit there looking like a live
@@ -3044,6 +3106,35 @@ impl FrameCache {
             .expect("frame cache lock poisoned")
             .get(&pane_id)
             .cloned()
+    }
+
+    /// Serve the cached session snapshots without blocking on an IPC RPC.
+    pub fn list_sessions(&self) -> Vec<SessionSnapshot> {
+        self.inner
+            .sessions
+            .read()
+            .expect("frame cache sessions lock poisoned")
+            .clone()
+    }
+
+    /// Immediately record a newly created/split session in the local cache so
+    /// synchronous callers on the GUI thread see it before the async event arrives.
+    pub fn upsert_session(&self, session: SessionSnapshot) {
+        let mut sessions = self
+            .inner
+            .sessions
+            .write()
+            .expect("frame cache sessions lock poisoned");
+        if let Some(existing) = sessions.iter_mut().find(|s| s.id == session.id) {
+            *existing = session;
+        } else {
+            sessions.push(session);
+        }
+    }
+
+    /// Immediately remove a destroyed session from the local cache.
+    pub fn remove_session(&self, pane_id: usize) {
+        self.inner.evict(pane_id);
     }
 
     /// Refresh one pane immediately, bypassing the event-feed cadence.

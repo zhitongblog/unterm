@@ -561,10 +561,14 @@ impl NextCoreScreen {
     }
 
     fn set_viewport_top_near(&mut self, target: isize) {
+        let before = self.viewport_start();
+        let was_pinned = self.history.viewport_is_pinned();
         self.history
             .set_viewport_top_near(target, self.rows, self.lines.len());
-        self.bump_revision();
-        self.mark_all_dirty();
+        if self.viewport_start() != before || self.history.viewport_is_pinned() != was_pinned {
+            self.bump_revision();
+            self.mark_all_dirty();
+        }
     }
 
     fn scroll_viewport_by(&mut self, delta: isize) {
@@ -874,6 +878,7 @@ impl NextCoreScreen {
     }
 
     fn index(&mut self) {
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         let old_y = self.cursor_y;
         if self.cursor_y == self.scroll_bottom {
             self.scroll_up_region(self.scroll_top, self.scroll_bottom, 1);
@@ -891,6 +896,7 @@ impl NextCoreScreen {
     }
 
     fn reverse_index(&mut self) {
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         let old_y = self.cursor_y;
         if self.cursor_y == self.scroll_top {
             self.scroll_down_region(self.scroll_top, self.scroll_bottom, 1);
@@ -909,7 +915,10 @@ impl NextCoreScreen {
 
     fn backspace(&mut self) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = self.cursor_x.saturating_sub(1);
+        self.cursor_x = self
+            .cursor_x
+            .min(self.active_right_margin())
+            .saturating_sub(1);
     }
 
     fn horizontal_tab(&mut self) {
@@ -931,6 +940,7 @@ impl NextCoreScreen {
 
     fn reverse_horizontal_tab(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         for _ in 0..count.max(1) {
             let previous = self
                 .tab_stops
@@ -1072,7 +1082,8 @@ impl NextCoreScreen {
                 .min(self.rows.saturating_sub(1))
         } else {
             row.min(self.rows.saturating_sub(1))
-        };
+        }
+        ;
         let col = if self.origin_mode && self.left_right_margin_mode {
             self.active_left_margin().saturating_add(col)
         } else {
@@ -1083,6 +1094,7 @@ impl NextCoreScreen {
 
     fn move_cursor_up(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         self.cursor_y = self
             .cursor_y
             .saturating_sub(count)
@@ -1092,6 +1104,7 @@ impl NextCoreScreen {
 
     fn move_cursor_down(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         self.cursor_y = (self.cursor_y + count).min(self.active_bottom_margin());
         self.ensure_cursor_line();
         self.mark_dirty_row(self.cursor_y);
@@ -1099,13 +1112,15 @@ impl NextCoreScreen {
 
     fn move_cursor_right(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = (self.cursor_x + count).min(self.active_right_margin());
+        self.cursor_x = (self.cursor_x.min(self.active_right_margin()) + count)
+            .min(self.active_right_margin());
     }
 
     fn move_cursor_left(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
         self.cursor_x = self
             .cursor_x
+            .min(self.active_right_margin())
             .saturating_sub(count)
             .max(self.active_left_margin());
     }
@@ -1546,13 +1561,14 @@ impl NextCoreScreen {
 
     fn erase_in_line_with_protection(&mut self, mode: usize, selective: bool) {
         self.ensure_cursor_line();
+        let col = self.cursor_x.min(self.active_right_margin());
         match mode {
             0 => {
-                let start = self.cursor_x.min(self.cols);
+                let start = col.min(self.cols);
                 self.erase_line_range(self.cursor_y, start, self.cols, selective);
             }
             1 => {
-                let end = self.cursor_x.saturating_add(1).min(self.cols);
+                let end = col.saturating_add(1).min(self.cols);
                 self.erase_line_range(self.cursor_y, 0, end, selective);
             }
             2 => {
@@ -1564,6 +1580,7 @@ impl NextCoreScreen {
 
     fn insert_chars(&mut self, count: usize) {
         self.ensure_cursor_line();
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         let left = self.cursor_x.max(self.active_left_margin());
         let right = self.active_right_margin();
         if left > right {
@@ -1589,6 +1606,7 @@ impl NextCoreScreen {
 
     fn delete_chars(&mut self, count: usize) {
         self.ensure_cursor_line();
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         let left = self.cursor_x.max(self.active_left_margin());
         let right = self.active_right_margin();
         if left > right {
@@ -1614,6 +1632,7 @@ impl NextCoreScreen {
 
     fn erase_chars(&mut self, count: usize) {
         self.ensure_cursor_line();
+        self.cursor_x = self.cursor_x.min(self.active_right_margin());
         let end = self
             .cursor_x
             .saturating_add(count.max(1))
@@ -8999,5 +9018,26 @@ mod inline_image_tests {
             super::terminal_queries::response_for_csi_for_tests("16t", &screen).unwrap(),
             b"\x1b[6;16;8t"
         );
+    }
+
+    #[test]
+    fn pending_wrap_is_canceled_by_cursor_movement_and_line_edits() {
+        let mut screen = NextCoreScreen::new(5, 3);
+        screen.feed("ABCDE");
+        assert_eq!(screen.cursor_x, 5);
+        // Backspace from pending-wrap at col 5 must land on col 3 (index of 'D'), not col 4 ('E').
+        screen.feed("\x08X");
+        assert_eq!(screen.snapshot_viewport_lines()[0], "ABCDX");
+
+        // Erase in line (ESC[K) from pending-wrap must erase the last column (col 4).
+        let mut screen2 = NextCoreScreen::new(5, 3);
+        screen2.feed("ABCDE\x1b[K");
+        assert_eq!(screen2.snapshot_viewport_lines()[0], "ABCD");
+
+        // Moving cursor down from pending-wrap must cancel pending wrap so next char does not wrap a second row.
+        let mut screen3 = NextCoreScreen::new(5, 3);
+        screen3.feed("ABCDE\x1b[BZ");
+        assert_eq!(screen3.cursor_y, 1);
+        assert_eq!(screen3.snapshot_viewport_lines()[1], "    Z");
     }
 }

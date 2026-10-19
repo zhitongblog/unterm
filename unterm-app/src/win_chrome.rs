@@ -92,7 +92,11 @@ mod imp {
     pub fn bring_to_front(window: &Window) {
         if let Some(hwnd) = hwnd(window) {
             unsafe {
-                winuser::ShowWindow(hwnd, winuser::SW_RESTORE);
+                if winuser::IsIconic(hwnd) != 0 {
+                    winuser::ShowWindow(hwnd, winuser::SW_RESTORE);
+                } else if winuser::IsWindowVisible(hwnd) == 0 {
+                    winuser::ShowWindow(hwnd, winuser::SW_SHOW);
+                }
                 let fg_hwnd = winuser::GetForegroundWindow();
                 let cur_tid = winapi::um::processthreadsapi::GetCurrentThreadId();
                 let fg_tid = winuser::GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut());
@@ -104,6 +108,28 @@ mod imp {
                 } else {
                     winuser::SetForegroundWindow(hwnd);
                     winuser::BringWindowToTop(hwnd);
+                }
+            }
+        }
+    }
+
+    pub fn set_capture_cloak(window: &Window, cloaked: bool) {
+        if let Some(hwnd) = hwnd(window) {
+            unsafe {
+                let ex_style = winuser::GetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE);
+                let flags = (winuser::WS_EX_LAYERED | winuser::WS_EX_TRANSPARENT) as isize;
+                if cloaked {
+                    winuser::SetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE, ex_style | flags);
+                    winuser::SetLayeredWindowAttributes(hwnd, 0, 0, winuser::LWA_ALPHA);
+                } else {
+                    winuser::SetLayeredWindowAttributes(hwnd, 0, 255, winuser::LWA_ALPHA);
+                    winuser::SetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE, ex_style & !flags);
+                    winuser::RedrawWindow(
+                        hwnd,
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                        winuser::RDW_INVALIDATE | winuser::RDW_UPDATENOW | winuser::RDW_FRAME,
+                    );
                 }
             }
         }
@@ -390,6 +416,7 @@ mod imp {
     }
     pub fn round_corners(_: &Window) {}
     pub fn bring_to_front(_: &Window) {}
+    pub fn set_capture_cloak(_: &Window, _: bool) {}
     pub fn set_dark(_: &Window, _: bool) {}
     pub fn set_border(_: &Window, _: [f32; 4]) {}
     pub fn enable_mica_alt(_: &Window) -> bool {
@@ -414,6 +441,12 @@ pub use imp::Composition;
 /// Bring the window to foreground and activate it.
 pub fn bring_to_front(window: &Window) {
     imp::bring_to_front(window);
+}
+
+/// Make the window transparent and click-through while taking a hidden screenshot,
+/// without removing its taskbar icon or altering maximized geometry.
+pub fn set_capture_cloak(window: &Window, cloaked: bool) {
+    imp::set_capture_cloak(window, cloaked);
 }
 
 /// Rounded corners, as every other Windows 11 window has.

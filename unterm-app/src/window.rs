@@ -965,7 +965,6 @@ impl WindowState {
             startup_terminal_content_marked: false,
             preedit: crate::ime::Preedit::default(),
             last_ime_event: None,
-            last_ime_commit: None,
             search: None,
             bells_seen: 0,
             bell_at: None,
@@ -1185,9 +1184,6 @@ struct WindowState {
     /// quiet is an orphan; one that talked milliseconds ago is live, and
     /// winit hands us KeyboardInput alongside Ime events either way.
     last_ime_event: Option<std::time::Instant>,
-    /// When an IME commit last occurred. Used to suppress spurious
-    /// confirmation keys (Space, Enter, Tab, candidate digits) leaked by winit.
-    last_ime_commit: Option<std::time::Instant>,
     /// The open search, if there is one.
     search: Option<crate::search::Search>,
     /// How many bells the pane had rung when we last drew.
@@ -7481,7 +7477,7 @@ impl App {
                     self.window.occluded = false;
                     #[cfg(windows)]
                     if let Some(live) = self.window.state.as_ref() {
-                        live.window.set_visible(true);
+                        crate::win_chrome::set_capture_cloak(&live.window, false);
                         crate::win_chrome::bring_to_front(&live.window);
                         live.window.focus_window();
                     }
@@ -9700,7 +9696,7 @@ impl App {
         #[cfg(windows)]
         if hide_window {
             if let Some(live) = self.window.state.as_ref() {
-                live.window.set_visible(false);
+                crate::win_chrome::set_capture_cloak(&live.window, true);
             }
         }
         let tx = self.clipboard_tx.clone();
@@ -11794,6 +11790,12 @@ impl ApplicationHandler for App {
 
             WindowEvent::Focused(focused) => {
                 self.window.focused = focused;
+                #[cfg(windows)]
+                if focused {
+                    if let Some(live) = self.window.state.as_ref() {
+                        crate::win_chrome::set_capture_cloak(&live.window, false);
+                    }
+                }
                 self.sync_frame();
                 // What `instance.windows` calls focused, and the window a
                 // call that names none is about. It is recorded here rather
@@ -11925,7 +11927,6 @@ impl ApplicationHandler for App {
                     }
                     Ime::Commit(text) => {
                         self.window.preedit = crate::ime::Preedit::default();
-                        self.window.last_ime_commit = Some(std::time::Instant::now());
                         // A palette/search owns committed IME text while it is
                         // open.  Only an unclaimed commit belongs to the PTY.
                         if self.commit_ime_to_modal(&text) {
@@ -11961,7 +11962,7 @@ impl ApplicationHandler for App {
                 }
             }
 
-            WindowEvent::KeyboardInput { event, .. } => {
+            WindowEvent::KeyboardInput { mut event, .. } => {
                 if event.state != ElementState::Pressed {
                     return;
                 }
@@ -12003,24 +12004,19 @@ impl ApplicationHandler for App {
                     &event.logical_key,
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::Process)
                 ) {
-                    self.window.last_ime_commit = None;
                     return;
                 }
 
-                // When an IME composition commits, Windows (via winit) sends
-                // Ime::Commit(text) followed immediately in the same message batch
-                // by the physical confirmation keystroke that triggered the commit
-                // (typically Space or Enter).
-                // If forwarded to the shell or PTY, this spurious keystroke
-                // introduces stray spaces or unwanted newlines.
-                // We consume only the single immediately-following confirmation key
-                // arriving within 20ms of the commit. Normal subsequent typing,
-                // numeric keys (0..=9), and letters are NEVER swallowed.
-                if let Some(commit_time) = self.window.last_ime_commit.take() {
-                    if commit_time.elapsed() < std::time::Duration::from_millis(20)
-                        && is_ime_commit_confirmation_key(&event.logical_key, event.text.as_deref())
+                if let winit::keyboard::Key::Unidentified(winit::keyboard::NativeKey::Windows(vkey)) =
+                    event.logical_key
+                {
+                    if let Some(recovered) =
+                        recover_unidentified_windows_key(vkey, self.window.shift_held)
                     {
-                        return;
+                        if !self.window.ctrl_held && !self.window.alt_held {
+                            event.text = Some(recovered.clone());
+                        }
+                        event.logical_key = winit::keyboard::Key::Character(recovered);
                     }
                 }
 
@@ -15195,50 +15191,104 @@ mod idle_cost_tests {
     }
 }
 
-pub(crate) fn is_ime_commit_confirmation_key(
-    logical_key: &winit::keyboard::Key,
-    text: Option<&str>,
-) -> bool {
-    use winit::keyboard::{Key, NamedKey};
-    let logical_matched = match logical_key {
-        Key::Named(NamedKey::Space | NamedKey::Enter | NamedKey::Tab) => true,
-        Key::Character(s) => s == " " || s == "\r" || s == "\n",
-        _ => false,
+/// Recover a character key when `winit` reports `Key::Unidentified(NativeKey::Windows(vkey))`.
+///
+/// In `winit-0.30.13`, `TranslateMessage(&msg)` posts `WM_CHAR` to the back of the
+/// thread message queue, and `DispatchMessageW(&msg)` immediately runs `WM_KEYDOWN`
+/// handling which peeks `WM_KEYFIRST..=WM_KEYLAST`. If a `WM_KEYUP` or another
+/// `WM_KEYDOWN` was already queued ahead of the newly posted `WM_CHAR` (common during
+/// fast typing or after a frame draw), `winit` fails to associate the `WM_CHAR` with
+/// the `WM_KEYDOWN`, emits `Key::Unidentified(NativeKey::Windows(vkey))`, and later
+/// discards the orphaned `WM_CHAR`.
+///
+/// By peeking specifically `WM_CHAR..=WM_CHAR` with `PM_REMOVE` when `Unidentified`
+/// arrives, we skip any intervening `WM_KEYUP`/`WM_KEYDOWN` and recover the exact
+/// `WM_CHAR` that `TranslateMessage` just posted for this keystroke.
+pub(crate) fn recover_unidentified_windows_key(
+    vkey: u16,
+    shift_held: bool,
+) -> Option<winit::keyboard::SmolStr> {
+    #[cfg(windows)]
+    {
+        use winapi::um::winuser::{MSG, PM_REMOVE, PeekMessageW, WM_CHAR};
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            if PeekMessageW(&mut msg, std::ptr::null_mut(), WM_CHAR, WM_CHAR, PM_REMOVE) != 0 {
+                let unit = msg.wParam as u16;
+                let ch: Option<char> = if (0xD800..=0xDBFF).contains(&unit) {
+                    let mut low_msg: MSG = std::mem::zeroed();
+                    if PeekMessageW(
+                        &mut low_msg,
+                        std::ptr::null_mut(),
+                        WM_CHAR,
+                        WM_CHAR,
+                        PM_REMOVE,
+                    ) != 0
+                    {
+                        let low = low_msg.wParam as u16;
+                        std::char::decode_utf16([unit, low])
+                            .next()
+                            .and_then(|r| r.ok())
+                    } else {
+                        None
+                    }
+                } else {
+                    char::from_u32(unit as u32)
+                };
+                if let Some(c) = ch {
+                    if !c.is_control() {
+                        let mut buf = [0u8; 4];
+                        return Some(winit::keyboard::SmolStr::from(c.encode_utf8(&mut buf)));
+                    }
+                }
+            }
+        }
+    }
+    fallback_ascii_for_windows_vkey(vkey, shift_held)
+}
+
+pub(crate) fn fallback_ascii_for_windows_vkey(
+    vkey: u16,
+    shift_held: bool,
+) -> Option<winit::keyboard::SmolStr> {
+    let ch = match vkey {
+        0x41..=0x5A => {
+            if shift_held {
+                vkey as u8 as char
+            } else {
+                (vkey as u8).to_ascii_lowercase() as char
+            }
+        }
+        0x30..=0x39 if !shift_held => vkey as u8 as char,
+        _ => return None,
     };
-    logical_matched || text.map_or(false, |t| t == " " || t == "\r" || t == "\n")
+    let mut buf = [0u8; 4];
+    Some(winit::keyboard::SmolStr::from(ch.encode_utf8(&mut buf)))
 }
 
 #[cfg(test)]
 mod ime_tests {
     use super::*;
-    use winit::keyboard::{Key, NamedKey};
 
     #[test]
-    fn ime_confirmation_keys_are_recognized() {
-        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::Space), None));
-        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::Enter), None));
-        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::Tab), None));
-        assert!(is_ime_commit_confirmation_key(&Key::Character(" ".into()), None));
-        assert!(is_ime_commit_confirmation_key(&Key::Character("\r".into()), None));
-        assert!(is_ime_commit_confirmation_key(&Key::Character("\n".into()), None));
-        assert!(is_ime_commit_confirmation_key(&Key::Named(NamedKey::ArrowDown), Some(" ")));
-    }
-
-    #[test]
-    fn regular_keys_are_not_mistaken_for_ime_confirmation() {
-        assert!(!is_ime_commit_confirmation_key(&Key::Named(NamedKey::ArrowLeft), None));
-        assert!(!is_ime_commit_confirmation_key(&Key::Named(NamedKey::Escape), None));
-        assert!(!is_ime_commit_confirmation_key(&Key::Named(NamedKey::Backspace), None));
-        assert!(!is_ime_commit_confirmation_key(&Key::Character("a".into()), Some("a")));
-        assert!(!is_ime_commit_confirmation_key(&Key::Character("z".into()), Some("z")));
-        assert!(!is_ime_commit_confirmation_key(&Key::Character("中".into()), Some("中")));
-        // Digits 0..=9 must never be swallowed as IME confirmation keys
-        for digit in 0..=9 {
-            assert!(!is_ime_commit_confirmation_key(
-                &Key::Character(digit.to_string().into()),
-                None
-            ));
-        }
+    fn unidentified_windows_vkey_recovers_ascii_letters_and_digits() {
+        assert_eq!(
+            fallback_ascii_for_windows_vkey(0x41, false).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            fallback_ascii_for_windows_vkey(0x41, true).as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            fallback_ascii_for_windows_vkey(0x5A, false).as_deref(),
+            Some("z")
+        );
+        assert_eq!(
+            fallback_ascii_for_windows_vkey(0x35, false).as_deref(),
+            Some("5")
+        );
+        assert_eq!(fallback_ascii_for_windows_vkey(0x35, true), None);
+        assert_eq!(fallback_ascii_for_windows_vkey(0x70, false), None); // F1
     }
 }
-

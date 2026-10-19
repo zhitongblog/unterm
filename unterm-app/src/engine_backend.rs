@@ -487,7 +487,23 @@ impl AppEngine {
     }
 
     pub fn scroll_viewport_to(&self, pane_id: usize, target: isize) -> Result<()> {
-        route!(self, engine => engine.scroll_viewport_to(pane_id, target))
+        match self {
+            Self::Local(engine) => engine.scroll_viewport_to(pane_id, target),
+            Self::Core { client, cache } => {
+                if target == isize::MAX {
+                    if let Some(screen) = cache.styled_screen(pane_id) {
+                        let at_bottom = screen
+                            .lines
+                            .first()
+                            .map_or(true, |line| line.row >= screen.scrollback_rows as i64);
+                        if at_bottom {
+                            return Ok(());
+                        }
+                    }
+                }
+                client.scroll_viewport_to(pane_id, target)
+            }
+        }
     }
 
     pub fn scroll_viewport_by(&self, pane_id: usize, delta: isize) -> Result<()> {
@@ -505,7 +521,10 @@ impl AppEngine {
 
 impl SessionEngine for AppEngine {
     fn list_sessions(&self) -> Result<Vec<SessionSnapshot>> {
-        route!(self, engine => engine.list_sessions())
+        match self {
+            Self::Local(engine) => engine.list_sessions(),
+            Self::Core { cache, .. } => Ok(cache.list_sessions()),
+        }
     }
 
     fn get_session(&self, pane_id: usize) -> Result<SessionSnapshot> {
@@ -513,11 +532,25 @@ impl SessionEngine for AppEngine {
     }
 
     fn create_session(&self, request: CreateSessionRequest) -> Result<SessionSnapshot> {
-        route!(self, engine => engine.create_session(request))
+        match self {
+            Self::Local(engine) => engine.create_session(request),
+            Self::Core { client, cache } => {
+                let session = client.create_session(request)?;
+                cache.upsert_session(session.clone());
+                Ok(session)
+            }
+        }
     }
 
     fn split_session(&self, request: SplitSessionRequest) -> Result<SessionSnapshot> {
-        route!(self, engine => engine.split_session(request))
+        match self {
+            Self::Local(engine) => engine.split_session(request),
+            Self::Core { client, cache } => {
+                let session = client.split_session(request)?;
+                cache.upsert_session(session.clone());
+                Ok(session)
+            }
+        }
     }
 
     fn focus_session(&self, pane_id: usize) -> Result<()> {
@@ -541,7 +574,14 @@ impl SessionEngine for AppEngine {
     }
 
     fn destroy_session(&self, pane_id: usize) -> Result<()> {
-        route!(self, engine => engine.destroy_session(pane_id))
+        match self {
+            Self::Local(engine) => engine.destroy_session(pane_id),
+            Self::Core { client, cache } => {
+                let res = client.destroy_session(pane_id);
+                cache.remove_session(pane_id);
+                res
+            }
+        }
     }
 
     fn set_terminal_colors(

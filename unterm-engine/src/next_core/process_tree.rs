@@ -41,11 +41,35 @@ pub(super) fn resolve_cwd(
     // outright. The pane's own shell is also the honest answer to "which
     // directory is this pane in" -- a long-running foreground program does
     // not move the shell.
-    let probed = root_pid
-        .and_then(LocalProcessInfo::current_working_dir)
+    let probed = root_pid.and_then(probed_cwd_cached);
+    choose_cwd(reported, probed, existing)
+}
+
+fn probed_cwd_cached(pid: u32) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    static CACHE: OnceLock<Mutex<HashMap<u32, (Instant, Option<String>)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let now = Instant::now();
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, value)) = guard.get(&pid) {
+            if now.duration_since(*at) < Duration::from_millis(1000) {
+                return value.clone();
+            }
+        }
+    }
+    let probed = LocalProcessInfo::current_working_dir(pid)
         .as_deref()
         .and_then(path_to_non_empty_string);
-    choose_cwd(reported, probed, existing)
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() > 256 {
+            guard.retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(30));
+        }
+        guard.insert(pid, (now, probed.clone()));
+    }
+    probed
 }
 
 /// Keep the last known directory when nothing can be read now, rather than
