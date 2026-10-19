@@ -598,5 +598,7 @@
   "whatsnew.update719.title": "업데이트가 제대로 설치되고, Cmd+Q는 먼저 묻습니다",
   "whatsnew.update719.body": "<strong>Windows:</strong> 앱 내 업데이트가 내려받기만 되고 설치되지 않던 문제를 고쳤습니다. 다만 원인이 업데이트를 수행하는 버전 쪽에 있어 <strong>이번 한 번은 0.71.19를 직접 설치</strong>해야 하며, 이후 업데이트는 알아서 설치됩니다. PowerShell 통합은 기본 <code class=\"font-mono text-xs\">Restricted</code> 실행 정책에서도 로드되며 정책을 바꾸지 않습니다. <strong>macOS:</strong> Cmd+Q가 더 이상 묻지 않고 실행 중인 셸과 agent를 끝내지 않습니다. 창을 닫을 때와 같은 질문을, 창이 몇 개 열려 있든 묻습니다.",
   "whatsnew.update720.title": "agy 입력창 및 커서 안정화, MSI 동일 버전 업그레이드 지원",
-  "whatsnew.update720.body": "<strong>Antigravity (agy):</strong> TUI 렌더링 중 입력창 튀김 및 커서 위치 오류 수정——동기화 출력 모드에서 줄바꿈 시 커서 열 위치를 보존하고, 전각 문자 위의 바 커서가 뒤로 밀리지 않도록 개선했으며, agy 실행 중 셸 고스트 텍스트 예측을 비활성화했습니다. <strong>Windows:</strong> Win11 (22621+) ConPTY 패스스루 모드를 적용하고 MSI 동일 버전 덮어쓰기 설치를 지원합니다."
+  "whatsnew.update720.body": "<strong>Antigravity (agy):</strong> TUI 렌더링 중 입력창 튀김 및 커서 위치 오류 수정——동기화 출력 모드에서 줄바꿈 시 커서 열 위치를 보존하고, 전각 문자 위의 바 커서가 뒤로 밀리지 않도록 개선했으며, agy 실행 중 셸 고스트 텍스트 예측을 비활성화했습니다. <strong>Windows:</strong> Win11 (22621+) ConPTY 패스스루 모드를 적용하고 MSI 동일 버전 덮어쓰기 설치를 지원합니다.",
+  "whatsnew.update721.title": "입력 유실 및 GUI 멈춤 해결, 행 편집 및 Win11 캡처 복원 수정",
+  "whatsnew.update721.body": "<strong>입력 및 키:</strong> Windows 메시지 큐에서 유실된 WM_CHAR 키를 정확히 복구하고 대체 키를 적용하여 빠른 타이핑 및 IME 커밋 시 글자 유실을 완전히 해결했습니다. <strong>GUI 및 성능:</strong> 세션 목록 조회를 락프리 로컬 캐시로 전환하여 GUI 스레드의 동기 블록 멈춤을 제거했습니다. Win11 화면 캡처는 DWM Cloak을 사용하여 창 멈춤을 방지합니다. <strong>터미널 및 ECMA-48:</strong> ECMA-48 규격에 따라 행 삽입/삭제 시 커서 열을 유지하고, DSR 보고서 경계를 제한하며, 행 끝 pending-wrap 백스페이스 건너뛰기 결함을 수정했습니다."
 }

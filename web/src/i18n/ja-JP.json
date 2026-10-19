@@ -598,5 +598,7 @@
   "whatsnew.update719.title": "更新が確実に入り、Cmd+Q は確認してから",
   "whatsnew.update719.body": "<strong>Windows：</strong>アプリ内更新がダウンロードされても一度もインストールされなかった問題を修正。ただし原因は更新を行う側のバージョンにあるため、<strong>今回だけ 0.71.19 を手動でインストール</strong>してください。以降の更新は自動で入ります。PowerShell 統合は既定の <code class=\"font-mono text-xs\">Restricted</code> 実行ポリシーでも読み込まれ、ポリシーは変更しません。<strong>macOS：</strong>Cmd+Q で実行中のシェルや agent が確認なしに終了することはなくなりました。ウィンドウを閉じるときと同じ確認を、ウィンドウがいくつ開いていても表示します。",
   "whatsnew.update720.title": "agy の入力欄とカーソルの安定化、MSI 同一バージョン上書き",
-  "whatsnew.update720.body": "<strong>Antigravity (agy)：</strong>TUI 描画時の入力欄の乱れとカーソル位置のずれを修正——同期出力時の改行でカーソル列を保持し、全角文字上のバーカーソルが後退しないよう改善、agy 実行時はゴースト予測入力を無効化してプロンプトの競合を防止。サイドバー等で agy を認識。<strong>Windows：</strong>Win11 (22621+) で ConPTY パススルーを有効化し、MSI インストーラーの同一バージョン上書きに対応。"
+  "whatsnew.update720.body": "<strong>Antigravity (agy)：</strong>TUI 描画時の入力欄の乱れとカーソル位置のずれを修正——同期出力時の改行でカーソル列を保持し、全角文字上のバーカーソルが後退しないよう改善、agy 実行時はゴースト予測入力を無効化してプロンプトの競合を防止。サイドバー等で agy を認識。<strong>Windows：</strong>Win11 (22621+) で ConPTY パススルーを有効化し、MSI インストーラーの同一バージョン上書きに対応。",
+  "whatsnew.update721.title": "入力文字落ちとGUIフリーズを根絶、行編集とWin11キャプチャを修正",
+  "whatsnew.update721.body": "<strong>入力とキー：</strong>Windowsメッセージキューの孤立WM_CHAR回収とフォールバックを導入し、高速タイピングやIME確定時の文字落ちを根絶しました。<strong>GUIとパフォーマンス：</strong>セッション一覧をロックフリーなローカルキャッシュから取得するようにし、高頻度操作時のGUIスレッドの同期ブロックを解消。Win11スクリーンショットはDWM Cloakを採用しフリーズを防止。<strong>ターミナルとECMA-48：</strong>行挿入/削除時のカーソル列保持、DSR座標報告の境界制限、行末pending-wrapのバックスペース不具合を修正しました。"
 }

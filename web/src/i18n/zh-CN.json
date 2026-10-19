@@ -599,5 +599,7 @@
   "whatsnew.update719.title": "更新真的会装上，Cmd+Q 也会先问",
   "whatsnew.update719.body": "<strong>Windows：</strong>应用内更新下载后从不安装——已修复，但缺陷在发起更新的那个版本里，所以<strong>这一次请手动安装 0.71.19</strong>，之后的更新会自己装好。PowerShell 集成在默认的 <code class=\"font-mono text-xs\">Restricted</code> 执行策略下也能加载，且不改动你的策略。<strong>macOS：</strong>Cmd+Q 不再不问就结束正在运行的 shell 和 agent——它会问和关窗一样的问题，开着几扇窗都一样。",
   "whatsnew.update720.title": "修复 agy 输入框与光标乱跳，MSI 支持同版本覆盖",
-  "whatsnew.update720.body": "<strong>Antigravity (agy)：</strong>彻底修复终端内输入框乱跑和光标错位——同步输出模式下换行保留光标列坐标、宽字符上的竖线光标不再错误前跳、并对 agy 禁用 Shell 幽灵预测文本以防覆盖输入框。侧边栏与状态栏已正式识别 agy。<strong>Windows：</strong>Win11 (22621+) 启用 ConPTY 直通模式，避免 TUI 渲染被转译伪影干扰；MSI 安装包支持同版本覆盖安装。"
+  "whatsnew.update720.body": "<strong>Antigravity (agy)：</strong>彻底修复终端内输入框乱跑和光标错位——同步输出模式下换行保留光标列坐标、宽字符上的竖线光标不再错误前跳、并对 agy 禁用 Shell 幽灵预测文本以防覆盖输入框。侧边栏与状态栏已正式识别 agy。<strong>Windows：</strong>Win11 (22621+) 启用 ConPTY 直通模式，避免 TUI 渲染被转译伪影干扰；MSI 安装包支持同版本覆盖安装。",
+  "whatsnew.update721.title": "根治丢字与 GUI 卡死，修复行编辑与 Win11 截屏唤醒",
+  "whatsnew.update721.body": "<strong>输入与按键：</strong>引入 Windows 消息队列孤儿字符精确恢复（WM_CHAR / 物理按键保底），彻底根治快速打字与输入法选词提交时的丢字漏键问题。<strong>界面与交互：</strong>会话列表查询切换为无锁本地缓存，消除高频交互下 GUI 线程的同步阻塞卡死；Windows 11 截屏改用 DWM 无损 Cloak 机制，杜绝窗口假死与丢失焦点。<strong>排版与 VT100：</strong>严格遵循 ECMA-48 规范保留插入/删除行时的光标列坐标，消除 TUI 局部刷新整屏错位；限制 DSR 坐标报告超界，修复行末 pending-wrap 退格跳过末字缺陷。"
 }

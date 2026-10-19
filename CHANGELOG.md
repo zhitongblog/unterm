@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.71.21 — 2026-10-19
+
+### Fixed
+
+- **Windows: GUI thread stalls during IPC calls.** Session list queries on the
+  GUI thread now read directly from a non-blocking local cache (`FrameCache`)
+  rather than round-tripping through synchronous Core IPC, eliminating intermittent
+  GUI hangs during rapid interactions or frame draws.
+- **Windows: lost keystrokes and dropped characters during fast typing or IME commits.**
+  Replaced heuristic commit-confirmation swallowing with `recover_unidentified_windows_key`.
+  When `winit` posts `WM_CHAR` behind other messages and emits `Key::Unidentified`,
+  Unterm explicitly checks for pending `WM_CHAR` messages or falls back to physical
+  ASCII keys, ensuring typed characters, digits, and shortcut keys are never eaten.
+- **Terminal: ECMA-48 line insertion and deletion column stability.** Removed
+  forced cursor column reset to 0 in `insert_lines` (`IL`) and `delete_lines` (`DL`),
+  strictly preserving the cursor column as specified by ECMA-48 and preventing
+  full-screen horizontal misalignments during partial TUI component redraws.
+- **Terminal: DSR 6n / ?6n cursor report bounds.** Clamped reported cursor
+  coordinates so they never report positions beyond active terminal screen boundaries
+  (`cols` / `rows`).
+- **Terminal: VT100 pending-wrap cancellation and backspace off-by-one.** Cursor
+  movements and line edits now properly cancel pending-wrap at the right edge without
+  skipping the last character on backspace.
+- **Windows: screen capture cloaking and reliable window wake.** Switched from
+  `set_visible(false)` to native Windows DWM window cloaking (`DWMWA_CLOAK`),
+  preventing window focus loss, disappearance, and deadlocks on Windows 11 during
+  and after screenshot capture.
+- **Performance: process tree working directory probing cache.** Added a 1-second
+  TTL cache to process tree CWD resolution, eliminating redundant, high-frequency
+  OS process queries.
+
 ## v0.71.20 — 2026-10-13
 
 ### Fixed
