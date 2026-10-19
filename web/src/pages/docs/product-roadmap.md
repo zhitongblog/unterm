@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Doc.astro
 title: Product roadmap
-subtitle: "What is being built now, what comes after it, and what Unterm will not become. Current release: v0.71.18."
+subtitle: "What is being built now, what comes after it, and what Unterm will not become. Current release: v0.71.21."
 kicker: Docs / Product roadmap
 date: 2026-10-01
 ---
