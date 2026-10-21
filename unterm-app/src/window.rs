@@ -1709,6 +1709,13 @@ impl App {
         if let Some(saved) = &self.restore {
             attributes = attributes
                 .with_inner_size(winit::dpi::PhysicalSize::new(saved.width, saved.height));
+            if saved.maximized {
+                if let Some((left, top, width, height)) = unterm_services::work_area() {
+                    attributes = attributes
+                        .with_position(winit::dpi::PhysicalPosition::new(left, top))
+                        .with_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                }
+            }
         }
         // The OS shows a window as soon as it exists. Keep the frame hidden
         // until there is a pane to render, otherwise cold starts show a blank
@@ -11770,6 +11777,7 @@ impl ApplicationHandler for App {
                 self.window.state = Some(live);
                 self.window.restore_extra_tabs_pending = true;
                 self.sync_frame();
+                self.finish_startup_session();
                 if let Some(live) = self.window.state.as_ref() {
                     live.window.request_redraw();
                 }

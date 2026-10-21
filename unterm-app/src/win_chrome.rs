@@ -116,14 +116,31 @@ mod imp {
     }
 
     pub fn set_startup_cloak(window: &Window, cloaked: bool) {
+        if cloaked {
+            let _ = window.set_cursor_hittest(false);
+        } else {
+            let _ = window.set_cursor_hittest(true);
+        }
         if let Some(hwnd) = hwnd(window) {
             unsafe {
+                let ex_style = winuser::GetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE);
+                let flags = (winuser::WS_EX_LAYERED | winuser::WS_EX_TRANSPARENT) as isize;
                 if cloaked {
+                    winuser::SetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE, ex_style | flags);
+                    winuser::SetLayeredWindowAttributes(hwnd, 0, 0, winuser::LWA_ALPHA);
                     set_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
                     set_u32(hwnd, DWMWA_CLOAK, 1);
                 } else {
+                    winuser::SetLayeredWindowAttributes(hwnd, 0, 255, winuser::LWA_ALPHA);
+                    winuser::SetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE, ex_style & !flags);
                     set_u32(hwnd, DWMWA_CLOAK, 0);
                     set_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 0);
+                    winuser::RedrawWindow(
+                        hwnd,
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                        winuser::RDW_INVALIDATE | winuser::RDW_UPDATENOW | winuser::RDW_FRAME,
+                    );
                 }
             }
         }
