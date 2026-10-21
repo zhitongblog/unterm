@@ -40,6 +40,8 @@ mod imp {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use winit::window::Window;
 
+    const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
+    const DWMWA_CLOAK: u32 = 13;
     const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
     const DWMWA_BORDER_COLOR: u32 = 34;
@@ -108,6 +110,20 @@ mod imp {
                 } else {
                     winuser::SetForegroundWindow(hwnd);
                     winuser::BringWindowToTop(hwnd);
+                }
+            }
+        }
+    }
+
+    pub fn set_startup_cloak(window: &Window, cloaked: bool) {
+        if let Some(hwnd) = hwnd(window) {
+            unsafe {
+                if cloaked {
+                    set_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
+                    set_u32(hwnd, DWMWA_CLOAK, 1);
+                } else {
+                    set_u32(hwnd, DWMWA_CLOAK, 0);
+                    set_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 0);
                 }
             }
         }
@@ -416,6 +432,7 @@ mod imp {
     }
     pub fn round_corners(_: &Window) {}
     pub fn bring_to_front(_: &Window) {}
+    pub fn set_startup_cloak(_: &Window, _: bool) {}
     pub fn set_capture_cloak(_: &Window, _: bool) {}
     pub fn set_dark(_: &Window, _: bool) {}
     pub fn set_border(_: &Window, _: [f32; 4]) {}
@@ -441,6 +458,13 @@ pub use imp::Composition;
 /// Bring the window to foreground and activate it.
 pub fn bring_to_front(window: &Window) {
     imp::bring_to_front(window);
+}
+
+/// Cloak the window in DWM during startup/creation so `winit`'s internal
+/// `ShowWindow(SW_MAXIMIZE)` / `ShowWindow(SW_SHOW)` calls never flash an
+/// unrendered black shadow frame before the first GPU frame is presented.
+pub fn set_startup_cloak(window: &Window, cloaked: bool) {
+    imp::set_startup_cloak(window, cloaked);
 }
 
 /// Make the window transparent and click-through while taking a hidden screenshot,

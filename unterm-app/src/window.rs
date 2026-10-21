@@ -1715,7 +1715,11 @@ impl App {
         // terminal while Core/GPU/session setup finishes.
         let window = Arc::new(event_loop.create_window(attributes.with_visible(false))?);
         crate::startup_trace::mark("window.created");
-        fit_to_monitor(&window);
+        crate::win_chrome::set_startup_cloak(&window, true);
+        let want_maximized = self.restore.as_ref().map(|saved| saved.maximized) == Some(true);
+        if !want_maximized {
+            fit_to_monitor(&window);
+        }
         if !self.system_decorations {
             // Ask Windows 11 for what it draws itself: the rounded corners,
             // a frame that knows it is dark, an edge in our colours, and the
@@ -1726,7 +1730,15 @@ impl App {
         // A new window, even one built for a parked state: nothing has been
         // said to the compositor about this handle yet.
         self.window.frame_sent = None;
-        if self.restore.as_ref().map(|saved| saved.maximized) == Some(true) {
+        #[cfg(windows)]
+        {
+            window.set_visible(true);
+            if want_maximized {
+                window.set_maximized(true);
+            }
+        }
+        #[cfg(not(windows))]
+        if want_maximized {
             window.set_maximized(true);
         }
         // The window knows the display's scale; the font was opened before it
@@ -1934,6 +1946,7 @@ impl App {
             }
         }
         crate::startup_trace::mark("live.configured");
+        #[cfg(not(windows))]
         live.window.set_visible(true);
         crate::startup_trace::mark("window.visible");
         Ok(live)
@@ -2226,6 +2239,7 @@ impl App {
         frame.present();
         if !self.window.startup_first_frame_marked {
             self.window.startup_first_frame_marked = true;
+            crate::win_chrome::set_startup_cloak(&live.window, false);
             crate::startup_trace::mark("first_frame.presented");
         }
         if terminal_has_content && !self.window.startup_terminal_content_marked {
@@ -5846,6 +5860,11 @@ impl App {
             Ok(live) => {
                 live.window.request_redraw();
                 self.window.state = Some(live);
+                self.sync_frame();
+                self.draw();
+                if let Some(live) = self.window.state.as_ref() {
+                    crate::win_chrome::set_startup_cloak(&live.window, false);
+                }
             }
             Err(err) => {
                 log::warn!("could not open another window: {err:#}");
@@ -8114,6 +8133,7 @@ impl App {
                 self.window.close_confirmed = false;
                 self.window.restore_extra_tabs_pending = true;
                 self.window.drawn_revision = None;
+                self.sync_frame();
                 if let Some(live) = self.window.state.as_ref() {
                     live.window.set_visible(true);
                     live.window.focus_window();
@@ -8123,6 +8143,9 @@ impl App {
                 // up would be a second, stale copy of the same report.
                 self.window.tray = None;
                 self.draw();
+                if let Some(live) = self.window.state.as_ref() {
+                    crate::win_chrome::set_startup_cloak(&live.window, false);
+                }
             }
             Err(err) => {
                 // Keep the indicator: it is the only way back, and the
@@ -11746,10 +11769,14 @@ impl ApplicationHandler for App {
             Ok(live) => {
                 self.window.state = Some(live);
                 self.window.restore_extra_tabs_pending = true;
+                self.sync_frame();
                 if let Some(live) = self.window.state.as_ref() {
                     live.window.request_redraw();
                 }
                 self.draw();
+                if let Some(live) = self.window.state.as_ref() {
+                    crate::win_chrome::set_startup_cloak(&live.window, false);
+                }
                 crate::startup_trace::mark("window.state.ready");
             }
             Err(err) => {
