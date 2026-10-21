@@ -1920,8 +1920,8 @@ impl App {
             background_size: picture.map(|image| (image.width, image.height)),
             background_opacity: picture.map(|image| image.opacity).unwrap_or(0.0),
             session_id: session.as_ref().map(|session| session.id).unwrap_or(0),
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: (window_width as u32).max(1),
+            height: (window_height as u32).max(1),
             composition: None,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             mica: false,
@@ -11564,13 +11564,14 @@ impl App {
                     .tabs
                     .tab_of_pane(session.id)
                     .or_else(|| self.window.tabs.create_tab(session.id).ok());
-                self.engine.refresh_cached_frame(session.id);
-                self.window.quiet_since = None;
-                self.window.drawn_revision = None;
                 if let Some(live) = self.window.state.as_mut() {
                     live.session_id = session.id;
                     live.window.request_redraw();
                 }
+                self.resize_panes();
+                self.engine.refresh_cached_frame(session.id);
+                self.window.quiet_since = None;
+                self.window.drawn_revision = None;
                 self.draw();
                 if !self.window.startup_input.is_empty() {
                     let input = std::mem::take(&mut self.window.startup_input);

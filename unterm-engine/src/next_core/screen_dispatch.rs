@@ -110,15 +110,16 @@ pub(super) fn read_render_frame(
                 full,
                 clear_dirty,
             } => {
-                let lines = match dirty_rows {
-                    Some(_) if full => screen.styled_viewport_lines(first_row),
-                    Some(rows) => screen.styled_viewport_dirty_lines(rows, first_row),
-                    None => Vec::new(),
+                let (lines, held_cursor) = match dirty_rows {
+                    Some(_) if full => screen.shown_viewport_lines(first_row),
+                    Some(rows) => (screen.styled_viewport_dirty_lines(rows, first_row), None),
+                    None => (Vec::new(), None),
                 };
 
+                let is_held = held_cursor.is_some();
                 let snapshot = RenderFrameSnapshot {
                     lines,
-                    cursor: screen.cursor_snapshot(),
+                    cursor: held_cursor.unwrap_or_else(|| screen.cursor_snapshot()),
                     cols: screen.cols,
                     rows: screen.rows,
                     scrollback_rows: screen.scrollback_rows(),
@@ -126,7 +127,7 @@ pub(super) fn read_render_frame(
                     dirty_rows,
                     full,
                 };
-                if clear_dirty {
+                if clear_dirty && !is_held {
                     screen.clear_dirty_rows();
                 }
                 snapshot

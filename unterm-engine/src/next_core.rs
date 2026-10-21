@@ -247,6 +247,7 @@ struct SynchronizedHold {
     since: std::time::Instant,
     cursor: CursorSnapshot,
     first_row: i64,
+    pinned: bool,
     lines: Vec<crate::StyledScreenLine>,
     images: Vec<crate::ImagePlacementSnapshot>,
 }
@@ -336,12 +337,18 @@ impl NextCoreScreen {
                 since: std::time::Instant::now(),
                 cursor: self.cursor_snapshot(),
                 first_row,
+                pinned: self.history.viewport_is_pinned(),
                 lines: self.styled_viewport_lines(first_row),
                 images: self.images.visible(first_row, self.rows),
             });
         }
         if !enabled {
+            let was_synchronized = self.synchronized_output || self.synchronized_since.is_some();
             self.synchronized_since = None;
+            if was_synchronized {
+                self.mark_all_dirty();
+                self.bump_revision();
+            }
         }
         self.synchronized_output = enabled;
     }
@@ -365,12 +372,20 @@ impl NextCoreScreen {
             .then_some(hold)
     }
 
+    fn hold_applies(&self, hold: &SynchronizedHold, first_row: i64) -> bool {
+        (!self.history.viewport_is_pinned() && !hold.pinned) || hold.first_row == first_row
+    }
+
     /// The viewport a reader is shown: the held picture mid-update, the live
     /// one otherwise. Scrolled away from where the hold began, the reader
-    /// asked for something else and gets it live.
+    /// asked for something else and gets it live; an unpinned viewport that
+    /// scrolled only because the synchronized frame itself pushed lines into
+    /// history keeps showing the held frame until `?2026l`.
     fn shown_viewport_lines(&self, first_row: i64) -> (Vec<crate::StyledScreenLine>, Option<CursorSnapshot>) {
         match self.held() {
-            Some(hold) if hold.first_row == first_row => (hold.lines.clone(), Some(hold.cursor.clone())),
+            Some(hold) if self.hold_applies(hold, first_row) => {
+                (hold.lines.clone(), Some(hold.cursor.clone()))
+            }
             _ => (self.styled_viewport_lines(first_row), None),
         }
     }
@@ -680,7 +695,7 @@ impl NextCoreScreen {
     fn shown_images(&self) -> Vec<crate::ImagePlacementSnapshot> {
         let first_row = self.viewport_first_row();
         match self.held() {
-            Some(hold) if hold.first_row == first_row => hold.images.clone(),
+            Some(hold) if self.hold_applies(hold, first_row) => hold.images.clone(),
             _ => self.images.visible(first_row, self.rows),
         }
     }
@@ -970,6 +985,10 @@ impl NextCoreScreen {
             3 => self.tab_stops.clear(),
             _ => {}
         }
+    }
+
+    fn reset_tab_stops(&mut self) {
+        self.tab_stops = Self::default_tab_stops(self.cols);
     }
 
     fn save_cursor(&mut self) {
@@ -1950,7 +1969,17 @@ impl NextCoreScreen {
         self.mark_all_dirty();
     }
 
+    fn resize_tab_stops(tab_stops: &mut BTreeSet<usize>, old_cols: usize, new_cols: usize) {
+        tab_stops.retain(|stop| *stop < new_cols);
+        for stop in (8..new_cols).step_by(8) {
+            if stop >= old_cols {
+                tab_stops.insert(stop);
+            }
+        }
+    }
+
     fn resize(&mut self, cols: usize, rows: usize) {
+        let old_cols = self.cols;
         let changed = (cols.max(1), rows.max(1)) != (self.cols, self.rows);
         self.cols = cols.max(1);
         self.rows = rows.max(1);
@@ -1961,10 +1990,11 @@ impl NextCoreScreen {
         self.history.truncate_scrollback_to_cols(self.cols);
         let cols = self.cols;
         if let Some(alternate) = self.alternate.as_mut() {
+            let old_alt_cols = alternate.cols;
             alternate.cols = cols;
             Self::truncate_lines_to_cols(&mut alternate.lines, cols);
             Self::truncate_lines_to_cols(&mut alternate.scrollback, cols);
-            alternate.tab_stops.retain(|stop| *stop < cols);
+            Self::resize_tab_stops(&mut alternate.tab_stops, old_alt_cols, cols);
             alternate.cursor_x = alternate.cursor_x.min(cols.saturating_sub(1));
             alternate.saved_cursor_x = alternate.saved_cursor_x.min(cols.saturating_sub(1));
             if changed {
@@ -1975,7 +2005,7 @@ impl NextCoreScreen {
                 alternate.right_margin = cols - 1;
             }
         }
-        self.tab_stops.retain(|stop| *stop < cols);
+        Self::resize_tab_stops(&mut self.tab_stops, old_cols, cols);
         if self.lines.len() > self.rows {
             let trim = self.lines.len() - self.rows;
             let drained = self.lines.drain(..trim).collect::<Vec<_>>();
@@ -2274,6 +2304,7 @@ impl NextCoreScreen {
 
     fn restore_main_screen(&mut self, main: ScreenState) {
         self.images.leave_alternate();
+        let old_cols = main.cols;
         self.cols = main.cols;
         self.history.replace_scrollback(main.scrollback);
         self.lines = main.lines;
@@ -2345,7 +2376,7 @@ impl NextCoreScreen {
             self.right_margin = last_col;
         }
         let cols = self.cols;
-        self.tab_stops.retain(|stop| *stop < cols);
+        Self::resize_tab_stops(&mut self.tab_stops, old_cols, cols);
         self.ensure_cursor_line();
         self.mark_all_dirty();
     }

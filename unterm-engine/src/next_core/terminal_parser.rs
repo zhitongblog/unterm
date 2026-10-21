@@ -239,6 +239,11 @@ impl TerminalParser {
                 screen.set_cursor(row, first().saturating_sub(1));
             }
             'I' => screen.cursor_forward_tab(first()),
+            'W' => {
+                if private && numbers.as_slice() == [5] {
+                    screen.reset_tab_stops();
+                }
+            }
             'g' => screen.clear_tab_stop(numbers.first().copied().unwrap_or(0)),
             'H' | 'f' => {
                 let row = numbers.first().copied().filter(|n| *n > 0).unwrap_or(1);
@@ -512,5 +517,61 @@ mod tests {
         parser.feed(&mut screen, "\x1b\\b");
 
         assert_eq!(&screen.snapshot_viewport_lines()[0][..2], "ab");
+    }
+
+    #[test]
+    fn decst8c_resets_tab_stops_to_every_eight_columns() {
+        let mut screen = NextCoreScreen::new(40, 4);
+        screen.feed("\x1b[3g");
+        assert!(screen.tab_stops.is_empty());
+
+        screen.feed("\x1b[?5W\ta");
+        assert_eq!(screen.cursor_x, 9);
+        assert_eq!(&screen.snapshot_viewport_lines()[0][..9], "        a");
+    }
+
+    #[test]
+    fn resizing_narrow_and_wide_again_restores_eight_column_tab_stops() {
+        let mut screen = NextCoreScreen::new(80, 24);
+        screen.resize(4, 24);
+        assert!(screen.tab_stops.is_empty());
+
+        screen.resize(80, 24);
+        screen.feed("\ta");
+        assert_eq!(screen.cursor_x, 9);
+        assert_eq!(&screen.snapshot_viewport_lines()[0][..9], "        a");
+    }
+
+    #[test]
+    fn synchronized_hold_survives_mid_frame_scroll_on_unpinned_viewport() {
+        let mut screen = NextCoreScreen::new(20, 3);
+        screen.feed("row0\r\nrow1\r\nrow2");
+        assert_eq!(
+            screen.snapshot_viewport_lines(),
+            vec!["row0", "row1", "row2"]
+        );
+
+        // Start a synchronized update that scrolls a line into history before
+        // `?2026l` arrives. An unpinned reader must still see the pre-update
+        // frame rather than a half-drawn mid-scroll screen.
+        screen.feed("\x1b[?2026h\r\nhalf-written");
+        let (held_lines, held_cursor) = screen.shown_viewport_lines(screen.viewport_first_row());
+        let held_text: Vec<String> = held_lines
+            .iter()
+            .map(|l| l.cells.iter().map(|c| c.ch).collect::<String>().trim_end().to_string())
+            .collect();
+        assert_eq!(held_text, vec!["row0", "row1", "row2"]);
+        assert!(held_cursor.is_some());
+
+        let rev_during_hold = screen.revision();
+        screen.feed("\x1b[?2026l");
+        assert!(screen.revision() > rev_during_hold);
+        let (live_lines, live_cursor) = screen.shown_viewport_lines(screen.viewport_first_row());
+        let live_text: Vec<String> = live_lines
+            .iter()
+            .map(|l| l.cells.iter().map(|c| c.ch).collect::<String>().trim_end().to_string())
+            .collect();
+        assert_eq!(live_text, vec!["row1", "row2", "half-written"]);
+        assert!(live_cursor.is_none());
     }
 }
