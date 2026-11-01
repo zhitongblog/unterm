@@ -5394,6 +5394,16 @@ dependencies = [
 
 [[package]]
 name = "socket2"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "socket2"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17129e116933cf371d018bb80ae557e889637989d8638274fb25622827b03881"
@@ -6209,6 +6219,7 @@ dependencies = [
  "unterm-profile",
  "unterm-protocol",
  "unterm-services",
+ "unterm-settings",
  "winapi",
 ]
 
@@ -6399,13 +6410,22 @@ name = "unterm-settings"
 version = "0.71.21"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "dirs-next",
+ "ed25519-dalek",
+ "fastrand 2.3.0",
+ "hex",
+ "hmac",
  "hostname",
  "http_req",
  "log",
+ "parking_lot",
  "serde",
  "serde_json",
+ "sha1",
+ "sha2",
+ "socket2 0.5.10",
  "tempfile",
  "unterm-agents",
  "unterm-engine",
@@ -6413,6 +6433,7 @@ dependencies = [
  "unterm-profile",
  "unterm-protocol",
  "unterm-services",
+ "uuid",
 ]
 
 [[package]]

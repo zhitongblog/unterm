@@ -33,6 +33,7 @@ toml.workspace = true
 unterm-agents.workspace = true
 unterm-profile.workspace = true
 unterm-services.workspace = true
+unterm-settings.workspace = true
 unterm-protocol.workspace = true
 
 # Asking whether a pid is still alive is a raw syscall on Unix.

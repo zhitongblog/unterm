@@ -64,6 +64,21 @@ function untermSettings() {
       newAgentInput: '',
     },
 
+    remote: {
+      loading: false,
+      enabled: false,
+      running: false,
+      port: 19880,
+      machine_id: '',
+      hostname: '',
+      fingerprint: '',
+      notice: '仅支持同一局域网（Wi-Fi / 有线）或 Tailscale 连接',
+      addresses: [],
+      selectedIp: '',
+      pairing: null,
+      devices: [],
+    },
+
     // Providers tab — capability providers Unterm can reach, backed by
     // /api/providers/*. Lazy like the others, and deliberately: listing
     // providers reads a descriptor file, but *binding* wakes somebody's
@@ -135,8 +150,13 @@ function untermSettings() {
 
     active: 'general',
     get nav() {
+      const zh = String(this.lang || '').toLowerCase().startsWith('zh');
+      const remoteLabel = this.t('web.nav.remote') === 'web.nav.remote'
+        ? (zh ? '手机远程 (Pocket)' : 'Mobile Remote')
+        : this.t('web.nav.remote');
       return [
         { id: 'general', label: this.t('web.nav.general') },
+        { id: 'remote', label: remoteLabel, badge: this.remote.enabled },
         { id: 'shells', label: this.t('web.nav.shells') === 'web.nav.shells' ? 'Shells' : this.t('web.nav.shells') },
         { id: 'profiles', label: this.t('web.nav.profiles') },
         { id: 'agents', label: this.t('web.nav.agents'), badge: !this._agentsSeen },
@@ -372,6 +392,88 @@ function untermSettings() {
       await this.loadSessions();
       await this.loadCompat();
       await this.loadUpdates();
+      await this.loadRemote();
+    },
+
+    async loadRemote() {
+      try {
+        const j = await this.api('GET', '/api/remote/status');
+        this.remote = Object.assign({}, this.remote, j);
+        if (!this.remote.selectedIp && Array.isArray(this.remote.addresses) && this.remote.addresses.length > 0) {
+          this.remote.selectedIp = this.remote.addresses[0].ip;
+        }
+      } catch (e) {}
+    },
+
+    async openRemoteTab() {
+      await this.loadRemote();
+      if (this.remote.enabled && !this.remote.pairing) {
+        await this.generateRemotePairCode();
+      }
+    },
+
+    selectedRemoteEntry() {
+      const qrs = (this.remote.pairing && this.remote.pairing.address_qrs) || [];
+      if (!qrs.length) return null;
+      return qrs.find((q) => q.ip === this.remote.selectedIp) || qrs[0];
+    },
+
+    selectedRemoteQrSvg() {
+      const entry = this.selectedRemoteEntry();
+      if (entry && entry.qr_svg) return entry.qr_svg;
+      return (this.remote.pairing && this.remote.pairing.qr_svg) || '';
+    },
+
+    selectedRemoteWebUrl() {
+      const entry = this.selectedRemoteEntry();
+      if (entry && entry.url) return entry.url;
+      return (this.remote.pairing && this.remote.pairing.web_url) || '';
+    },
+
+    async toggleRemote(enabled) {
+      this.remote.loading = true;
+      try {
+        const j = await this.api('POST', '/api/remote/enable', { enabled: !!enabled });
+        this.remote = Object.assign({}, this.remote, j);
+        if (!this.remote.selectedIp && Array.isArray(this.remote.addresses) && this.remote.addresses.length > 0) {
+          this.remote.selectedIp = this.remote.addresses[0].ip;
+        }
+        this.toast(enabled ? '已开启手机远程连接（局域网 / Tailscale）' : '已关闭手机远程连接');
+        if (enabled) {
+          await this.generateRemotePairCode();
+        }
+      } catch (e) {
+        this.toast('操作失败: ' + e.message, 'error');
+      } finally {
+        this.remote.loading = false;
+      }
+    },
+
+    async generateRemotePairCode() {
+      this.remote.loading = true;
+      try {
+        const j = await this.api('POST', '/api/remote/pair-code', {});
+        if (j.status) this.remote = Object.assign({}, this.remote, j.status);
+        if (j.pairing) this.remote.pairing = j.pairing;
+        if (!this.remote.selectedIp && Array.isArray(this.remote.addresses) && this.remote.addresses.length > 0) {
+          this.remote.selectedIp = this.remote.addresses[0].ip;
+        }
+        this.toast('已生成扫码二维码与 6 位一次性配对码（2 分钟内有效）');
+      } catch (e) {
+        this.toast('生成配对码失败: ' + e.message, 'error');
+      } finally {
+        this.remote.loading = false;
+      }
+    },
+
+    async revokeRemoteDevice(deviceId) {
+      try {
+        const j = await this.api('POST', '/api/remote/revoke', { device_id: deviceId });
+        if (j.status) this.remote = Object.assign({}, this.remote, j.status);
+        this.toast('已撤销该手机设备的访问权限');
+      } catch (e) {
+        this.toast('撤销失败: ' + e.message, 'error');
+      }
     },
 
     async saveScrollback() {
@@ -884,6 +986,7 @@ function untermSettings() {
 
     select(id, updateHash = true) {
       this.active = id;
+      if (id === 'remote') this.openRemoteTab();
       if (id === 'review') this.loadReview();
       if (updateHash && window.location.hash !== '#' + id) {
         window.history.replaceState(null, '', '#' + id);

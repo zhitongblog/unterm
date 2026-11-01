@@ -33,6 +33,7 @@ pub enum SettingsSubCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum SettingsSection {
     General,
+    Remote,
     Profiles,
     Agents,
     Mcp,
@@ -50,6 +51,7 @@ impl SettingsSection {
     fn hash(self) -> &'static str {
         match self {
             SettingsSection::General => "general",
+            SettingsSection::Remote => "remote",
             SettingsSection::Profiles => "profiles",
             SettingsSection::Agents => "agents",
             SettingsSection::Mcp => "mcp",

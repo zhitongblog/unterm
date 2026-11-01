@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0b0f17" />
+  <title>Unterm Pocket Cockpit</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --card: #131b2a;
+      --card-hover: #1a2438;
+      --border: #23304a;
+      --text: #e6edf7;
+      --muted: #8b9bb4;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.2);
+      --warn: #f59e0b;
+      --warn-bg: rgba(245, 158, 11, 0.14);
+      --ok: #10b981;
+      --ok-bg: rgba(16, 185, 129, 0.14);
+      --err: #ef4444;
+      --err-bg: rgba(239, 68, 68, 0.14);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      padding: 10px 14px;
+      background: #0f1522;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.live { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.warn { background: var(--warn); }
+    .net-badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.12);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      white-space: nowrap;
+    }
+    main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .card.waiting {
+      border-color: var(--warn);
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.1), var(--card));
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .badge.waiting { background: var(--warn-bg); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge.working { background: var(--accent-glow); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .badge.idle { background: rgba(139, 155, 180, 0.14); color: var(--muted); }
+    .badge.done { background: var(--ok-bg); color: #34d399; }
+    .badge.danger { background: var(--err-bg); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      word-break: break-all;
+    }
+    .btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn.secondary {
+      background: #1e293b;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn.warn { background: var(--warn); color: #0b0f17; }
+    .btn.ok { background: var(--ok); color: #052e16; }
+    .btn.danger { background: var(--err); color: #fff; }
+    .btn:active { opacity: 0.8; transform: scale(0.98); }
+    .quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .term-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #06090f;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      min-height: 280px;
+    }
+    .term-toolbar {
+      padding: 6px 10px;
+      background: #0f1624;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 12px;
+    }
+    pre.term-screen {
+      flex: 1;
+      margin: 0;
+      padding: 10px;
+      overflow: auto;
+      font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.38;
+      color: #d8e2f0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .keybar {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 6px 8px;
+      background: #0f1624;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .keybtn {
+      background: #1e293b;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: monospace;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .inputbar {
+      display: flex;
+      gap: 6px;
+      padding: 8px;
+      background: #0f1624;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    input.text-in {
+      flex: 1;
+      background: #090d16;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 11px;
+      font-size: 14px;
+      outline: none;
+    }
+    input.text-in:focus { border-color: var(--accent); }
+    nav.tabs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      background: #0f1522;
+      border-top: 1px solid var(--border);
+      padding-bottom: var(--safe-bottom);
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      padding: 10px 4px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      position: relative;
+    }
+    .tab-btn.active { color: var(--accent); }
+    .tab-pill {
+      position: absolute;
+      top: 4px;
+      right: 22%;
+      background: var(--warn);
+      color: #000;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 1px 5px;
+      border-radius: 999px;
+    }
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 36px 16px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span id="connDot" class="dot"></span>
+      <span id="hostTitle">Unterm Pocket</span>
+    </div>
+    <span class="net-badge">仅限局域网 / Tailscale</span>
+  </header>
+
+  <main id="mainView"></main>
+
+  <nav class="tabs" id="navTabs" style="display:none;">
+    <button class="tab-btn active" onclick="switchTab('inbox')" id="tab-inbox">
+      <span>收件箱</span>
+      <span id="badge-inbox" class="tab-pill" style="display:none;">0</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('agents')" id="tab-agents">
+      <span>总览</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('terminal')" id="tab-terminal">
+      <span>终端分屏</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('approvals')" id="tab-approvals">
+      <span>审批</span>
+      <span id="badge-approvals" class="tab-pill" style="display:none;">0</span>
+    </button>
+  </nav>
+
+  <script>
+    const STORAGE_KEY = 'unterm_mobile_device_token_v1';
+    let state = {
+      token: localStorage.getItem(STORAGE_KEY) || '',
+      paired: false,
+      wsConnected: false,
+      tab: 'inbox',
+      hostname: location.hostname,
+      machineId: '',
+      fingerprint: '',
+      instances: [],
+      inbox: [],
+      agents: [],
+      sessions: [],
+      approvals: [],
+      watchedInstance: '',
+      watchedPane: null,
+      screenText: '',
+      fontSize: 12,
+      lastWaitingKey: ''
+    };
+    let ws = null;
+
+    async function init() {
+      const params = new URLSearchParams(location.search);
+      const pairCode = params.get('pair') || params.get('c');
+      try {
+        const helloResp = await fetch('/api/remote/hello?nonce=' + Date.now());
+        if (helloResp.ok) {
+          const hello = await helloResp.json();
+          state.hostname = hello.hostname || location.hostname;
+          state.machineId = hello.machine_id || '';
+          state.fingerprint = hello.fingerprint || '';
+          document.getElementById('hostTitle').textContent = 'Unterm · ' + state.hostname;
+        }
+      } catch (_) {}
+
+      if (pairCode) {
+        history.replaceState({}, '', '/');
+        await doPair(pairCode);
+      }
+
+      if (state.token) {
+        const ok = await fetchOverview();
+        if (ok) {
+          state.paired = true;
+          document.getElementById('navTabs').style.display = 'grid';
+          connectWs();
+          render();
+          return;
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+          state.token = '';
+        }
+      }
+      renderPairScreen();
+    }
+
+    async function doPair(code) {
+      try {
+        const ua = navigator.userAgent || '';
+        const platform = /iPhone|iPad|iPod/i.test(ua) ? 'ios-web' : (/Android/i.test(ua) ? 'android-web' : 'web');
+        const deviceName = (platform === 'ios-web' ? 'iPhone 浏览器' : (platform === 'android-web' ? 'Android 浏览器' : '移动端浏览器'));
+        const res = await fetch('/api/remote/pair', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ code: String(code).trim(), device_name: deviceName, platform })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.device_token) {
+          alert('配对失败：' + (data.error || '配对码无效或已过期'));
+          return false;
+        }
+        state.token = data.device_token;
+        localStorage.setItem(STORAGE_KEY, state.token);
+        state.paired = true;
+        document.getElementById('navTabs').style.display = 'grid';
+        await fetchOverview();
+        connectWs();
+        render();
+        return true;
+      } catch (e) {
+        alert('配对请求失败：' + e.message);
+        return false;
+      }
+    }
+
+    async function fetchOverview() {
+      try {
+        const res = await fetch('/api/remote/overview', {
+          headers: { 'Authorization': 'Bearer ' + state.token }
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        applySnapshot(data);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function applySnapshot(data) {
+      if (!data) return;
+      state.instances = data.instances || [];
+      state.inbox = data.inbox || [];
+      state.agents = data.agents || [];
+      state.sessions = data.sessions || [];
+      state.approvals = data.approvals || [];
+      if (typeof data.screen_text === 'string') {
+        state.screenText = data.screen_text;
+      }
+      if (!state.watchedPane && state.sessions.length > 0) {
+        state.watchedInstance = state.sessions[0].instance_id || '';
+        state.watchedPane = state.sessions[0].pane_id ?? state.sessions[0].id;
+      }
+      const waitingKey = state.inbox.map(x => (x.instance_id || '') + ':' + (x.pane_id ?? x.id)).join(',') + '|' + state.approvals.length;
+      if (state.lastWaitingKey && waitingKey !== state.lastWaitingKey && (state.inbox.length > 0 || state.approvals.length > 0)) {
+        if (navigator.vibrate) navigator.vibrate([180, 80, 180]);
+      }
+      state.lastWaitingKey = waitingKey;
+      updateBadges();
+      render();
+    }
+
+    function updateBadges() {
+      const ib = document.getElementById('badge-inbox');
+      if (state.inbox.length > 0) {
+        ib.style.display = 'inline-block';
+        ib.textContent = state.inbox.length;
+      } else {
+        ib.style.display = 'none';
+      }
+      const ab = document.getElementById('badge-approvals');
+      if (state.approvals.length > 0) {
+        ab.style.display = 'inline-block';
+        ab.textContent = state.approvals.length;
+      } else {
+        ab.style.display = 'none';
+      }
+    }
+
+    function connectWs() {
+      if (ws) { try { ws.close(); } catch (_) {} }
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = proto + '//' + location.host + '/ws?token=' + encodeURIComponent(state.token);
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        state.wsConnected = true;
+        document.getElementById('connDot').className = 'dot live';
+        if (state.watchedPane != null) {
+          sendWs({ type: 'watch', instance: state.watchedInstance, pane_id: Number(state.watchedPane) });
+        }
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'snapshot') {
+            applySnapshot(msg.data);
+          } else if (msg.type === 'screen' && msg.pane_id === Number(state.watchedPane)) {
+            state.screenText = msg.text || '';
+            const pre = document.getElementById('termScreenPre');
+            if (pre) {
+              pre.textContent = state.screenText || '(空白分屏)';
+              pre.scrollTop = pre.scrollHeight;
+            }
+          }
+        } catch (_) {}
+      };
+      ws.onclose = () => {
+        state.wsConnected = false;
+        document.getElementById('connDot').className = 'dot warn';
+        if (state.paired) setTimeout(connectWs, 2500);
+      };
+    }
+
+    function sendWs(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+      }
+    }
+
+    async function callRpc(instance, method, params) {
+      const res = await fetch('/api/remote/rpc', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + state.token
+        },
+        body: JSON.stringify({ instance: instance || state.watchedInstance, method, params: params || {} })
+      });
+      return await res.json();
+    }
+
+    async function sendPaneInput(instance, paneId, data) {
+      await callRpc(instance, 'session.input', { id: Number(paneId), data });
+      setTimeout(fetchOverview, 250);
+    }
+
+    async function sendPaneSignal(instance, paneId, signal) {
+      await callRpc(instance, 'signal.send', { id: Number(paneId), signal });
+      setTimeout(fetchOverview, 250);
+    }
+
+    function openPaneTerminal(instance, paneId) {
+      state.watchedInstance = instance || '';
+      state.watchedPane = Number(paneId);
+      state.tab = 'terminal';
+      sendWs({ type: 'watch', instance: state.watchedInstance, pane_id: state.watchedPane });
+      callRpc(state.watchedInstance, 'screen.text', { id: state.watchedPane }).then(r => {
+        if (r && r.result && typeof r.result.text === 'string') {
+          state.screenText = r.result.text;
+        }
+        render();
+      });
+      switchTab('terminal');
+    }
+
+    function switchTab(t) {
+      state.tab = t;
+      ['inbox', 'agents', 'terminal', 'approvals'].forEach(k => {
+        const el = document.getElementById('tab-' + k);
+        if (el) el.className = 'tab-btn' + (k === t ? ' active' : '');
+      });
+      render();
+    }
+
+    function renderPairScreen() {
+      const m = document.getElementById('mainView');
+      m.innerHTML = `
+        <div class="card" style="margin-top:24px;">
+          <div style="font-size:17px;font-weight:700;margin-bottom:6px;">配对连接到电脑 Unterm</div>
+          <div class="sub" style="margin-bottom:14px;">
+            仅支持同一局域网（Wi‑Fi）或 Tailscale 连接。<br/>
+            请在电脑端「Web 设置 → 手机远程」或运行 <code>unterm-cli remote pair</code> 获取 6 位一次性配对码。
+          </div>
+          ${state.fingerprint ? `<div class="sub" style="margin-bottom:12px;">机器指纹：<code>${state.fingerprint.slice(0, 16)}…</code></div>` : ''}
+          <div style="display:flex;gap:8px;">
+            <input id="pairCodeInput" class="text-in" type="tel" maxlength="6" placeholder="输入 6 位配对码" />
+            <button class="btn" onclick="doPair(document.getElementById('pairCodeInput').value)">绑定连接</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function render() {
+      if (!state.paired) { renderPairScreen(); return; }
+      const m = document.getElementById('mainView');
+      if (state.tab === 'inbox') {
+        if (state.inbox.length === 0) {
+          m.innerHTML = `<div class="empty">🎉 当前没有等待你处理的 Agent<br/><span class="sub">所有 Agent 正在自动运行或已就绪</span></div>`;
+          return;
+        }
+        m.innerHTML = state.inbox.map(item => {
+          const inst = item.instance_id || 'default';
+          const paneId = item.pane_id ?? item.id ?? 0;
+          const agentName = item.agent || item.name || 'Agent';
+          const reason = item.summary || item.reason || item.title || '等待确认或输入';
+          return `
+            <div class="card waiting">
+              <div class="row">
+                <strong>${escapeHtml(agentName)} <span class="sub">(${escapeHtml(inst)} #${paneId})</span></strong>
+                <span class="badge waiting">等待你回复</span>
+              </div>
+              <div class="sub" style="margin-top:6px;color:#f3f4f6;">${escapeHtml(reason)}</div>
+              <div class="quick-actions">
+                <button class="btn ok" onclick="sendPaneInput('${escapeHtml(inst)}', ${paneId}, 'y\\r')">同意 (y)</button>
+                <button class="btn danger" onclick="sendPaneInput('${escapeHtml(inst)}', ${paneId}, 'n\\r')">拒绝 (n)</button>
+                <button class="btn secondary" onclick="sendPaneInput('${escapeHtml(inst)}', ${paneId}, '\\r')">Enter</button>
+                <button class="btn secondary" onclick="openPaneTerminal('${escapeHtml(inst)}', ${paneId})">查看终端 →</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      } else if (state.tab === 'agents') {
+        const list = state.sessions.length ? state.sessions : state.agents;
+        if (list.length === 0) {
+          m.innerHTML = `<div class="empty">暂无运行中的终端分屏</div>`;
+          return;
+        }
+        m.innerHTML = list.map(s => {
+          const inst = s.instance_id || 'default';
+          const paneId = s.pane_id ?? s.id ?? 0;
+          const st = String(s.agent_state || s.state || 'idle').toLowerCase();
+          const badgeCls = st.includes('wait') ? 'waiting' : (st.includes('work') || st.includes('run') ? 'working' : (st.includes('done') ? 'done' : 'idle'));
+          const title = s.title || s.agent || ('Pane #' + paneId);
+          return `
+            <div class="card" onclick="openPaneTerminal('${escapeHtml(inst)}', ${paneId})">
+              <div class="row">
+                <strong>${escapeHtml(title)}</strong>
+                <span class="badge ${badgeCls}">${escapeHtml(s.agent_state || s.state || 'Active')}</span>
+              </div>
+              <div class="sub">实例：${escapeHtml(inst)} · 分屏 #${paneId} · ${escapeHtml(s.cwd || '')}</div>
+            </div>
+          `;
+        }).join('');
+      } else if (state.tab === 'terminal') {
+        const paneOptions = state.sessions.map(s => {
+          const inst = s.instance_id || '';
+          const pid = s.pane_id ?? s.id ?? 0;
+          const sel = (inst === state.watchedInstance && Number(pid) === Number(state.watchedPane)) ? 'selected' : '';
+          return `<option value="${escapeHtml(inst)}:${pid}" ${sel}>${escapeHtml(inst)} #${pid} - ${escapeHtml(s.title || '')}</option>`;
+        }).join('');
+        m.innerHTML = `
+          <div class="term-wrap">
+            <div class="term-toolbar">
+              <select style="background:#090d16;color:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 8px;max-width:65%;"
+                onchange="const [i,p]=this.value.split(':');openPaneTerminal(i,Number(p))">
+                ${paneOptions || '<option>默认分屏 #0</option>'}
+              </select>
+              <div style="display:flex;gap:4px;">
+                <button class="keybtn" onclick="state.fontSize=Math.max(9,state.fontSize-1);render()">A-</button>
+                <button class="keybtn" onclick="state.fontSize=Math.min(20,state.fontSize+1);render()">A+</button>
+              </div>
+            </div>
+            <pre id="termScreenPre" class="term-screen" style="font-size:${state.fontSize}px;">${escapeHtml(state.screenText || '正在同步终端画面…')}</pre>
+            <div class="keybar">
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, '\\r')">Enter</button>
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, 'y\\r')">y</button>
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, 'n\\r')">n</button>
+              <button class="keybtn" onclick="sendPaneSignal(state.watchedInstance, state.watchedPane, 'SIGINT')">Ctrl+C</button>
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, '\\x1b')">Esc</button>
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, '\\t')">Tab</button>
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, '\\x1b[A')">↑</button>
+              <button class="keybtn" onclick="sendPaneInput(state.watchedInstance, state.watchedPane, '\\x1b[B')">↓</button>
+            </div>
+            <div class="inputbar">
+              <input id="cmdInput" class="text-in" placeholder="输入命令或语音听写后发送…" onkeydown="if(event.key==='Enter'){sendCmdLine();}" />
+              <button class="btn" onclick="sendCmdLine()">发送</button>
+            </div>
+          </div>
+        `;
+        const pre = document.getElementById('termScreenPre');
+        if (pre) pre.scrollTop = pre.scrollHeight;
+      } else if (state.tab === 'approvals') {
+        if (state.approvals.length === 0) {
+          m.innerHTML = `<div class="empty">暂无待审批的高风险操作</div>`;
+          return;
+        }
+        m.innerHTML = state.approvals.map(a => {
+          const id = a.id || a.approval_id || '';
+          const inst = a.instance_id || '';
+          return `
+            <div class="card waiting">
+              <div class="row">
+                <strong>${escapeHtml(a.action || a.method || '操作审批')}</strong>
+                <span class="badge danger">${escapeHtml(a.risk || 'exec')}</span>
+              </div>
+              <div class="sub" style="margin-top:6px;color:#f3f4f6;">${escapeHtml(a.reason || a.detail || JSON.stringify(a))}</div>
+              <div class="quick-actions">
+                <button class="btn ok" onclick="decideApproval('${escapeHtml(inst)}', '${escapeHtml(id)}', 'approve')">批准</button>
+                <button class="btn danger" onclick="decideApproval('${escapeHtml(inst)}', '${escapeHtml(id)}', 'deny')">拒绝</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    function sendCmdLine() {
+      const inp = document.getElementById('cmdInput');
+      if (!inp || !inp.value) return;
+      const val = inp.value;
+      inp.value = '';
+      sendPaneInput(state.watchedInstance, state.watchedPane ?? 0, val + '\r');
+    }
+
+    async function decideApproval(inst, id, decision) {
+      await callRpc(inst, 'approval.decide', { id, decision, approved: decision === 'approve' });
+      await fetchOverview();
+    }
+
+    init();
+  </script>
+</body>
+</html>

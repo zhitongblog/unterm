@@ -77,6 +77,12 @@ pub fn focus_pane(instance: &InstanceInfo, pane_id: u64) -> Result<()> {
     Ok(())
 }
 
+/// Execute a single authenticated JSON-RPC call against a peer Unterm instance.
+pub fn call_instance(instance: &InstanceInfo, method: &str, params: Value) -> Result<Value> {
+    let mut client = Client::connect(instance)?;
+    client.call(method, params)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

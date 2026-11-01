@@ -26,6 +26,7 @@ mod records;
 mod profile;
 mod proxy;
 mod quit;
+mod remote;
 mod update;
 mod reference;
 mod review;
@@ -52,6 +53,7 @@ use records::{ArtifactCommand, EvidenceCommand, ScopeCommand, SystemCommand};
 use profile::ProfileCommand;
 use proxy::ProxyCommand;
 use quit::QuitCommand;
+use remote::RemoteCommand;
 use update::UpdateCommand;
 use reference::ReferenceCommand;
 use review::ReviewCommand;
@@ -278,6 +280,12 @@ enum SubCommand {
     Server(ServerCommand),
 
     #[command(
+        name = "remote",
+        about = "Manage mobile remote access (LAN / Tailscale only, port 19880, QR pairing & device revocation)"
+    )]
+    Remote(RemoteCommand),
+
+    #[command(
         name = "setup-ai",
         about = "Register Unterm with every AI coding agent on this machine \
                  (Claude Code / Codex / Gemini / Cursor / Windsurf / OpenCode) \
@@ -407,6 +415,7 @@ fn main() -> Result<()> {
         SubCommand::Scrollback(cmd) => run_scrollback(cmd, opts.json),
         SubCommand::Reference(cmd) => run_reference(cmd, opts.json),
         SubCommand::Server(cmd) => run_server(cmd, opts.json),
+        SubCommand::Remote(cmd) => remote::run(cmd, opts.json),
         SubCommand::SetupAi(cmd) => run_setup_ai(cmd, opts.json),
         SubCommand::McpStdio => run_mcp_stdio(),
         SubCommand::Quit(cmd) => quit::run(cmd, opts.json),

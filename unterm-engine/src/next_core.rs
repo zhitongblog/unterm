@@ -1177,7 +1177,11 @@ impl NextCoreScreen {
         self.lines.clear();
         self.cursor_x = 0;
         self.cursor_y = 0;
-        self.ensure_cursor_line();
+        if self.history.scrollback_rows() > 0 {
+            self.ensure_rows_through(self.rows.saturating_sub(1));
+        } else {
+            self.ensure_cursor_line();
+        }
         self.mark_all_dirty();
     }
 
@@ -1204,7 +1208,11 @@ impl NextCoreScreen {
         let top = self.image_top_row();
         self.images.rows_cleared(top, top + self.rows as i64 - 1);
         self.lines.clear();
-        self.ensure_cursor_line();
+        if self.history.scrollback_rows() > 0 {
+            self.ensure_rows_through(self.rows.saturating_sub(1));
+        } else {
+            self.ensure_cursor_line();
+        }
         self.mark_all_dirty();
     }
 
@@ -1568,6 +1576,11 @@ impl NextCoreScreen {
                 let removed = self.history.scrollback_rows();
                 self.history.clear();
                 self.trim_prompt_rows(removed);
+                while self.lines.len() > self.cursor_y + 1
+                    && self.lines.last().is_some_and(Vec::is_empty)
+                {
+                    self.lines.pop();
+                }
                 self.mark_all_dirty();
             }
             _ => {}
@@ -9074,5 +9087,19 @@ mod inline_image_tests {
         screen3.feed("ABCDE\x1b[BZ");
         assert_eq!(screen3.cursor_y, 1);
         assert_eq!(screen3.snapshot_viewport_lines()[1], "    Z");
+    }
+
+    #[test]
+    fn csi_2j_with_scrollback_keeps_viewport_blank_instead_of_pulling_scrollback() {
+        let mut screen = NextCoreScreen::new(20, 4);
+        screen.feed("row1\r\nrow2\r\nrow3\r\nrow4\r\nrow5\r\nrow6");
+        assert_eq!(screen.scrollback_rows(), 2);
+        // Home + Erase Entire Display when scrollback is non-empty must show 4 blank rows,
+        // not pull row1/row2 back into the visible viewport.
+        screen.feed("\x1b[H\x1b[2J");
+        assert_eq!(screen.snapshot_viewport_lines(), vec!["", "", "", ""]);
+        assert_eq!(screen.cursor_snapshot().y, 0);
+        screen.feed("fresh");
+        assert_eq!(screen.snapshot_viewport_lines(), vec!["fresh", "", "", ""]);
     }
 }

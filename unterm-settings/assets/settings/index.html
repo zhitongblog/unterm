@@ -183,6 +183,190 @@
               </select>
             </div>
           </div>
+
+          <!-- Mobile Remote quick entry in General -->
+          <div class="mt-8">
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-notion-border bg-notion-surface p-5">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="text-base font-semibold">手机远程连接（Unterm Pocket · App / Web）</h3>
+                  <span class="rounded-full border border-notion-green/40 bg-notion-green/15 px-2.5 py-0.5 text-[11px] text-notion-teal">
+                    仅限局域网 (Wi-Fi) 或 Tailscale
+                  </span>
+                </div>
+                <p class="mt-1 text-sm text-notion-muted" x-text="remote.notice"></p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="rounded-md bg-notion-green px-3.5 py-2 text-sm font-medium text-black transition hover:opacity-90"
+                  @click="select('remote')"
+                >打开手机远程设置与二维码 →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mobile Remote (Pocket) Dedicated Tab -->
+        <div x-show="active==='remote'" class="space-y-6">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2.5">
+                <h2 class="text-xl font-semibold">手机远程连接（Unterm Pocket）</h2>
+                <span class="rounded-full border border-notion-green/40 bg-notion-green/15 px-2.5 py-0.5 text-xs text-notion-teal">
+                  仅限局域网 (Wi-Fi) 或 Tailscale
+                </span>
+              </div>
+              <p class="mt-1 text-sm text-notion-muted">
+                无需输命令行，直接在设置中开启并扫码连接。支持手机浏览器直接扫码使用，或使用 Unterm Pocket App 绑定电脑（绑定后自动扫描发现局域网内已绑定机器）。
+              </p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                class="rounded-md px-4 py-2 text-sm font-semibold transition"
+                :class="remote.enabled ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30' : 'bg-notion-green text-black hover:opacity-90'"
+                :disabled="remote.loading"
+                @click="toggleRemote(!remote.enabled)"
+                x-text="remote.enabled ? '关闭手机远程连接' : '一键开启手机远程连接'"
+              ></button>
+              <button
+                type="button"
+                class="rounded-md border border-notion-borderStrong bg-notion-surface px-3.5 py-2 text-sm text-notion-ink hover:bg-notion-sunken"
+                :disabled="remote.loading"
+                @click="generateRemotePairCode()"
+              >刷新配对二维码</button>
+            </div>
+          </div>
+
+          <!-- Status + Network Addresses Card -->
+          <div class="rounded-lg border border-notion-border bg-notion-surface p-5 space-y-4 text-sm">
+            <div class="grid grid-cols-3 gap-4 text-xs">
+              <div class="rounded-md border border-notion-border bg-notion-bg p-3">
+                <div class="text-notion-faint">网关状态与端口</div>
+                <div class="mt-1 text-sm font-semibold" :class="remote.enabled ? 'text-notion-teal' : 'text-notion-muted'"
+                  x-text="remote.enabled ? ('运行中 · 端口 ' + remote.port) : '已关闭（默认安全关闭）'"></div>
+              </div>
+              <div class="rounded-md border border-notion-border bg-notion-bg p-3">
+                <div class="text-notion-faint">当前电脑名称</div>
+                <div class="mt-1 text-sm font-mono text-notion-ink" x-text="remote.hostname || state.hostname || 'Unterm-PC'"></div>
+              </div>
+              <div class="rounded-md border border-notion-border bg-notion-bg p-3">
+                <div class="text-notion-faint">机器指纹 (Ed25519)</div>
+                <div class="mt-1 text-sm font-mono text-notion-ink" x-text="(remote.fingerprint || '').slice(0, 16) + '…'"></div>
+              </div>
+            </div>
+
+            <div x-show="remote.addresses && remote.addresses.length > 0">
+              <div class="text-xs text-notion-faint mb-2">
+                选择扫码连接的网络地址（点击可切换二维码对应的局域网 Wi-Fi 或 Tailscale IP）：
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <template x-for="addr in remote.addresses" :key="addr.ip">
+                  <button
+                    type="button"
+                    class="rounded-md border px-3 py-1.5 text-xs font-mono transition"
+                    :class="remote.selectedIp === addr.ip
+                      ? 'border-notion-green bg-notion-green/20 text-white'
+                      : 'border-notion-borderStrong bg-notion-bg text-notion-muted hover:text-notion-ink'"
+                    @click="remote.selectedIp = addr.ip"
+                  >
+                    <span class="text-notion-teal font-semibold" x-text="addr.ip + ':' + remote.port"></span>
+                    <span class="ml-1.5 text-notion-faint" x-text="'[' + addr.label + ']'"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- Visual QR Code + 6-digit Pairing Code Card -->
+          <div class="rounded-lg border border-notion-green/40 bg-notion-surface p-6">
+            <div x-show="!remote.pairing" class="flex items-center justify-between">
+              <div>
+                <div class="text-base font-semibold text-notion-ink">生成手机扫码配对二维码</div>
+                <div class="mt-1 text-xs text-notion-muted">
+                  点击右侧按钮即可在页面内直接显示二维码与 6 位配对码（无需运行任何终端命令）。
+                </div>
+              </div>
+              <button
+                type="button"
+                class="rounded-md bg-notion-green px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+                :disabled="remote.loading"
+                @click="generateRemotePairCode()"
+              >生成扫码二维码</button>
+            </div>
+
+            <div x-show="remote.pairing" class="grid grid-cols-12 gap-6 items-center">
+              <!-- Left: Scannable SVG QR Code -->
+              <div class="col-span-4 flex flex-col items-center">
+                <div
+                  class="w-48 h-48 rounded-xl bg-white p-2.5 shadow-lg border border-notion-border"
+                  x-html="selectedRemoteQrSvg()"
+                ></div>
+                <div class="mt-2 text-[11px] text-notion-teal text-center">
+                  用手机相机 / 浏览器 或 Unterm Pocket App 扫码直连
+                </div>
+              </div>
+
+              <!-- Right: 6-Digit Code & URLs -->
+              <div class="col-span-8 space-y-4">
+                <div>
+                  <div class="text-xs uppercase tracking-wider text-notion-teal">
+                    一次性 6 位配对码（有效期 2 分钟 · 用完即焚）
+                  </div>
+                  <div class="mt-1 flex items-baseline gap-4">
+                    <span class="text-4xl font-mono font-bold tracking-[0.25em] text-white select-all" x-text="remote.pairing?.code"></span>
+                    <span class="text-xs text-notion-faint">支持手机浏览器直接扫码免输密码登录，或在 App 中输入此 6 位码</span>
+                  </div>
+                </div>
+
+                <div class="space-y-2 rounded-lg border border-notion-border bg-notion-bg p-3.5 text-xs">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-notion-faint shrink-0">手机浏览器直连网址：</span>
+                    <code class="text-notion-teal font-mono select-all break-all" x-text="selectedRemoteWebUrl()"></code>
+                  </div>
+                  <div class="flex items-center justify-between gap-2 pt-1 border-t border-notion-border">
+                    <span class="text-notion-faint shrink-0">App 绑定 URI：</span>
+                    <code class="text-notion-muted font-mono select-all break-all text-[11px]" x-text="remote.pairing?.qr_uri"></code>
+                  </div>
+                </div>
+
+                <div class="text-xs text-notion-muted leading-relaxed">
+                  1. <strong>Web 免安装方式</strong>：手机连同一 Wi-Fi（或开启 Tailscale），用手机系统相机或浏览器直接扫左侧二维码即可自动配对进入控制台。<br/>
+                  2. <strong>Android App 方式</strong>：安装 <code class="text-notion-ink">dist/Unterm-Pocket-0.71.21-android.apk</code>，首次扫码或输入上方 6 位配对码绑定后，下次打开 App 会自动扫描并发现在线的电脑。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Paired Devices Card -->
+          <div class="rounded-lg border border-notion-border bg-notion-surface p-5">
+            <div class="flex items-center justify-between mb-3">
+              <div class="text-sm font-semibold text-notion-ink">
+                已绑定的手机设备 (<span x-text="(remote.devices || []).length"></span>)
+              </div>
+              <span class="text-xs text-notion-faint">随时可撤销单台手机的访问令牌</span>
+            </div>
+            <div x-show="!remote.devices || remote.devices.length === 0" class="text-xs text-notion-faint py-4 text-center border border-dashed border-notion-border rounded-md">
+              暂无已绑定手机设备。用手机扫描上方二维码即可完成绑定。
+            </div>
+            <div class="space-y-2" x-show="remote.devices && remote.devices.length > 0">
+              <template x-for="dev in remote.devices" :key="dev.device_id">
+                <div class="flex items-center justify-between rounded-md border border-notion-border bg-notion-bg px-4 py-2.5 text-xs">
+                  <div>
+                    <span class="font-semibold text-notion-ink" x-text="dev.device_name"></span>
+                    <span class="ml-2 rounded bg-notion-surface px-2 py-0.5 text-[10px] text-notion-teal" x-text="dev.platform"></span>
+                    <div class="text-notion-faint mt-1" x-text="'最近连接 IP: ' + (dev.last_ip || '-') + ' · 最近活跃: ' + (dev.last_seen_at || '') + ' · 首次绑定: ' + (dev.paired_at || '')"></div>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-300 hover:bg-rose-500/20"
+                    @click="revokeRemoteDevice(dev.device_id)"
+                  >撤销解绑</button>
+                </div>
+              </template>
+            </div>
+          </div>
         </div>
 
         <!-- Shells -->
