@@ -215,3 +215,63 @@ fn xtsmgraphics_is_answered_consistently_with_da1() {
     assert_eq!(ask("?3;1;0S"), "\x1b[?3;1;0S");
     assert_eq!(ask("?1;9;0S"), "\x1b[?1;2;0S");
 }
+
+// --- A7: XTSAVE / XTRESTORE keep mode values, nothing else --------------
+
+#[test]
+fn xtrestore_does_not_home_the_cursor_or_reset_the_region() {
+    let mut screen = screen(20, 10);
+    screen.feed("abc\x1b[3;8r\x1b[5;5H\x1b[?1r X");
+    assert_eq!((screen.scroll_top, screen.scroll_bottom), (2, 7));
+    assert_eq!(row(&screen, 4), "     X");
+    screen.feed("\x1b[?1049r");
+    assert_eq!((screen.cursor_x, screen.cursor_y), (6, 4));
+}
+
+#[test]
+fn xtsave_does_not_overwrite_the_decsc_slot() {
+    let mut screen = screen(20, 10);
+    screen.feed("\x1b[2;3H\x1b7\x1b[6;6H\x1b[?25s\x1b8");
+    assert_eq!((screen.cursor_x, screen.cursor_y), (2, 1));
+    screen.feed("\x1b[6;6H\x1b[?7s\x1b[u");
+    assert_eq!((screen.cursor_x, screen.cursor_y), (2, 1));
+}
+
+#[test]
+fn xtsave_and_xtrestore_round_trip_mode_values() {
+    let mut screen = screen(20, 10);
+    screen.feed("\x1b[?1h\x1b[?25l\x1b[?2004h\x1b[?1;25;2004;7s");
+    screen.feed("\x1b[?1l\x1b[?25h\x1b[?2004l\x1b[?7l");
+    assert!(!screen.application_cursor_keys && screen.cursor_visible && !screen.auto_wrap);
+    screen.feed("\x1b[4;4H\x1b[?1;25;2004;7r");
+    assert!(screen.application_cursor_keys);
+    assert!(!screen.cursor_visible);
+    assert!(screen.bracketed_paste);
+    assert!(screen.auto_wrap);
+    assert_eq!((screen.cursor_x, screen.cursor_y), (3, 3));
+    // A mode never saved is left as it is.
+    screen.feed("\x1b[?1004h\x1b[?1004r");
+    assert!(screen.focus_event_reporting);
+}
+
+#[test]
+fn xtrestore_of_origin_mode_does_not_home_the_cursor() {
+    let mut screen = screen(20, 10);
+    screen.feed("\x1b[?6s\x1b[?6h\x1b[5;5H\x1b[?6r");
+    assert!(!screen.origin_mode);
+    assert_eq!((screen.cursor_x, screen.cursor_y), (4, 4));
+}
+
+// --- A8: DECCOLM is ignored ---------------------------------------------
+
+#[test]
+fn deccolm_changes_neither_the_width_nor_the_history() {
+    let mut screen = screen(120, 3);
+    screen.feed("one\r\ntwo\r\nthree\r\nfour");
+    assert_eq!(screen.scrollback_rows(), 1);
+    screen.feed("\x1b[?3l\x1b[?3h");
+    assert_eq!(screen.cols, 120);
+    assert_eq!(screen.scrollback_rows(), 1);
+    assert_eq!(screen.snapshot_viewport_lines(), vec!["two", "three", "four"]);
+    assert_eq!((screen.cursor_x, screen.cursor_y), (4, 2));
+}

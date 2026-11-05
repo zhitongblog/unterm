@@ -310,7 +310,10 @@ impl TerminalParser {
                 }
             }
             's' => {
-                if !private && screen.left_right_margin_mode && numbers.len() >= 2 {
+                if private {
+                    // XTSAVE: DEC private mode values, not the cursor.
+                    screen.save_private_modes(&numbers);
+                } else if screen.left_right_margin_mode && numbers.len() >= 2 {
                     let left = numbers.first().copied().filter(|n| *n > 0).unwrap_or(1);
                     let right = numbers
                         .get(1)
@@ -379,6 +382,12 @@ impl TerminalParser {
                     screen.change_rect_attributes(top, left, bottom, right, params);
                     return;
                 }
+                if private {
+                    // XTRESTORE: mode values only. Read as DECSTBM it reset
+                    // the scroll region and homed the cursor.
+                    screen.restore_private_modes(&numbers);
+                    return;
+                }
                 let top = numbers.first().copied().filter(|n| *n > 0).unwrap_or(1);
                 let bottom = numbers
                     .get(1)
@@ -390,42 +399,7 @@ impl TerminalParser {
             'h' => {
                 for mode in &numbers {
                     if private {
-                        match *mode {
-                            1049 => screen.enter_alternate_screen(1049, true),
-                            1047 | 47 => screen.enter_alternate_screen(*mode, false),
-                            1048 => screen.save_cursor(),
-                            5 => {
-                                screen.reverse_video = true;
-                                screen.mark_all_dirty();
-                            }
-                            1 => screen.application_cursor_keys = true,
-                            3 => screen.set_column_mode(true),
-                            6 => screen.set_origin_mode(true),
-                            7 => screen.auto_wrap = true,
-                            12 => {
-                                screen.cursor_blinking = true;
-                                screen.mark_dirty_row(screen.cursor_y);
-                            }
-                            25 => {
-                                screen.cursor_visible = true;
-                                screen.mark_dirty_row(screen.cursor_y);
-                            }
-                            66 => screen.application_keypad = true,
-                            69 => screen.left_right_margin_mode = true,
-                            1000 => screen.mouse_tracking = MouseTrackingMode::ButtonEvent,
-                            1002 => screen.mouse_tracking = MouseTrackingMode::ButtonMotion,
-                            1003 => screen.mouse_tracking = MouseTrackingMode::AnyEvent,
-                            1004 => screen.focus_event_reporting = true,
-                            1005 => screen.utf8_mouse = true,
-                            1006 => screen.sgr_mouse = true,
-                            1007 => screen.alternate_scroll = true,
-                            1015 => screen.urxvt_mouse = true,
-                            1016 => screen.sgr_pixel_mouse = true,
-                            1034 => screen.meta_sends_escape = true,
-                            2004 => screen.set_bracketed_paste(true),
-                            2026 => screen.set_synchronized_output(true),
-                            _ => {}
-                        }
+                        screen.set_dec_private_mode(*mode, true);
                     } else if *mode == 4 {
                         screen.insert_mode = true;
                     } else if *mode == 20 {
@@ -436,56 +410,7 @@ impl TerminalParser {
             'l' => {
                 for mode in &numbers {
                     if private {
-                        match *mode {
-                            1049 | 1047 | 47 => screen.leave_alternate_screen(*mode),
-                            1048 => screen.restore_cursor(),
-                            5 => {
-                                screen.reverse_video = false;
-                                screen.mark_all_dirty();
-                            }
-                            1 => screen.application_cursor_keys = false,
-                            3 => screen.set_column_mode(false),
-                            6 => screen.set_origin_mode(false),
-                            7 => screen.auto_wrap = false,
-                            12 => {
-                                screen.cursor_blinking = false;
-                                screen.mark_dirty_row(screen.cursor_y);
-                            }
-                            25 => {
-                                screen.cursor_visible = false;
-                                screen.mark_dirty_row(screen.cursor_y);
-                            }
-                            66 => screen.application_keypad = false,
-                            69 => {
-                                screen.left_right_margin_mode = false;
-                                screen.set_horizontal_margins(0, screen.cols.saturating_sub(1));
-                            }
-                            1000 => {
-                                if screen.mouse_tracking == MouseTrackingMode::ButtonEvent {
-                                    screen.mouse_tracking = MouseTrackingMode::None;
-                                }
-                            }
-                            1002 => {
-                                if screen.mouse_tracking == MouseTrackingMode::ButtonMotion {
-                                    screen.mouse_tracking = MouseTrackingMode::None;
-                                }
-                            }
-                            1003 => {
-                                if screen.mouse_tracking == MouseTrackingMode::AnyEvent {
-                                    screen.mouse_tracking = MouseTrackingMode::None;
-                                }
-                            }
-                            1004 => screen.focus_event_reporting = false,
-                            1005 => screen.utf8_mouse = false,
-                            1006 => screen.sgr_mouse = false,
-                            1007 => screen.alternate_scroll = false,
-                            1015 => screen.urxvt_mouse = false,
-                            1016 => screen.sgr_pixel_mouse = false,
-                            1034 => screen.meta_sends_escape = false,
-                            2004 => screen.set_bracketed_paste(false),
-                            2026 => screen.set_synchronized_output(false),
-                            _ => {}
-                        }
+                        screen.set_dec_private_mode(*mode, false);
                     } else if *mode == 4 {
                         screen.insert_mode = false;
                     } else if *mode == 20 {
@@ -504,6 +429,122 @@ impl TerminalParser {
             (22, 0 | 2) => screen.push_title(),
             (23, 0 | 2) => screen.pop_title(),
             _ => {}
+        }
+    }
+}
+
+impl NextCoreScreen {
+    /// `CSI ? Pm h` / `CSI ? Pm l`, one mode at a time.
+    pub(super) fn set_dec_private_mode(&mut self, mode: usize, enabled: bool) {
+        match (mode, enabled) {
+            (1049, true) => self.enter_alternate_screen(1049, true),
+            (1047 | 47, true) => self.enter_alternate_screen(mode, false),
+            (1049 | 1047 | 47, false) => self.leave_alternate_screen(mode),
+            (1048, true) => self.save_cursor(),
+            (1048, false) => self.restore_cursor(),
+            (5, _) => {
+                self.reverse_video = enabled;
+                self.mark_all_dirty();
+            }
+            (1, _) => self.application_cursor_keys = enabled,
+            // DECCOLM. xterm ignores it unless allowColumnMode is on, and
+            // that is off by default: the window and the PTY keep their
+            // size, so switching the grid to 80/132 columns would wrap at a
+            // width nobody else agrees on -- and `reset` / `tput init` send
+            // `CSI ? 3 l` every time. Nothing changes and nothing is cleared.
+            (3, _) => {}
+            (6, _) => self.set_origin_mode(enabled),
+            (7, _) => self.auto_wrap = enabled,
+            (12, _) => {
+                self.cursor_blinking = enabled;
+                self.mark_dirty_row(self.cursor_y);
+            }
+            (25, _) => {
+                self.cursor_visible = enabled;
+                self.mark_dirty_row(self.cursor_y);
+            }
+            (66, _) => self.application_keypad = enabled,
+            (69, true) => self.left_right_margin_mode = true,
+            (69, false) => {
+                self.left_right_margin_mode = false;
+                self.set_horizontal_margins(0, self.cols.saturating_sub(1));
+            }
+            (1000 | 1002 | 1003, _) => {
+                let tracking = match mode {
+                    1000 => MouseTrackingMode::ButtonEvent,
+                    1002 => MouseTrackingMode::ButtonMotion,
+                    _ => MouseTrackingMode::AnyEvent,
+                };
+                if enabled {
+                    self.mouse_tracking = tracking;
+                } else if self.mouse_tracking == tracking {
+                    self.mouse_tracking = MouseTrackingMode::None;
+                }
+            }
+            (1004, _) => self.focus_event_reporting = enabled,
+            (1005, _) => self.utf8_mouse = enabled,
+            (1006, _) => self.sgr_mouse = enabled,
+            (1007, _) => self.alternate_scroll = enabled,
+            (1015, _) => self.urxvt_mouse = enabled,
+            (1016, _) => self.sgr_pixel_mouse = enabled,
+            (1034, _) => self.meta_sends_escape = enabled,
+            (2004, _) => self.set_bracketed_paste(enabled),
+            (2026, _) => self.set_synchronized_output(enabled),
+            _ => {}
+        }
+    }
+
+    /// The value of a DEC private mode XTSAVE can keep, or `None` for a
+    /// mode it leaves alone. The alternate screen (47/1047/1049), 1048
+    /// (a cursor save, not a value), DECCOLM (ignored) and synchronized
+    /// output (a restore must not resurrect a hold) are not saved.
+    fn savable_private_mode(&self, mode: usize) -> Option<bool> {
+        Some(match mode {
+            1 => self.application_cursor_keys,
+            5 => self.reverse_video,
+            6 => self.origin_mode,
+            7 => self.auto_wrap,
+            12 => self.cursor_blinking,
+            25 => self.cursor_visible,
+            66 => self.application_keypad,
+            69 => self.left_right_margin_mode,
+            1000 => self.mouse_tracking == MouseTrackingMode::ButtonEvent,
+            1002 => self.mouse_tracking == MouseTrackingMode::ButtonMotion,
+            1003 => self.mouse_tracking == MouseTrackingMode::AnyEvent,
+            1004 => self.focus_event_reporting,
+            1005 => self.utf8_mouse,
+            1006 => self.sgr_mouse,
+            1007 => self.alternate_scroll,
+            1015 => self.urxvt_mouse,
+            1016 => self.sgr_pixel_mouse,
+            1034 => self.meta_sends_escape,
+            2004 => self.bracketed_paste,
+            _ => return None,
+        })
+    }
+
+    /// XTSAVE, `CSI ? Pm s`.
+    pub(super) fn save_private_modes(&mut self, modes: &[usize]) {
+        for &mode in modes {
+            if let Some(value) = self.savable_private_mode(mode) {
+                self.saved_private_modes.insert(mode, value);
+            }
+        }
+    }
+
+    /// XTRESTORE, `CSI ? Pm r`: put back what XTSAVE kept. Leaves the
+    /// scroll region, the cursor and the DECSC slot alone -- DECOM included,
+    /// which is restored as a value without the homing `CSI ? 6 h` does.
+    pub(super) fn restore_private_modes(&mut self, modes: &[usize]) {
+        for &mode in modes {
+            let Some(&value) = self.saved_private_modes.get(&mode) else {
+                continue;
+            };
+            match mode {
+                6 => self.origin_mode = value,
+                69 if !value => self.left_right_margin_mode = false,
+                _ => self.set_dec_private_mode(mode, value),
+            }
         }
     }
 }

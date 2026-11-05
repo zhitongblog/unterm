@@ -219,6 +219,9 @@ struct NextCoreScreen {
     /// LNM (`CSI 20 h`): a line feed also returns the carriage. Off by
     /// default, as in xterm, so LF/VT/FF keep the cursor's column.
     newline_mode: bool,
+    /// DEC private mode values saved by XTSAVE (`CSI ? Pm s`) for XTRESTORE
+    /// (`CSI ? Pm r`). Kept apart from the DECSC slot on purpose.
+    saved_private_modes: std::collections::BTreeMap<usize, bool>,
     left_right_margin_mode: bool,
     tab_stops: BTreeSet<usize>,
     bracketed_paste: bool,
@@ -2099,26 +2102,6 @@ impl NextCoreScreen {
         self.ensure_cursor_line();
     }
 
-    fn set_column_mode(&mut self, wide: bool) {
-        self.column_132_mode = wide;
-        self.cols = if wide { 132 } else { 80 };
-        self.lines.clear();
-        self.history.clear();
-        self.images.reset();
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-        self.saved_cursor_x = 0;
-        self.saved_cursor_y = 0;
-        self.scroll_top = 0;
-        self.scroll_bottom = self.rows.saturating_sub(1);
-        self.left_right_margin_mode = false;
-        self.left_margin = 0;
-        self.right_margin = self.cols.saturating_sub(1);
-        self.tab_stops = Self::default_tab_stops(self.cols);
-        self.ensure_cursor_line();
-        self.mark_all_dirty();
-    }
-
     /// Erase the other half of a wide character when one half is overwritten.
     ///
     /// A TUI that repaints by jumping to a column and rewriting a single cell
@@ -2826,9 +2809,11 @@ mod tests {
             &writer,
         );
 
+        // `?3` reads reset although `?3h` was sent: DECCOLM is ignored (as
+        // in xterm without allowColumnMode), so the grid never went 132.
         assert_eq!(
             bytes.lock().as_slice(),
-            b"\x1b[?1;1$y\x1b[?3;1$y\x1b[?5;1$y\x1b[?6;1$y\x1b[?7;1$y\x1b[?12;2$y\x1b[?25;2$y\x1b[?66;1$y\x1b[?69;1$y\x1b[?1000;2$y\x1b[?1002;1$y\x1b[?1003;2$y\x1b[?1004;1$y\x1b[?1005;1$y\x1b[?1006;1$y\x1b[?1007;1$y\x1b[?1015;1$y\x1b[?1016;1$y\x1b[?1034;1$y\x1b[?47;2$y\x1b[?1047;1$y\x1b[?1049;2$y\x1b[?2004;1$y\x1b[?2026;1$y\x1b[4;1$y"
+            b"\x1b[?1;1$y\x1b[?3;2$y\x1b[?5;1$y\x1b[?6;1$y\x1b[?7;1$y\x1b[?12;2$y\x1b[?25;2$y\x1b[?66;1$y\x1b[?69;1$y\x1b[?1000;2$y\x1b[?1002;1$y\x1b[?1003;2$y\x1b[?1004;1$y\x1b[?1005;1$y\x1b[?1006;1$y\x1b[?1007;1$y\x1b[?1015;1$y\x1b[?1016;1$y\x1b[?1034;1$y\x1b[?47;2$y\x1b[?1047;1$y\x1b[?1049;2$y\x1b[?2004;1$y\x1b[?2026;1$y\x1b[4;1$y"
         );
     }
 
@@ -7670,19 +7655,25 @@ mod tests {
             launch_policy: Default::default(),
         })?;
 
+        // DECCOLM is ignored, as in xterm with its default allowColumnMode
+        // off: the window and the PTY keep their width, so resizing the grid
+        // to 132/80 columns behind their back would wrap at a width nobody
+        // else agrees on, and `reset` / `tput init` send `CSI ? 3 l` every
+        // time. The grid keeps 80 columns, the screen, the scroll region and
+        // the cursor are left alone, and nothing is cleared.
         set_output_for_test(session.id, "main\x1b[2;3r\x1b[3;5Hbefore\x1b[?3hwide")?;
         let wide = engine.read_screen(session.id)?;
-        assert_eq!(wide.cols, 132);
-        assert_eq!(wide.cursor.x, 4);
-        assert_eq!(wide.cursor.y, 0);
-        assert_eq!(wide.lines, vec!["wide"]);
+        assert_eq!(wide.cols, 80);
+        assert_eq!(wide.cursor.x, 14);
+        assert_eq!(wide.cursor.y, 2);
+        assert_eq!(wide.lines, vec!["main", "", "    beforewide"]);
 
-        set_output_for_test(session.id, "\x1b[?3lnarrow")?;
+        set_output_for_test(session.id, "kept\x1b[?3lnarrow")?;
         let narrow = engine.read_screen(session.id)?;
         assert_eq!(narrow.cols, 80);
-        assert_eq!(narrow.cursor.x, 6);
+        assert_eq!(narrow.cursor.x, 10);
         assert_eq!(narrow.cursor.y, 0);
-        assert_eq!(narrow.lines, vec!["narrow"]);
+        assert_eq!(narrow.lines, vec!["keptnarrow"]);
 
         engine.destroy_session(session.id)?;
         Ok(())
