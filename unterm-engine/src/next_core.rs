@@ -969,16 +969,49 @@ impl NextCoreScreen {
         }
     }
 
-    fn backspace(&mut self) {
-        self.mark_dirty_row(self.cursor_y);
-        if self.cursor_x > self.active_right_margin() {
-            self.cursor_x = self.active_right_margin();
+    /// Whether the cursor sits in the pending-wrap state: one past the
+    /// right margin after a character was written into the last column.
+    ///
+    /// The kernel stores that state as `cursor_x == right_margin + 1` (and
+    /// `cursor_x >= cols` at the screen edge), so with DECLRMM a cursor that
+    /// was *placed* exactly one column outside the right margin reads the
+    /// same. That ambiguity is accepted: DECLRMM is rare, and nothing parks
+    /// the cursor there on purpose.
+    fn wrap_pending(&self) -> bool {
+        self.cursor_x >= self.cols
+            || (self.left_right_margin_mode && self.cursor_x == self.active_right_margin() + 1)
+    }
+
+    /// The column the cursor logically occupies. In pending-wrap that is
+    /// the last column written: xterm never moves the cursor past it, only
+    /// a flag records the deferred wrap.
+    fn logical_cursor_x(&self) -> usize {
+        if self.wrap_pending() {
+            self.cursor_x - 1
         } else {
-            self.cursor_x = self
-                .cursor_x
-                .saturating_sub(1)
-                .max(self.active_left_margin());
+            self.cursor_x
         }
+    }
+
+    /// xterm's `CursorBack` without reverse-wrap: counted from the logical
+    /// column, stopping at the left margin when the cursor started at or
+    /// right of it and at column 0 otherwise.
+    fn cursor_back(&mut self, count: usize) {
+        self.mark_dirty_row(self.cursor_y);
+        let x = self.logical_cursor_x();
+        let left = self.active_left_margin();
+        self.cursor_x = if x >= left {
+            x.saturating_sub(count).max(left)
+        } else {
+            x.saturating_sub(count)
+        };
+    }
+
+    /// BS is exactly `CUB 1` (xterm `cursor.c` `CursorBack`). From
+    /// pending-wrap the cursor is logically on the last column, so BS lands
+    /// one left of it: `ABCDE` BS `X` gives `ABCXE`.
+    fn backspace(&mut self) {
+        self.cursor_back(1);
     }
 
     fn horizontal_tab(&mut self) {
@@ -1181,12 +1214,7 @@ impl NextCoreScreen {
     }
 
     fn move_cursor_left(&mut self, count: usize) {
-        self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = self
-            .cursor_x
-            .min(self.active_right_margin())
-            .saturating_sub(count)
-            .max(self.active_left_margin());
+        self.cursor_back(count);
     }
 
     fn cursor_next_line(&mut self, count: usize) {
@@ -9148,9 +9176,12 @@ mod inline_image_tests {
         let mut screen = NextCoreScreen::new(5, 3);
         screen.feed("ABCDE");
         assert_eq!(screen.cursor_x, 5);
-        // Backspace from pending-wrap at col 5 must land on col 4 (index of 'E'), not col 3 ('D').
+        // xterm (cursor.c `CursorBack`, reverse-wrap off): in pending-wrap
+        // the cursor is logically on the last column (col 4), so BS -- like
+        // CUB 1 -- moves to col 3 and `X` replaces 'D'. Commit 15766f49
+        // counted the pending column as a real one and landed on col 4.
         screen.feed("\x08X");
-        assert_eq!(screen.snapshot_viewport_lines()[0], "ABCDX");
+        assert_eq!(screen.snapshot_viewport_lines()[0], "ABCXE");
 
         // Erase in line (ESC[K) from pending-wrap must erase the last column (col 4).
         let mut screen2 = NextCoreScreen::new(5, 3);

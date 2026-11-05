@@ -408,3 +408,16 @@ fn insert_and_delete_lines_outside_the_scroll_region_do_nothing() {
     screen.feed("\x1b[3;1H\x1b[L");
     assert_eq!(screen.snapshot_viewport_lines(), vec!["r0", "r1", "", "r2", "r3", "r5"]);
 }
+
+// --- C-BS: BS and CUB 1 agree in pending-wrap ---------------------------
+
+#[test]
+fn backspace_and_cub_from_pending_wrap_both_land_one_left_of_the_last_column() {
+    let mut bs = screen_with_pending_wrap();
+    bs.feed("\x08X");
+    let mut cub = screen_with_pending_wrap();
+    cub.feed("\x1b[DX");
+    assert_eq!(row(&bs, 0), "ABCXE");
+    assert_eq!(row(&cub, 0), "ABCXE");
+    assert_eq!(bs.cursor_x, cub.cursor_x);
+}
