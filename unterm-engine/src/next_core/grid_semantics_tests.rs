@@ -655,3 +655,15 @@ fn erasing_the_end_of_the_row_ends_the_soft_wrap() {
         assert!(wrapped_cells(&screen, 0).is_empty(), "after {:?}", edit);
     }
 }
+
+// --- C-cursor: a pending-wrap cursor is shown on the last column ----------
+
+#[test]
+fn pending_wrap_cursor_is_reported_on_the_last_column() {
+    let mut screen = screen(5, 3);
+    screen.feed("abcde");
+    assert_eq!(screen.cursor_x, 5, "still waiting to wrap");
+    assert_eq!(screen.cursor_snapshot().x, 4);
+    screen.feed("f");
+    assert_eq!((screen.cursor_snapshot().x, screen.cursor_snapshot().y), (1, 1));
+}

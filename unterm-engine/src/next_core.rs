@@ -556,7 +556,10 @@ impl NextCoreScreen {
         // with the text it belongs to.
         let live_start = self.history_len().saturating_sub(self.lines.len()) as isize;
         CursorSnapshot {
-            x: self.cursor_x,
+            // A cursor waiting to wrap (`cursor_x == cols`) is drawn on the
+            // last column, as xterm and VTE do; reported as `cols` it would
+            // fall off the grid and the renderer would hide it.
+            x: self.cursor_x.min(self.cols.saturating_sub(1)),
             y: live_start + self.cursor_y as isize - self.viewport_start() as isize,
             visible: self.cursor_visible,
             shape: self.cursor_shape.clone(),
@@ -4599,7 +4602,8 @@ mod tests {
         set_output_for_test(session.id, "\x1b[?7labcdef")?;
         let disabled = engine.read_screen(session.id)?;
         assert_eq!(disabled.lines, vec!["abcdf"]);
-        assert_eq!(disabled.cursor.x, 5);
+        // Waiting on the last column; the snapshot shows it there.
+        assert_eq!(disabled.cursor.x, 4);
         assert_eq!(disabled.cursor.y, 0);
 
         set_output_for_test(session.id, "\x1b[?7labcde\x1b[?7hf")?;
@@ -4680,7 +4684,8 @@ mod tests {
         set_output_for_test(session.id, "abcd\tZ")?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.lines, vec!["abcdZ"]);
-        assert_eq!(screen.cursor.x, 5);
+        // Pending wrap after Z, shown on the last column.
+        assert_eq!(screen.cursor.x, 4);
         assert_eq!(screen.cursor.y, 0);
 
         engine.destroy_session(session.id)?;
@@ -4776,7 +4781,8 @@ mod tests {
         set_output_for_test(session.id, "A\x1b[5IZ")?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.lines, vec!["A        Z"]);
-        assert_eq!(screen.cursor.x, 10);
+        // Pending wrap after Z, shown on the last column.
+        assert_eq!(screen.cursor.x, 9);
         assert_eq!(screen.cursor.y, 0);
 
         engine.destroy_session(session.id)?;
@@ -4824,7 +4830,8 @@ mod tests {
         set_output_for_test(session.id, "\x1b[3gA\tB")?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.lines, vec!["A    B"]);
-        assert_eq!(screen.cursor.x, 6);
+        // Pending wrap after B, shown on the last column.
+        assert_eq!(screen.cursor.x, 5);
         assert_eq!(screen.cursor.y, 0);
 
         engine.destroy_session(session.id)?;
