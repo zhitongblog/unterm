@@ -575,6 +575,7 @@ mod tests {
                     ch,
                     style: CellStyle::default(),
                     width: 1,
+                    combining: None,
                 })
                 .collect(),
         }

@@ -29,15 +29,13 @@ impl Preedit {
     ///
     /// By display width, not character count: a Chinese character is two
     /// columns wide, and measuring it as one puts the candidate list and the
-    /// caret half a character out on every syllable.
+    /// caret half a character out on every syllable. Measured by the same
+    /// cells `append_text` draws it as, so the inverted background, the caret
+    /// and the candidate window cover exactly the text drawn -- a zero-width
+    /// jamo or joiner counted as nothing here and drawn as a column there
+    /// left the last character hanging off the highlight.
     pub fn columns(&self) -> usize {
-        self.text
-            .chars()
-            .map(|ch| {
-                let mut buf = [0u8; 4];
-                termwiz::cell::unicode_column_width(ch.encode_utf8(&mut buf), None)
-            })
-            .sum()
+        crate::terminal::text_columns(&self.text)
     }
 
     /// Where the caret sits, in columns from the start of the composed text.
@@ -48,14 +46,11 @@ impl Preedit {
         let Some(caret) = self.caret else {
             return self.columns();
         };
-        let caret = caret.min(self.text.len());
-        self.text[..caret]
-            .chars()
-            .map(|ch| {
-                let mut buf = [0u8; 4];
-                termwiz::cell::unicode_column_width(ch.encode_utf8(&mut buf), None)
-            })
-            .sum()
+        let mut caret = caret.min(self.text.len());
+        while !self.text.is_char_boundary(caret) {
+            caret -= 1;
+        }
+        crate::terminal::text_columns(&self.text[..caret])
     }
 }
 
@@ -95,6 +90,16 @@ mod tests {
         assert_eq!(preedit("中", None).columns(), 2);
         assert_eq!(preedit("中文", None).columns(), 4);
         assert_eq!(preedit("ni", None).columns(), 2);
+    }
+
+    /// A conjoining jamo is zero columns on the grid and rides on the
+    /// syllable before it, here and where the text is drawn alike.
+    #[test]
+    fn zero_width_characters_are_measured_as_they_are_drawn() {
+        let text = "\u{1100}\u{1161}a";
+        assert_eq!(preedit(text, None).columns(), crate::terminal::text_columns(text));
+        assert_eq!(preedit("e\u{301}", None).columns(), 1);
+        assert_eq!(preedit("e\u{301}x", Some(3)).caret_column(), 1);
     }
 
     #[test]

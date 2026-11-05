@@ -357,6 +357,7 @@ mod tests {
                     ch,
                     style: style.clone(),
                     width: 1,
+                    combining: None,
                 })
                 .collect(),
         }

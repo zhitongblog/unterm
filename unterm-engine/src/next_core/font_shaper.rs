@@ -135,16 +135,44 @@ impl Shaper {
                         glyph_index: info.codepoint,
                         cluster: info.cluster,
                         // 26.6 fixed point, same as FreeType's advances.
-                        x_advance: pos.x_advance >> 6,
-                        y_advance: pos.y_advance >> 6,
-                        x_offset: pos.x_offset >> 6,
-                        y_offset: pos.y_offset >> 6,
+                        x_advance: from_26_6(pos.x_advance),
+                        y_advance: from_26_6(pos.y_advance),
+                        x_offset: from_26_6(pos.x_offset),
+                        y_offset: from_26_6(pos.y_offset),
                     })
                     .collect())
             })();
             harfbuzz::hb_buffer_destroy(buffer);
             result
         }
+    }
+}
+
+/// A 26.6 fixed-point value in whole pixels, rounded to the nearest.
+///
+/// A bare `>> 6` floors toward negative infinity, so a small negative offset
+/// (a mark nudged left by -10/64 px) became a whole pixel left, and every
+/// kerned or mark-positioned glyph carried a systematic 1px left/down bias.
+pub fn from_26_6(value: i32) -> i32 {
+    (value + 32) >> 6
+}
+
+#[cfg(test)]
+mod rounding_tests {
+    use super::from_26_6;
+
+    #[test]
+    fn fixed_point_rounds_to_the_nearest_pixel() {
+        assert_eq!(from_26_6(0), 0);
+        assert_eq!(from_26_6(64), 1);
+        assert_eq!(from_26_6(-64), -1);
+        // Small negatives are zero, not -1: the old floor's bias.
+        assert_eq!(from_26_6(-10), 0);
+        assert_eq!(from_26_6(-31), 0);
+        assert_eq!(from_26_6(-33), -1);
+        assert_eq!(from_26_6(31), 0);
+        assert_eq!(from_26_6(32), 1);
+        assert_eq!(from_26_6(10 * 64 + 40), 11);
     }
 }
 

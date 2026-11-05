@@ -21,6 +21,8 @@
 pub struct Run {
     /// Column this run starts at.
     pub column: usize,
+    /// The column just past the run's last cell.
+    pub end: usize,
     /// The text, for the shaper.
     pub text: String,
     /// Which column each byte offset in `text` belongs to.
@@ -77,6 +79,27 @@ pub fn runs(
     cells: &[unterm_engine::StyledCell],
     mut face_of: impl FnMut(char) -> usize,
 ) -> Vec<Run> {
+    runs_with(cells, |cell| face_of(cell.ch), None)
+}
+
+/// As `runs`, with the face chosen per cell and an optional column that has
+/// to be a run of its own.
+///
+/// The cell is the unit, not the character: a cell's whole grapheme -- base,
+/// accents, VS16, the rest of a ZWJ sequence -- goes to the shaper together,
+/// every byte of it mapped back to the base cell's column, so the marks
+/// land on the character they belong to and the cell's width never changes.
+///
+/// `isolate` is the block cursor's column. The glyph under the cursor is
+/// drawn in the background colour on the block; a ligature or a negative
+/// bearing reaching across the cursor's edge would be half inverted and
+/// half not. Shaping that cell on its own, as kitty and wezterm do, means
+/// whatever is drawn there belongs to that cell alone.
+pub fn runs_with(
+    cells: &[unterm_engine::StyledCell],
+    mut face_of: impl FnMut(&unterm_engine::StyledCell) -> usize,
+    isolate: Option<usize>,
+) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
     let mut current: Option<(Run, usize, unterm_engine::CellStyle)> = None;
     let mut column = 0usize;
@@ -89,24 +112,26 @@ pub fn runs(
             continue;
         }
         let width = cell.width;
-        if cell.ch == ' '
-            || cell.ch == '\0'
-            || cell.style.hidden
-            || unterm_render::box_glyphs::draws(cell.ch)
-        {
+        let blank = (cell.ch == ' ' || cell.ch == '\0') && cell.combining().is_empty();
+        if blank || cell.style.hidden || unterm_render::box_glyphs::draws(cell.ch) {
             if let Some((run, _, _)) = current.take() {
                 runs.push(run);
             }
             column += width;
             continue;
         }
-        let face = face_of(cell.ch);
+        let face = face_of(cell);
+        let isolated = isolate == Some(column);
         match current.as_mut() {
             Some((run, run_face, run_style))
-                if same_run(run_style, *run_face, &cell.style, face) =>
+                if !isolated
+                    && isolate != Some(run.column)
+                    && same_run(run_style, *run_face, &cell.style, face) =>
             {
                 run.columns.push((run.text.len(), column));
                 run.text.push(cell.ch);
+                run.text.push_str(cell.combining());
+                run.end = column + width;
             }
             _ => {
                 if let Some((run, _, _)) = current.take() {
@@ -114,11 +139,13 @@ pub fn runs(
                 }
                 let mut run = Run {
                     column,
+                    end: column + width,
                     text: String::new(),
                     columns: Vec::new(),
                 };
                 run.columns.push((0, column));
                 run.text.push(cell.ch);
+                run.text.push_str(cell.combining());
                 current = Some((run, face, cell.style.clone()));
             }
         }
@@ -141,6 +168,7 @@ mod tests {
                 ch,
                 style: style.clone(),
                 width: 1,
+                combining: None,
             })
             .collect()
     }
@@ -219,11 +247,13 @@ mod tests {
                 ch: '中',
                 style: CellStyle::default(),
                 width: 2,
+                combining: None,
             },
             StyledCell {
                 ch: 'a',
                 style: CellStyle::default(),
                 width: 1,
+                combining: None,
             },
         ];
         let runs = runs(&line, |_| 0);
@@ -247,6 +277,45 @@ mod tests {
         let runs = runs(&line, latin);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].text, "ab");
+    }
+
+    /// The shaper gets the whole grapheme, and every byte of it maps back to
+    /// the base cell: the accent rides on the `e`, the `x` after it keeps
+    /// its own column.
+    #[test]
+    fn a_cells_marks_are_shaped_with_it_and_map_to_its_column() {
+        let mut line = cells("ex", CellStyle::default());
+        line[0].combining = Some("\u{301}".into());
+        let runs = runs(&line, latin);
+        assert_eq!(runs.len(), 1);
+        let run = &runs[0];
+        assert_eq!(run.text, "e\u{301}x");
+        assert_eq!(run.column_of(1), 0, "the accent belongs to the e");
+        assert_eq!(run.column_of(3), 1, "and the x is still column 1");
+        assert_eq!(run.end, 2);
+    }
+
+    /// The block cursor's cell is shaped alone, so no ligature or bearing
+    /// can straddle the cursor's edge.
+    #[test]
+    fn the_isolated_column_is_a_run_of_its_own() {
+        let line = cells("a=>b", CellStyle::default());
+        let runs = runs_with(&line, |_| 0, Some(2));
+        let texts: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
+        assert_eq!(texts, vec!["a=", ">", "b"]);
+        assert_eq!((runs[1].column, runs[1].end), (2, 3));
+        assert_eq!(runs[2].column, 3);
+    }
+
+    #[test]
+    fn a_run_records_where_it_ends() {
+        let line = vec![
+            StyledCell::new('中', CellStyle::default(), 2),
+            StyledCell::new(' ', CellStyle::default(), 0),
+            StyledCell::new('a', CellStyle::default(), 1),
+        ];
+        let runs = runs(&line, |_| 0);
+        assert_eq!((runs[0].column, runs[0].end), (0, 3));
     }
 }
 
@@ -272,6 +341,7 @@ mod url_regression {
                 ch,
                 style: CellStyle::default(),
                 width: 1,
+                combining: None,
             })
             .collect();
 
@@ -310,6 +380,7 @@ mod drawn_cell_tests {
             ch,
             width: 1,
             style: CellStyle::default(),
+            combining: None,
         }
     }
 

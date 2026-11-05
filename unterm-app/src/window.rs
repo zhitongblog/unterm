@@ -2795,11 +2795,13 @@ impl App {
         };
 
         let metrics = self.window.font.metrics();
-        let origin = (self.terminal_left(), self.terminal_top());
+        // The selection is the focused pane's, drawn over that pane: from its
+        // own origin, which in a split is not the terminal's.
+        let origin = self.session_origin(live.session_id);
         let theme = self.theme();
 
         for (index, line) in snapshot.lines.iter().enumerate() {
-            let columns = selection.columns_for_row(line.row, line.cells.len());
+            let columns = selection.columns_for_row(line.row, line.cells.len().min(snapshot.cols.max(1)));
             if columns.is_empty() {
                 continue;
             }
@@ -2826,9 +2828,12 @@ impl App {
     /// colours, for a Core that has been replaced since.
     fn report_cell_size(&mut self) {
         let metrics = self.window.font.metrics();
+        // Exactly the cell the renderer lays the grid out on -- whole pixels
+        // already (`snap_cell`) -- so a picture sized in cells from this
+        // lands on the same pixels as the text around it.
         let size = (
-            metrics.width.round().max(1.0) as u32,
-            metrics.height.round().max(1.0) as u32,
+            metrics.width.max(1.0) as u32,
+            metrics.height.max(1.0) as u32,
         );
         let fresh = self.cell_size_reported.as_ref().is_some_and(|(sent, at)| {
             *sent == size && at.elapsed() < std::time::Duration::from_secs(30)
@@ -2984,9 +2989,13 @@ impl App {
     }
 
     /// Where the terminal's first column starts, the strip included.
+    ///
+    /// On a whole pixel, like every cell edge measured from it: a fraction
+    /// here -- a dock mid-animation -- would put every glyph in every pane
+    /// on a resampled sub-pixel phase.
     fn terminal_left(&self) -> f32 {
         let metrics = self.window.font.metrics();
-        self.dock_width(metrics) + self.terminal_padding_left() + self.terminal_balance()
+        (self.dock_width(metrics) + self.terminal_padding_left() + self.terminal_balance()).round()
     }
 
     /// Half of what the grid leaves over across the width, so the text sits
@@ -5432,14 +5441,17 @@ impl App {
     /// the pointer passes is noise, and one that appears when clicking would
     /// do something is a hint.
     fn append_hovered_link(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
-        let Some(link) = self.link_under_pointer() else {
+        let Some((link, origin)) = self.hovered_link() else {
             return;
         };
         let metrics = self.window.font.metrics();
-        let top_offset = self.terminal_top();
+        // From the hovered pane's own origin -- the dock, the padding and
+        // any pane to its left included -- the same origin its text is drawn
+        // from. Measured from the window's edge the line sat a sidebar's
+        // width left of the link.
         quads.backgrounds.push(unterm_render::quads::Quad {
-            left: link.start as f32 * metrics.width,
-            top: top_offset
+            left: origin.0 + link.start as f32 * metrics.width,
+            top: origin.1
                 + link.row as f32 * metrics.height
                 + unterm_render::decorations::underline_top(metrics),
             width: (link.end - link.start) as f32 * metrics.width,
@@ -5448,38 +5460,75 @@ impl App {
         });
     }
 
+    /// Where a session's pane is drawn: its placement's origin in a split,
+    /// the terminal's own origin otherwise. The one answer the text, the
+    /// cursor, the selection and the pointer all measure from.
+    fn session_origin(&self, session_id: usize) -> (f32, f32) {
+        self.placements()
+            .into_iter()
+            .find(|placement| placement.session_id == session_id)
+            .map(|placement| placement.origin)
+            .unwrap_or((self.terminal_left(), self.terminal_top()))
+    }
+
     /// The link the pointer is over, if any.
     fn link_under_pointer(&self) -> Option<crate::links::Link> {
+        self.hovered_link().map(|(link, _)| link)
+    }
+
+    /// The link the pointer is over, and the origin of the pane it is in.
+    ///
+    /// The pane under the pointer, read from its own snapshot and measured
+    /// from its own origin: in a split, the focused pane's text tested against
+    /// the terminal's corner found links that were not there.
+    fn hovered_link(&self) -> Option<(crate::links::Link, (f32, f32))> {
         let live = self.window.state.as_ref()?;
-        let snapshot = self.engine.read_styled_screen(live.session_id).ok()?;
+        let session_id = self.pane_under_pointer().unwrap_or(live.session_id);
+        let snapshot = self.engine.read_styled_screen(session_id).ok()?;
         let metrics = self.window.font.metrics();
-        let left = self.terminal_left();
-        let top = self.terminal_top();
-        let column = ((self.window.pointer.0 - left).max(0.0) / metrics.width.max(1.0)) as usize;
-        let row = ((self.window.pointer.1 - top).max(0.0) / metrics.height.max(1.0)) as usize;
+        let origin = self.session_origin(session_id);
+        let (x, y) = (
+            self.window.pointer.0 - origin.0,
+            self.window.pointer.1 - origin.1,
+        );
+        if x < 0.0 || y < 0.0 {
+            return None;
+        }
+        let column = (x / metrics.width.max(1.0)) as usize;
+        let row = (y / metrics.height.max(1.0)) as usize;
+        if column >= snapshot.cols.max(1) {
+            return None;
+        }
 
         let line = snapshot.lines.get(row)?;
         crate::links::links_in_row(row, line, &self.link_rules)
             .into_iter()
             .find(|link| link.covers(row, column))
+            .map(|link| (link, origin))
     }
 
     /// Which cell the pointer is over, in scrollback coordinates.
+    ///
+    /// Against the pane the selection belongs to -- the focused one, which a
+    /// press in another pane makes it first -- by that pane's origin and
+    /// that pane's viewport.
     fn cell_under_pointer(&self) -> unterm_engine::next_core::selection::SelectionPoint {
+        let session_id = self.window.state.as_ref().map(|live| live.session_id);
         // The viewport's top row, so a selection made while scrolled back stays
         // on the text it was made on rather than on whatever is there later.
-        let top = self
-            .window.state
-            .as_ref()
-            .and_then(|live| self.engine.read_styled_screen(live.session_id).ok())
+        let top = session_id
+            .and_then(|session_id| self.engine.read_styled_screen(session_id).ok())
             .map(|snapshot| snapshot.lines.first().map(|line| line.row).unwrap_or(0))
             .unwrap_or(0);
 
-        // From the terminal's own origin, not the window's: the bar above and
-        // the gap around the grid are not part of it, and a selection measured
-        // from the window's corner lands two rows above where it was drawn.
+        // From the pane's own origin, not the window's: the bar above, the
+        // gap around the grid and any pane to the left are not part of it,
+        // and a selection measured from the window's corner lands rows above
+        // and columns left of where it was drawn.
         let metrics = self.window.font.metrics();
-        let origin = (self.terminal_left(), self.terminal_top());
+        let origin = session_id
+            .map(|session_id| self.session_origin(session_id))
+            .unwrap_or((self.terminal_left(), self.terminal_top()));
         crate::select::cell_at(
             self.window.pointer.0 - origin.0,
             self.window.pointer.1 - origin.1,
@@ -9802,6 +9851,12 @@ impl App {
             notice.unread = false;
         }
         if let Some(live) = self.window.state.as_mut() {
+            // A selection belongs to the pane it was made in. Carried over,
+            // it would be drawn over -- and copied from -- whichever pane
+            // took the focus next, at the same rows and columns.
+            if live.session_id != session_id {
+                self.window.drag = None;
+            }
             live.session_id = session_id;
         }
         self.resize_panes();
@@ -10892,11 +10947,7 @@ impl App {
         if let Some(palette) = self.window.palette.as_ref() {
             if palette.view == crate::palette::View::Search {
                 let card = self.palette_card()?;
-                let query_columns = palette
-                    .query
-                    .chars()
-                    .map(crate::terminal::column_width)
-                    .sum::<usize>();
+                let query_columns = crate::terminal::text_columns(&palette.query);
                 return Some((
                     (
                         card.left + metrics.width * (3 + query_columns) as f32,
@@ -10909,11 +10960,7 @@ impl App {
         if let Some(search) = self.window.search.as_ref() {
             let height = self.window.state.as_ref()?.height as f32;
             let top = (height - self.status_bar_height() - metrics.height).max(self.terminal_top());
-            let columns = search
-                .pattern
-                .chars()
-                .map(crate::terminal::column_width)
-                .sum::<usize>();
+            let columns = crate::terminal::text_columns(&search.pattern);
             return Some((
                 (
                     self.terminal_left() + metrics.width * (9 + columns) as f32,
@@ -10930,7 +10977,7 @@ impl App {
             .find(|placement| placement.session_id == live.session_id);
         let (pane_origin, pane_cols) = match placement {
             Some(placement) => (placement.origin, placement.cols),
-            None => ((0.0, self.terminal_top()), snapshot.cols),
+            None => ((self.terminal_left(), self.terminal_top()), snapshot.cols),
         };
         let cursor = (snapshot.cursor.x, snapshot.cursor.y.max(0) as usize);
         Some((
@@ -13901,6 +13948,7 @@ mod tests {
             ch,
             style: Default::default(),
             width,
+            combining: None,
         };
         let line = |cells| unterm_engine::StyledScreenLine {
             row: 0,
@@ -13926,6 +13974,7 @@ mod tests {
             ch,
             style: Default::default(),
             width,
+            combining: None,
         };
         // 你好 ab on the grid: each hanzi owns a lead cell and a spacer.
         let cells = vec![
