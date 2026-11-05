@@ -463,7 +463,15 @@ impl NextCoreScreen {
     }
 
     fn clear_dirty_rows(&mut self) {
-        self.render_state.clear_dirty_rows();
+        let live_offset = self.live_viewport_offset();
+        self.render_state.clear_dirty_rows(live_offset);
+    }
+
+    /// The viewport row live line 0 is drawn on. Zero on a screen whose live
+    /// lines fill it; positive when scrollback shows above them (a pane that
+    /// grew) or the user scrolled back.
+    fn live_viewport_offset(&self) -> isize {
+        self.history.scrollback_rows() as isize - self.viewport_start() as isize
     }
 
     fn mark_dirty_row(&mut self, row: usize) {
@@ -495,6 +503,7 @@ impl NextCoreScreen {
         )
     }
 
+    /// `dirty_rows` are viewport rows, as `dirty_rows()` hands them out.
     fn styled_viewport_dirty_lines(
         &self,
         dirty_rows: DirtyRows,
@@ -528,8 +537,30 @@ impl NextCoreScreen {
         self.render_state.revision()
     }
 
+    /// Dirty rows in viewport coordinates, which is what a reader indexes.
+    ///
+    /// Marks are kept in live-line coordinates (see `RenderState`). If live
+    /// line 0 has moved within the viewport since tracking began -- an LF
+    /// that grew the live area of a pane showing scrollback above it, a
+    /// reflow, a scroll of the viewport -- every row on screen changed.
     fn dirty_rows(&self) -> Option<DirtyRows> {
-        self.render_state.dirty_rows()
+        let raw = self.render_state.dirty_rows()?;
+        let all = render_frame::all_rows(self.rows);
+        let offset = self.live_viewport_offset();
+        if self.render_state.all_dirty() || offset != self.render_state.live_offset() {
+            return all;
+        }
+        let last = self.rows as isize - 1;
+        let start = raw.start as isize + offset;
+        let end = raw.end as isize + offset;
+        if end < 0 || start > last {
+            // Changed, but not on screen; a full frame is the safe answer.
+            return all;
+        }
+        Some(DirtyRows {
+            start: start.max(0) as usize,
+            end: end.min(last) as usize,
+        })
     }
 
     fn can_render_delta_since(&self, since_revision: u64) -> bool {
