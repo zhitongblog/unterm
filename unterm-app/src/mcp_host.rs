@@ -594,11 +594,14 @@ fn draw(
     for (row, line) in lines.iter().enumerate() {
         let mut column = 0u32;
         for cell in &line.cells {
+            if cell.width == 0 {
+                continue;
+            }
             if column >= cols {
                 break;
             }
             let (fg, bg) = colors(cell);
-            let width = cell.width.max(1) as u32;
+            let width = cell.width as u32;
 
             fill(
                 &mut image,
