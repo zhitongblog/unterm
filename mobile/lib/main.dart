@@ -38,6 +38,19 @@ bool isAllowedLanOrTailscaleHost(String host) {
   return false;
 }
 
+/// Returns true if the address is a Tailscale CGNAT / ULA / MagicDNS address.
+bool isTailscaleHost(String host) {
+  final h = host.trim().toLowerCase();
+  if (h.endsWith('.ts.net') || h.startsWith('fd7a:115c:a1e0:')) return true;
+  final parts = h.split('.');
+  if (parts.length == 4) {
+    final a = int.tryParse(parts[0]) ?? -1;
+    final b = int.tryParse(parts[1]) ?? -1;
+    return a == 100 && b >= 64 && b <= 127;
+  }
+  return false;
+}
+
 class PairedMachine {
   final String machineId;
   String hostname;
@@ -150,6 +163,10 @@ class _PocketHomePageState extends State<PocketHomePage> {
   List<Map<String, dynamic>> _inbox = [];
   List<Map<String, dynamic>> _sessions = [];
   List<Map<String, dynamic>> _approvals = [];
+  List<Map<String, dynamic>> _ports = [];
+  List<Map<String, dynamic>> _checkpoints = [];
+  String _watchedCwd = '';
+  String _deviceScopeLabel = '完全控制';
   String _watchedInstance = '';
   int? _watchedPane;
   String _screenText = '';
@@ -158,6 +175,7 @@ class _PocketHomePageState extends State<PocketHomePage> {
 
   WebSocket? _ws;
   Timer? _reconnectTimer;
+  Timer? _lanSwitchbackTimer;
   final TextEditingController _cmdController = TextEditingController();
   final ScrollController _termScrollController = ScrollController();
 
@@ -170,6 +188,7 @@ class _PocketHomePageState extends State<PocketHomePage> {
   @override
   void dispose() {
     _reconnectTimer?.cancel();
+    _lanSwitchbackTimer?.cancel();
     _ws?.close();
     _cmdController.dispose();
     _termScrollController.dispose();
@@ -458,21 +477,57 @@ class _PocketHomePageState extends State<PocketHomePage> {
     _showSnack('请输入有效的 unterm://pair 链接或使用下方地址 + 6 位配对码', isError: true);
   }
 
-  Future<void> _connectToMachine(PairedMachine machine) async {
-    String? targetIp = machine.activeIp;
+  /// Happy-Eyeballs style route selection: probes LAN routes first (low latency),
+  /// falls back to Tailscale routes, and updates `machine.activeIp`.
+  Future<String?> _selectBestRoute(PairedMachine machine) async {
     final nonce = DateTime.now().millisecondsSinceEpoch.toString();
+    final lanRoutes = machine.addresses.where((ip) => !isTailscaleHost(ip)).toList();
+    final tsRoutes = machine.addresses.where((ip) => isTailscaleHost(ip)).toList();
 
-    if (targetIp == null || !machine.online) {
-      for (final candidate in machine.addresses) {
-        final h = await _probeHello(candidate, machine.port, nonce);
-        if (h != null && h.machineId == machine.machineId && h.fingerprint == machine.fingerprint) {
-          targetIp = candidate;
-          machine.activeIp = candidate;
-          machine.online = true;
+    for (final ip in [...lanRoutes, ...tsRoutes]) {
+      final h = await _probeHello(ip, machine.port, nonce);
+      if (h != null && h.machineId == machine.machineId && h.fingerprint == machine.fingerprint) {
+        machine.activeIp = ip;
+        machine.online = true;
+        for (final extra in h.allIps) {
+          if (!machine.addresses.contains(extra)) {
+            machine.addresses.add(extra);
+          }
+        }
+        return ip;
+      }
+    }
+    return null;
+  }
+
+  /// Periodic probe while connected over Tailscale: if a known LAN route becomes
+  /// reachable (e.g. user walks back into home/office Wi-Fi), switch back to LAN.
+  void _startLanSwitchbackMonitor() {
+    _lanSwitchbackTimer?.cancel();
+    _lanSwitchbackTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
+      final m = _connectedMachine;
+      if (m == null || m.activeIp == null || !isTailscaleHost(m.activeIp!)) return;
+      final lanCandidates = m.addresses.where((ip) => !isTailscaleHost(ip)).toList();
+      if (lanCandidates.isEmpty) return;
+      final nonce = DateTime.now().millisecondsSinceEpoch.toString();
+      for (final lanIp in lanCandidates) {
+        final h = await _probeHello(lanIp, m.port, nonce);
+        if (h != null && h.machineId == m.machineId && h.fingerprint == m.fingerprint) {
+          if (mounted && _connectedMachine?.machineId == m.machineId) {
+            setState(() {
+              m.activeIp = lanIp;
+            });
+            _showSnack('⚡ 已自动从 Tailscale 切回局域网直连 ($lanIp)');
+            _connectWebSocket();
+          }
           break;
         }
       }
-    }
+    });
+  }
+
+  Future<void> _connectToMachine(PairedMachine machine) async {
+    String? targetIp = await _selectBestRoute(machine) ?? machine.activeIp;
 
     if (targetIp == null) {
       _showSnack('无法连接到 ${machine.hostname}，请确认处于同一局域网 (Wi‑Fi) 或已开启 Tailscale', isError: true);
@@ -483,12 +538,14 @@ class _PocketHomePageState extends State<PocketHomePage> {
       _connectedMachine = machine;
       _tabIndex = 0;
     });
+    _startLanSwitchbackMonitor();
     await _fetchOverview();
     _connectWebSocket();
   }
 
   void _disconnectMachine() {
     _reconnectTimer?.cancel();
+    _lanSwitchbackTimer?.cancel();
     _ws?.close();
     _ws = null;
     setState(() {
@@ -567,8 +624,10 @@ class _PocketHomePageState extends State<PocketHomePage> {
       _wsConnected = false;
     });
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && _connectedMachine != null) {
+    _reconnectTimer = Timer(const Duration(seconds: 3), () async {
+      final m = _connectedMachine;
+      if (mounted && m != null) {
+        await _selectBestRoute(m);
         _connectWebSocket();
       }
     });
@@ -590,7 +649,31 @@ class _PocketHomePageState extends State<PocketHomePage> {
     final approvals = ((data['approvals'] as List?) ?? const [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+    final ports = ((data['ports'] as List?) ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final checkpoints = ((data['checkpoints'] as List?) ?? const [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
     final screen = data['screen_text']?.toString() ?? _screenText;
+
+    // Auto-learn newly reported LAN / Tailscale routes from the host
+    final m = _connectedMachine;
+    if (m != null && data['routes'] is List) {
+      bool added = false;
+      for (final r in (data['routes'] as List)) {
+        if (r is Map && r['ip'] != null) {
+          final ip = r['ip'].toString();
+          if (isAllowedLanOrTailscaleHost(ip) && !m.addresses.contains(ip)) {
+            m.addresses.add(ip);
+            added = true;
+          }
+        }
+      }
+      if (added) {
+        _saveMachinesToDisk();
+      }
+    }
 
     final alertSig =
         '${inbox.map((e) => '${e['instance_id']}:${e['pane_id'] ?? e['id']}').join(',')}|${approvals.length}';
@@ -610,6 +693,14 @@ class _PocketHomePageState extends State<PocketHomePage> {
       _inbox = inbox;
       _sessions = sessions;
       _approvals = approvals;
+      _ports = ports;
+      _checkpoints = checkpoints;
+      if (data['watched_cwd'] != null) {
+        _watchedCwd = data['watched_cwd'].toString();
+      }
+      if (data['device_scope_label'] != null) {
+        _deviceScopeLabel = data['device_scope_label'].toString();
+      }
       _screenText = screen;
       if (_watchedPane == null && _sessions.isNotEmpty) {
         _watchedInstance = (_sessions.first['instance_id'] ?? '').toString();
@@ -1053,6 +1144,19 @@ class _PocketHomePageState extends State<PocketHomePage> {
           ],
         ),
         actions: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981).withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(99),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _deviceScopeLabel,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF34D399), fontWeight: FontWeight.w600),
+            ),
+          ),
           IconButton(
             tooltip: '立即刷新',
             icon: const Icon(Icons.refresh_rounded, size: 20),
@@ -1060,13 +1164,56 @@ class _PocketHomePageState extends State<PocketHomePage> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _tabIndex,
+      body: Column(
         children: [
-          _buildInboxTab(),
-          _buildOverviewTab(),
-          _buildTerminalTab(),
-          _buildApprovalsTab(),
+          if (_ports.isNotEmpty)
+            Container(
+              height: 38,
+              color: const Color(0xFF0D1420),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: Text('本地预览:', style: TextStyle(fontSize: 11.5, color: Color(0xFF8B9BB4))),
+                    ),
+                  ),
+                  ..._ports.map((p) {
+                    final portNum = p['port'];
+                    final fw = (p['label'] ?? p['framework_hint'] ?? 'Web').toString();
+                    final previewUrl =
+                        'http://${m.activeIp}:${m.port}/preview/$portNum/?token=${Uri.encodeQueryComponent(m.deviceToken)}';
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ActionChip(
+                          visualDensity: VisualDensity.compact,
+                          label: Text(':$portNum $fw', style: const TextStyle(fontSize: 11, fontFamily: 'monospace')),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: previewUrl));
+                            _showSnack('已复制手机预览网址: $previewUrl');
+                          },
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          Expanded(
+            child: IndexedStack(
+              index: _tabIndex,
+              children: [
+                _buildInboxTab(),
+                _buildOverviewTab(),
+                _buildTerminalTab(),
+                _buildHarnessTab(),
+                _buildApprovalsTab(),
+              ],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -1093,6 +1240,14 @@ class _PocketHomePageState extends State<PocketHomePage> {
           const NavigationDestination(
             icon: Icon(Icons.terminal_rounded),
             label: '实时终端',
+          ),
+          NavigationDestination(
+            icon: Badge(
+              isLabelVisible: _checkpoints.isNotEmpty,
+              label: Text('${_checkpoints.length}'),
+              child: const Icon(Icons.history_rounded),
+            ),
+            label: '检查点/接力',
           ),
           NavigationDestination(
             icon: Badge(
@@ -1387,6 +1542,183 @@ class _PocketHomePageState extends State<PocketHomePage> {
     if (text.isEmpty) return;
     _cmdController.clear();
     _sendInput(inst, paneId, '$text\r');
+  }
+
+  Widget _buildHarnessTab() {
+    final cpLabelCtrl = TextEditingController();
+    final handoffReqCtrl = TextEditingController();
+    final paneId = _watchedPane ?? 0;
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '零污染 Git 检查点 (refs/unterm/checkpoints)',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '不改动分支历史与 .git/index，毫秒级保存含未跟踪文件的快照并支持一键回滚',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF8B9BB4)),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: cpLabelCtrl,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          hintText: '检查点备注（如：让 Claude 重构前）',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () async {
+                        final label = cpLabelCtrl.text.trim().isEmpty
+                            ? '手机端检查点'
+                            : cpLabelCtrl.text.trim();
+                        final r = await _callRpc(_watchedInstance, 'checkpoint.create', {
+                          'cwd': _watchedCwd,
+                          'pane_id': paneId,
+                          'label': label,
+                          'agent': 'mobile-app',
+                        });
+                        if (r != null && r['ok'] == true) {
+                          _showSnack('已创建零污染 Git 检查点');
+                          await _fetchOverview();
+                        } else {
+                          _showSnack('创建失败：${r?['error'] ?? ''}', isError: true);
+                        }
+                      },
+                      child: const Text('+ 存档'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (_checkpoints.isEmpty)
+                  const Text(
+                    '当前仓库暂无隐藏检查点',
+                    style: TextStyle(fontSize: 12.5, color: Color(0xFF8B9BB4)),
+                  )
+                else
+                  ..._checkpoints.map((cp) {
+                    final cpId = (cp['id'] ?? '').toString();
+                    final label = (cp['label'] ?? '').toString();
+                    final stat = (cp['stat_summary'] ?? cp['branch'] ?? '').toString();
+                    final sha = (cp['commit_sha'] ?? cp['head_sha'] ?? '').toString();
+                    final shortSha = sha.length > 8 ? sha.substring(0, 8) : sha;
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text('$cpId · $label',
+                          style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5, color: Color(0xFF34D399))),
+                      subtitle: Text('$shortSha · $stat',
+                          style: const TextStyle(fontSize: 11.5, color: Color(0xFF8B9BB4))),
+                      trailing: OutlinedButton(
+                        onPressed: () async {
+                          final r = await _callRpc(_watchedInstance, 'checkpoint.restore', {
+                            'cwd': _watchedCwd,
+                            'pane_id': paneId,
+                            'id': cpId,
+                          });
+                          if (r != null && r['ok'] == true) {
+                            _showSnack('已回滚至检查点 $cpId（已自动备份）');
+                            await _fetchOverview();
+                          } else {
+                            _showSnack('回滚失败：${r?['error'] ?? ''}', isError: true);
+                          }
+                        },
+                        child: const Text('回滚'),
+                      ),
+                    );
+                  }),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '跨 Agent 便携接力 & 窗口 A11y 快照 (分屏 #$paneId)',
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14.5),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '自动打包 Git 状态、Diff 与近期终端输出（完整保留你的指令绝不截断），或抓取电脑窗口截图 + UI 控件树注入当前分屏',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF8B9BB4)),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: handoffReqCtrl,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: '补充接力指令（永不截断）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonal(
+                      onPressed: () async {
+                        final reqText = handoffReqCtrl.text.trim().isEmpty
+                            ? '请阅读上下文接力文件并继续完成未完事项'
+                            : handoffReqCtrl.text.trim();
+                        final r = await _callRpc(_watchedInstance, 'handoff.execute', {
+                          'cwd': _watchedCwd,
+                          'pane_id': paneId,
+                          'target_pane_id': paneId,
+                          'target_agent': 'claude-code',
+                          'user_request': reqText,
+                        });
+                        if (r != null && r['ok'] == true) {
+                          _showSnack('已生成接力包并发送至分屏 #$paneId');
+                          setState(() => _tabIndex = 2);
+                        } else {
+                          _showSnack('接力失败：${r?['error'] ?? ''}', isError: true);
+                        }
+                      },
+                      child: const Text('打包上下文并接力发送'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () async {
+                        final r = await _callRpc(_watchedInstance, 'snapshot.capture', {
+                          'include_a11y': true,
+                          'paste_to_pane': paneId,
+                        });
+                        if (r != null && r['ok'] == true) {
+                          _showSnack('已抓取窗口截图 + A11y 控件树并粘贴至分屏 #$paneId');
+                          setState(() => _tabIndex = 2);
+                        } else {
+                          _showSnack('快照失败：${r?['error'] ?? ''}', isError: true);
+                        }
+                      },
+                      child: const Text('窗口截图 + A11y 控件树粘贴'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildApprovalsTab() {

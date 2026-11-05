@@ -11,6 +11,7 @@ mod agents;
 mod assets;
 mod console;
 pub use console::console_dir;
+pub mod harness;
 pub mod qrcode_svg;
 pub mod remote;
 pub mod server;

@@ -450,8 +450,9 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/mcp/audit") => api_mcp_audit(&req.query),
         ("GET", "/api/remote/status") => Response::ok_json(crate::remote::status_snapshot()),
         ("POST", "/api/remote/enable") => api_remote_enable(handler, &req.body),
-        ("POST", "/api/remote/pair-code") => api_remote_pair_code(handler),
+        ("POST", "/api/remote/pair-code") => api_remote_pair_code(handler, &req.body),
         ("POST", "/api/remote/revoke") => api_remote_revoke(&req.body),
+        ("POST", "/api/remote/rpc") => api_remote_rpc(handler, &req.body),
         ("GET", "/api/profile/list") => api_profile_list(),
         ("POST", "/api/profile/create") => api_profile_create(&req.body),
         ("GET", "/api/profile/import-scan") => api_profile_import_scan(),
@@ -879,21 +880,40 @@ fn api_remote_enable(handler: &McpHandler, body: &[u8]) -> Response {
     }
 }
 
-fn api_remote_pair_code(handler: &McpHandler) -> Response {
+fn api_remote_pair_code(handler: &McpHandler, body: &[u8]) -> Response {
     let _ = handler;
+    let v = parse_json_body(body);
+    let scope = v.get("scope").and_then(Value::as_str);
     // Automatically enable remote gateway if generating a pairing code
     if !crate::remote::load_or_init_config().enabled {
         let _ = crate::remote::set_enabled(true, Some(Arc::new(McpHandler::new())));
     } else {
         crate::remote::ensure_remote_server_started(Arc::new(McpHandler::new()));
     }
-    match crate::remote::generate_pairing_code() {
+    match crate::remote::generate_pairing_code_with_scope(scope) {
         Ok(bundle) => Response::ok_json(json!({
             "ok": true,
             "pairing": bundle,
             "status": crate::remote::status_snapshot(),
         })),
         Err(e) => Response::err(500, "Internal Error", &e.to_string()),
+    }
+}
+
+fn api_remote_rpc(handler: &McpHandler, body: &[u8]) -> Response {
+    let v = parse_json_body(body);
+    let method = match v.get("method").and_then(Value::as_str) {
+        Some(m) if !m.trim().is_empty() => m.trim(),
+        _ => return Response::err(400, "Bad Request", "method required"),
+    };
+    let params = v.get("params").cloned().unwrap_or_else(|| json!({}));
+    match crate::remote::dispatch_local_rpc(handler, method, params) {
+        Ok(result) => Response::ok_json(json!({
+            "ok": true,
+            "result": result,
+            "status": crate::remote::status_snapshot(),
+        })),
+        Err(e) => Response::err(400, "Bad Request", &e.to_string()),
     }
 }
 

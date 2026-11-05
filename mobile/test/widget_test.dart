@@ -12,6 +12,10 @@ void main() {
     expect(isAllowedLanOrTailscaleHost('8.8.8.8'), isFalse);
     expect(isAllowedLanOrTailscaleHost('100.63.0.1'), isFalse);
     expect(isAllowedLanOrTailscaleHost('172.32.0.1'), isFalse);
+
+    expect(isTailscaleHost('100.88.12.34'), isTrue);
+    expect(isTailscaleHost('my-pc.tailnet.ts.net'), isTrue);
+    expect(isTailscaleHost('192.168.1.50'), isFalse);
   });
 
   testWidgets('UntermPocketApp renders LAN/Tailscale notice and discovery UI',

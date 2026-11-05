@@ -222,6 +222,16 @@
               </p>
             </div>
             <div class="flex items-center gap-2 shrink-0">
+              <select
+                class="rounded-md border border-notion-borderStrong bg-notion-surface px-2.5 py-2 text-xs text-notion-ink"
+                x-model="remote.pairScope"
+                @change="if (remote.enabled) generateRemotePairCode()"
+                title="选择新扫码手机的权限范围"
+              >
+                <option value="full">权限：完全控制 (Full)</option>
+                <option value="approve">权限：仅审批与对话 (Approve)</option>
+                <option value="readonly">权限：只读监看 (Read-Only)</option>
+              </select>
               <button
                 type="button"
                 class="rounded-md px-4 py-2 text-sm font-semibold transition"
@@ -239,7 +249,7 @@
             </div>
           </div>
 
-          <!-- Status + Network Addresses Card -->
+          <!-- Status + Network Addresses + Local Dev Server Ports Card -->
           <div class="rounded-lg border border-notion-border bg-notion-surface p-5 space-y-4 text-sm">
             <div class="grid grid-cols-3 gap-4 text-xs">
               <div class="rounded-md border border-notion-border bg-notion-bg p-3">
@@ -259,7 +269,7 @@
 
             <div x-show="remote.addresses && remote.addresses.length > 0">
               <div class="text-xs text-notion-faint mb-2">
-                选择扫码连接的网络地址（点击可切换二维码对应的局域网 Wi-Fi 或 Tailscale IP）：
+                多路由自动学习（手机扫码一次即可同时记住局域网 Wi-Fi 与 Tailscale 路由，断线自动无感切换）：
               </div>
               <div class="flex flex-wrap gap-2">
                 <template x-for="addr in remote.addresses" :key="addr.ip">
@@ -274,6 +284,27 @@
                     <span class="text-notion-teal font-semibold" x-text="addr.ip + ':' + remote.port"></span>
                     <span class="ml-1.5 text-notion-faint" x-text="'[' + addr.label + ']'"></span>
                   </button>
+                </template>
+              </div>
+            </div>
+
+            <!-- Discovered Local Dev Server Ports -->
+            <div x-show="remote.ports && remote.ports.length > 0" class="pt-2 border-t border-notion-border">
+              <div class="text-xs text-notion-faint mb-2">
+                本地开发服务端口自动发现（手机端可通过 <code class="text-notion-ink">/preview/&lt;port&gt;/</code> 免改绑定地址一键预览 localhost 网页）：
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <template x-for="p in remote.ports" :key="p.port">
+                  <a
+                    :href="'http://127.0.0.1:' + p.port + '/'"
+                    target="_blank"
+                    rel="noopener"
+                    class="inline-flex items-center gap-1.5 rounded-md border border-notion-green/40 bg-notion-green/10 px-2.5 py-1 text-xs font-mono text-notion-teal hover:bg-notion-green/20"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-notion-teal"></span>
+                    <span class="font-semibold" x-text="':' + p.port"></span>
+                    <span class="text-notion-muted font-sans" x-text="p.label || p.framework_hint || 'Web'"></span>
+                  </a>
                 </template>
               </div>
             </div>
@@ -311,8 +342,9 @@
               <!-- Right: 6-Digit Code & URLs -->
               <div class="col-span-8 space-y-4">
                 <div>
-                  <div class="text-xs uppercase tracking-wider text-notion-teal">
-                    一次性 6 位配对码（有效期 2 分钟 · 用完即焚）
+                  <div class="flex items-center gap-2 text-xs uppercase tracking-wider text-notion-teal">
+                    <span>一次性 6 位配对码（有效期 2 分钟 · 用完即焚）</span>
+                    <span class="rounded bg-notion-green/20 px-2 py-0.5 text-[11px] font-semibold text-notion-teal" x-text="'权限：' + (remote.pairing?.scope_label || '完全控制')"></span>
                   </div>
                   <div class="mt-1 flex items-baseline gap-4">
                     <span class="text-4xl font-mono font-bold tracking-[0.25em] text-white select-all" x-text="remote.pairing?.code"></span>
@@ -345,7 +377,7 @@
               <div class="text-sm font-semibold text-notion-ink">
                 已绑定的手机设备 (<span x-text="(remote.devices || []).length"></span>)
               </div>
-              <span class="text-xs text-notion-faint">随时可撤销单台手机的访问令牌</span>
+              <span class="text-xs text-notion-faint">支持按设备独立配置权限档位 · 随时可撤销令牌</span>
             </div>
             <div x-show="!remote.devices || remote.devices.length === 0" class="text-xs text-notion-faint py-4 text-center border border-dashed border-notion-border rounded-md">
               暂无已绑定手机设备。用手机扫描上方二维码即可完成绑定。
@@ -356,6 +388,7 @@
                   <div>
                     <span class="font-semibold text-notion-ink" x-text="dev.device_name"></span>
                     <span class="ml-2 rounded bg-notion-surface px-2 py-0.5 text-[10px] text-notion-teal" x-text="dev.platform"></span>
+                    <span class="ml-1.5 rounded border border-notion-green/40 bg-notion-green/10 px-2 py-0.5 text-[10px] text-notion-teal" x-text="dev.scope_label || dev.scope || '完全控制'"></span>
                     <div class="text-notion-faint mt-1" x-text="'最近连接 IP: ' + (dev.last_ip || '-') + ' · 最近活跃: ' + (dev.last_seen_at || '') + ' · 首次绑定: ' + (dev.paired_at || '')"></div>
                   </div>
                   <button
@@ -365,6 +398,110 @@
                   >撤销解绑</button>
                 </div>
               </template>
+            </div>
+          </div>
+
+          <!-- T3 Code-Inspired Agent Harness: Zero-Pollution Git Checkpoints + Portable Handoff + Window A11y SnapShot -->
+          <div class="grid grid-cols-12 gap-5">
+            <!-- Left: Zero-Pollution Hidden Git Checkpoints -->
+            <div class="col-span-7 rounded-lg border border-notion-border bg-notion-surface p-5 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-sm font-semibold text-notion-ink">零污染隐藏 Git 检查点 (refs/unterm/checkpoints)</div>
+                  <div class="text-xs text-notion-faint">不改动当前分支历史与 .git/index，毫秒级保存含未跟踪文件的完整快照并支持一键时光机回滚</div>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  x-model="remote.checkpointLabel"
+                  placeholder="检查点备注（如：让 Claude 重构前）"
+                  class="flex-1 rounded border border-notion-borderStrong bg-notion-bg px-3 py-1.5 text-xs text-notion-ink"
+                  @keydown.enter="createGitCheckpoint()"
+                />
+                <button
+                  type="button"
+                  class="rounded bg-notion-green px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90"
+                  :disabled="remote.loading"
+                  @click="createGitCheckpoint()"
+                >+ 创建检查点</button>
+              </div>
+              <div x-show="!remote.checkpoints || remote.checkpoints.length === 0" class="text-xs text-notion-faint py-3 text-center border border-dashed border-notion-border rounded">
+                当前仓库暂无隐藏检查点
+              </div>
+              <div class="space-y-1.5 max-h-52 overflow-auto" x-show="remote.checkpoints && remote.checkpoints.length > 0">
+                <template x-for="cp in remote.checkpoints" :key="cp.id">
+                  <div class="flex items-center justify-between rounded border border-notion-border bg-notion-bg px-3 py-2 text-xs">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <code class="text-notion-teal font-mono font-semibold" x-text="cp.id"></code>
+                        <span class="truncate text-notion-ink" x-text="cp.label"></span>
+                      </div>
+                      <div class="text-[11px] text-notion-faint font-mono mt-0.5" x-text="((cp.commit_sha || cp.head_sha || '').slice(0,8)) + ' · ' + (cp.created_at || '').slice(0,19).replace('T',' ') + (cp.stat_summary ? (' · ' + cp.stat_summary) : '')"></div>
+                    </div>
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        class="rounded border border-notion-borderStrong px-2 py-1 text-[11px] text-notion-muted hover:text-notion-ink"
+                        @click="viewCheckpointDiff(cp.id)"
+                      >Diff</button>
+                      <button
+                        type="button"
+                        class="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300 hover:bg-amber-500/20"
+                        @click="restoreGitCheckpoint(cp.id)"
+                      >回滚</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div x-show="remote.checkpointDiff" class="rounded border border-notion-border bg-notion-bg p-3 text-xs">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="font-mono text-notion-teal" x-text="'Diff vs ' + (remote.checkpointDiff?.id || '')"></span>
+                  <button type="button" class="text-notion-faint hover:text-notion-ink" @click="remote.checkpointDiff = null">关闭</button>
+                </div>
+                <pre class="max-h-48 overflow-auto font-mono text-[11px] text-notion-muted whitespace-pre-wrap" x-text="remote.checkpointDiff?.diff"></pre>
+              </div>
+            </div>
+
+            <!-- Right: Portable Handoff & Window + A11y SnapShot -->
+            <div class="col-span-5 space-y-4">
+              <div class="rounded-lg border border-notion-border bg-notion-surface p-4 space-y-2.5">
+                <div class="text-sm font-semibold text-notion-ink">跨 Agent 便携上下文接力 (Portable Handoff)</div>
+                <div class="text-xs text-notion-faint">自动打包 Git 状态、Diff 摘要、近期终端输出与你的完整诉求（绝不截断诉求），一键喂给另一个 Agent</div>
+                <div class="flex gap-2">
+                  <select x-model="remote.handoffTarget" class="rounded border border-notion-borderStrong bg-notion-bg px-2 py-1.5 text-xs text-notion-ink">
+                    <option value="claude-code">接力至 Claude Code</option>
+                    <option value="codex-cli">接力至 Codex CLI</option>
+                    <option value="gemini-cli">接力至 Gemini CLI</option>
+                    <option value="kimi-code">接力至 Kimi Code</option>
+                  </select>
+                  <input
+                    type="text"
+                    x-model="remote.handoffPrompt"
+                    placeholder="补充接力指令（可选）"
+                    class="flex-1 rounded border border-notion-borderStrong bg-notion-bg px-2.5 py-1.5 text-xs text-notion-ink"
+                  />
+                </div>
+                <button
+                  type="button"
+                  class="w-full rounded border border-notion-green/50 bg-notion-green/15 py-1.5 text-xs font-semibold text-notion-teal hover:bg-notion-green/25"
+                  :disabled="remote.loading"
+                  @click="buildPortableHandoff()"
+                >生成接力包并复制 Markdown</button>
+                <div x-show="remote.lastHandoff" class="text-[11px] font-mono text-notion-faint break-all" x-text="'已保存: ' + (remote.lastHandoff?.markdown_path || '')"></div>
+              </div>
+
+              <div class="rounded-lg border border-notion-border bg-notion-surface p-4 space-y-2.5">
+                <div class="text-sm font-semibold text-notion-ink">窗口截图 + UI A11y 控件树快照 (SnapShot)</div>
+                <div class="text-xs text-notion-faint">同时抓取当前窗口 PNG 截图与 Windows UI Automation 控件坐标树 JSON，辅助 Agent 精准视觉定位</div>
+                <button
+                  type="button"
+                  class="w-full rounded border border-notion-borderStrong bg-notion-bg py-1.5 text-xs font-semibold text-notion-ink hover:bg-notion-sunken"
+                  :disabled="remote.loading"
+                  @click="captureWindowA11y()"
+                >抓取当前窗口截图 + A11y 控件树</button>
+                <div x-show="remote.lastSnapshot" class="text-[11px] font-mono text-notion-teal break-all" x-text="remote.lastSnapshot?.agent_prompt_snippet"></div>
+              </div>
             </div>
           </div>
         </div>

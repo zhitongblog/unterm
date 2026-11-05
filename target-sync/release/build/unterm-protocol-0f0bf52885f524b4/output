@@ -1,4 +1,0 @@
-cargo:rerun-if-env-changed=UNTERM_BUILD_COMMIT
-cargo:rerun-if-env-changed=GITHUB_SHA
-cargo:rerun-if-changed=../.git/HEAD
-cargo:rustc-env=UNTERM_BUILD_COMMIT=d84236dc2ad9

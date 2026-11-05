@@ -50,12 +50,18 @@ pub struct RemoteConfig {
     pub signing_key_hex: String,
 }
 
+fn default_scope() -> String {
+    "full".to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairedDevice {
     pub device_id: String,
     pub device_name: String,
     pub platform: String,
     pub token_hash: String,
+    #[serde(default = "default_scope")]
+    pub scope: String,
     pub paired_at: String,
     pub last_seen_at: String,
     pub last_ip: String,
@@ -64,6 +70,8 @@ pub struct PairedDevice {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairingRecord {
     pub code: String,
+    #[serde(default = "default_scope")]
+    pub scope: String,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
 }
@@ -78,6 +86,8 @@ pub struct RemoteAddress {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PairingBundle {
     pub code: String,
+    pub scope: String,
+    pub scope_label: String,
     pub expires_at_ms: u64,
     pub ttl_seconds: u64,
     pub port: u16,
@@ -350,13 +360,19 @@ pub fn set_enabled(enabled: bool, handler: Option<Arc<McpHandler>>) -> Result<Va
 }
 
 pub fn generate_pairing_code() -> Result<PairingBundle> {
+    generate_pairing_code_with_scope(None)
+}
+
+pub fn generate_pairing_code_with_scope(scope: Option<&str>) -> Result<PairingBundle> {
     let cfg = load_or_init_config();
     let code_num = fastrand::u32(100_000..1_000_000);
     let code = format!("{:06}", code_num);
+    let norm_scope = crate::harness::normalize_scope(scope);
     let created_at_ms = now_ms();
     let expires_at_ms = created_at_ms + PAIRING_TTL_MS;
     let rec = PairingRecord {
         code: code.clone(),
+        scope: norm_scope,
         created_at_ms,
         expires_at_ms,
     };
@@ -416,8 +432,12 @@ fn build_pairing_bundle(cfg: &RemoteConfig, rec: &PairingRecord) -> PairingBundl
         .collect();
     let now = now_ms();
     let ttl_seconds = rec.expires_at_ms.saturating_sub(now) / 1000;
+    let norm_scope = crate::harness::normalize_scope(Some(&rec.scope));
+    let scope_label = crate::harness::scope_label(&norm_scope).to_string();
     PairingBundle {
         code: rec.code.clone(),
+        scope: norm_scope,
+        scope_label,
         expires_at_ms: rec.expires_at_ms,
         ttl_seconds,
         port,
@@ -496,6 +516,7 @@ pub fn redeem_pairing_code(
     let raw_token = format!("utr_{}", hex::encode(random_bytes::<32>()));
     let token_hash = sha256_hex(raw_token.as_bytes());
     let now = now_iso();
+    let norm_scope = crate::harness::normalize_scope(Some(&rec.scope));
     let dev = PairedDevice {
         device_id: uuid::Uuid::new_v4().to_string(),
         device_name: if device_name.trim().is_empty() {
@@ -509,6 +530,7 @@ pub fn redeem_pairing_code(
             platform.trim().to_string()
         },
         token_hash,
+        scope: norm_scope,
         paired_at: now.clone(),
         last_seen_at: now,
         last_ip: peer_ip.to_string(),
@@ -561,10 +583,13 @@ pub fn status_snapshot() -> Value {
     let devices: Vec<Value> = list_devices()
         .into_iter()
         .map(|d| {
+            let norm_scope = crate::harness::normalize_scope(Some(&d.scope));
             json!({
                 "device_id": d.device_id,
                 "device_name": d.device_name,
                 "platform": d.platform,
+                "scope": norm_scope,
+                "scope_label": crate::harness::scope_label(&norm_scope),
                 "paired_at": d.paired_at,
                 "last_seen_at": d.last_seen_at,
                 "last_ip": d.last_ip,
@@ -572,6 +597,22 @@ pub fn status_snapshot() -> Value {
         })
         .collect();
     let port = current_bound_port(cfg.port);
+    let info = server_info::read_current();
+    let ports = crate::harness::discover_listening_ports(&[port, info.mcp_port, info.http_port]);
+    let watched_cwd = info
+        .cwd
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+    let checkpoints = if watched_cwd.is_empty() {
+        Vec::new()
+    } else {
+        crate::harness::list_git_checkpoints(&watched_cwd).unwrap_or_default()
+    };
     json!({
         "enabled": cfg.enabled,
         "running": SERVER_RUNNING.load(Ordering::Relaxed) && cfg.enabled,
@@ -583,9 +624,40 @@ pub fn status_snapshot() -> Value {
         "network_scope": "lan_or_tailscale_only",
         "notice": NETWORK_SCOPE_NOTICE,
         "addresses": addresses,
+        "ports": ports,
+        "watched_cwd": watched_cwd,
+        "checkpoints": checkpoints,
         "pairing": pairing,
         "devices": devices,
     })
+}
+
+pub fn dispatch_local_rpc(
+    local_handler: &McpHandler,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
+    let host_dev = PairedDevice {
+        device_id: "host-settings".to_string(),
+        device_name: "PC Web Settings".to_string(),
+        platform: "desktop".to_string(),
+        token_hash: String::new(),
+        scope: "full".to_string(),
+        paired_at: String::new(),
+        last_seen_at: String::new(),
+        last_ip: "127.0.0.1".to_string(),
+    };
+    let target_instance = params
+        .get("instance")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    dispatch_mobile_rpc(
+        local_handler,
+        &host_dev,
+        target_instance.as_deref(),
+        method,
+        params,
+    )
 }
 
 /// Strict allowlist of MCP methods exposed to mobile clients.
@@ -615,6 +687,14 @@ pub fn is_allowed_remote_method(method: &str) -> bool {
             | "approval.decide"
             | "review.list"
             | "review.diff"
+            | "ports.list"
+            | "checkpoint.list"
+            | "checkpoint.create"
+            | "checkpoint.diff"
+            | "checkpoint.restore"
+            | "handoff.build"
+            | "handoff.execute"
+            | "snapshot.capture"
     )
 }
 
@@ -878,6 +958,7 @@ fn handle_remote_conn(mut stream: TcpStream, handler: &Arc<McpHandler>) -> Resul
                 let hostname = hostname::get()
                     .map(|h| h.to_string_lossy().to_string())
                     .unwrap_or_else(|_| "Unterm-PC".to_string());
+                let norm_scope = crate::harness::normalize_scope(Some(&dev.scope));
                 return write_http_json(
                     &mut stream,
                     200,
@@ -886,6 +967,8 @@ fn handle_remote_conn(mut stream: TcpStream, handler: &Arc<McpHandler>) -> Resul
                         "ok": true,
                         "device_id": dev.device_id,
                         "device_token": token,
+                        "scope": norm_scope,
+                        "scope_label": crate::harness::scope_label(&norm_scope),
                         "machine_id": cfg.machine_id,
                         "hostname": hostname,
                         "port": port,
@@ -904,6 +987,49 @@ fn handle_remote_conn(mut stream: TcpStream, handler: &Arc<McpHandler>) -> Resul
                     &json!({"error": e.to_string()}),
                 );
             }
+        }
+    }
+
+    // Localhost Dev Server Preview Proxy: /preview/<port>/...
+    if let Some(rest) = req.path.strip_prefix("/preview/") {
+        let (port_str, subpath) = match rest.split_once('/') {
+            Some((p, sub)) => (p, format!("/{}", sub)),
+            None => (rest, "/".to_string()),
+        };
+        if let Ok(target_port) = port_str.parse::<u16>() {
+            let query_token = query_param(&req.query, "token");
+            let cookie_token = req.header("Cookie").and_then(|c| {
+                c.split(';').find_map(|kv| {
+                    let (k, v) = kv.trim().split_once('=')?;
+                    (k == "unterm_preview_token").then(|| v.trim().to_string())
+                })
+            });
+            let bearer_token = req
+                .header("Authorization")
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|s| s.trim().to_string());
+            let tok = query_token
+                .clone()
+                .or(bearer_token)
+                .or(cookie_token)
+                .unwrap_or_default();
+            if authenticate_device_token(&tok, &peer.ip().to_string()).is_none() {
+                return write_http_json(
+                    &mut stream,
+                    401,
+                    "Unauthorized",
+                    &json!({"error": "预览本地端口需要已配对的手机令牌 (?token=...)"}),
+                );
+            }
+            return crate::harness::proxy_localhost_preview(
+                &mut stream,
+                target_port,
+                &subpath,
+                &req.query,
+                &req.method,
+                &req.body,
+                query_token.as_deref(),
+            );
         }
     }
 
@@ -927,7 +1053,15 @@ fn handle_remote_conn(mut stream: TcpStream, handler: &Arc<McpHandler>) -> Resul
             let watched_inst = query_param(&req.query, "instance");
             let watched_pane = query_param(&req.query, "pane_id")
                 .and_then(|s| s.parse::<u64>().ok());
-            let snap = collect_mobile_overview(handler, watched_inst.as_deref(), watched_pane);
+            let mut snap = collect_mobile_overview(handler, watched_inst.as_deref(), watched_pane);
+            if let Some(obj) = snap.as_object_mut() {
+                let norm_scope = crate::harness::normalize_scope(Some(&device.scope));
+                obj.insert("device_scope".to_string(), json!(norm_scope));
+                obj.insert(
+                    "device_scope_label".to_string(),
+                    json!(crate::harness::scope_label(&norm_scope)),
+                );
+            }
             write_http_json(&mut stream, 200, "OK", &snap)
         }
         ("POST", "/api/remote/rpc") => {
@@ -962,7 +1096,227 @@ pub fn dispatch_mobile_rpc(
             method
         ));
     }
+    if !crate::harness::is_method_allowed_for_scope(&device.scope, method) {
+        return Err(anyhow!(
+            "权限不足：当前设备权限为「{}」，不允许执行 '{}'",
+            crate::harness::scope_label(&device.scope),
+            method
+        ));
+    }
 
+    let current_info = server_info::read_current();
+
+    // Built-in T3 Code-inspired Agent Harness methods
+    match method {
+        "ports.list" => {
+            let port = current_bound_port(DEFAULT_REMOTE_PORT);
+            let ports = crate::harness::discover_listening_ports(&[
+                port,
+                current_info.mcp_port,
+                current_info.http_port,
+            ]);
+            return Ok(json!({ "ports": ports }));
+        }
+        "checkpoint.list" => {
+            let cwd = resolve_rpc_cwd(local_handler, target_instance, &params);
+            let list = crate::harness::list_git_checkpoints(&cwd).unwrap_or_default();
+            return Ok(json!({ "cwd": cwd, "checkpoints": list }));
+        }
+        "checkpoint.create" => {
+            let cwd = resolve_rpc_cwd(local_handler, target_instance, &params);
+            let label = params
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("手动检查点");
+            let pane_id = params.get("pane_id").and_then(Value::as_u64);
+            let ckpt = crate::harness::create_git_checkpoint(&cwd, label, pane_id)?;
+            return Ok(json!({ "ok": true, "checkpoint": ckpt }));
+        }
+        "checkpoint.diff" => {
+            let cwd = resolve_rpc_cwd(local_handler, target_instance, &params);
+            let id = params
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("缺少检查点 id"))?;
+            return crate::harness::diff_git_checkpoint(&cwd, id);
+        }
+        "checkpoint.restore" => {
+            let cwd = resolve_rpc_cwd(local_handler, target_instance, &params);
+            let id = params
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("缺少检查点 id"))?;
+            return crate::harness::restore_git_checkpoint(&cwd, id);
+        }
+        "handoff.build" | "handoff.execute" => {
+            let pane_id = params.get("pane_id").and_then(Value::as_u64).unwrap_or(1);
+            let target_agent = params
+                .get("target_agent")
+                .and_then(Value::as_str)
+                .unwrap_or("claude");
+            let user_request = params
+                .get("user_request")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let token_cap = params
+                .get("token_cap")
+                .and_then(Value::as_u64)
+                .unwrap_or(16_000) as usize;
+            let cwd = resolve_rpc_cwd(local_handler, target_instance, &params);
+            let scrollback = fetch_pane_scrollback_for_handoff(
+                local_handler,
+                device,
+                target_instance,
+                pane_id,
+            );
+            let bundle = crate::harness::build_portable_handoff(
+                pane_id,
+                &cwd,
+                "pane",
+                &scrollback,
+                target_agent,
+                user_request,
+                token_cap,
+            )?;
+            if method == "handoff.execute" {
+                let target_pane = params
+                    .get("target_pane_id")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(pane_id);
+                let steer_cmd = format!(
+                    "请阅读上下文接力文件 `{}` 并继续执行：{}\n",
+                    bundle.markdown_path,
+                    if user_request.trim().is_empty() {
+                        "继续完成未完事项"
+                    } else {
+                        user_request.trim()
+                    }
+                );
+                let _ = dispatch_raw_mcp(
+                    local_handler,
+                    device,
+                    target_instance,
+                    "session.input",
+                    json!({ "id": target_pane, "data": steer_cmd }),
+                );
+            }
+            return Ok(serde_json::to_value(bundle)?);
+        }
+        "snapshot.capture" => {
+            let include_a11y = params
+                .get("include_a11y")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let snap = crate::harness::capture_window_with_a11y(include_a11y)?;
+            if let Some(pane_id) = params.get("paste_to_pane").and_then(Value::as_u64) {
+                let _ = dispatch_raw_mcp(
+                    local_handler,
+                    device,
+                    target_instance,
+                    "session.input",
+                    json!({ "id": pane_id, "data": format!("{}\n", snap.agent_prompt_snippet) }),
+                );
+            }
+            return Ok(serde_json::to_value(snap)?);
+        }
+        _ => {}
+    }
+
+    dispatch_raw_mcp(local_handler, device, target_instance, method, params)
+}
+
+fn resolve_rpc_cwd(
+    local_handler: &McpHandler,
+    target_instance: Option<&str>,
+    params: &Value,
+) -> String {
+    if let Some(c) = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return c.to_string();
+    }
+    if let Some(pane_id) = params.get("pane_id").and_then(Value::as_u64) {
+        let dummy = PairedDevice {
+            device_id: String::new(),
+            device_name: "cwd".to_string(),
+            platform: "internal".to_string(),
+            token_hash: String::new(),
+            scope: "full".to_string(),
+            paired_at: String::new(),
+            last_seen_at: String::new(),
+            last_ip: String::new(),
+        };
+        if let Ok(res) = dispatch_raw_mcp(
+            local_handler,
+            &dummy,
+            target_instance,
+            "session.cwd",
+            json!({ "id": pane_id }),
+        ) {
+            if let Some(c) = res
+                .get("cwd")
+                .and_then(Value::as_str)
+                .or_else(|| res.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return c.to_string();
+            }
+        }
+    }
+    server_info::read_current()
+        .cwd
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string())
+        })
+}
+
+fn fetch_pane_scrollback_for_handoff(
+    local_handler: &McpHandler,
+    device: &PairedDevice,
+    target_instance: Option<&str>,
+    pane_id: u64,
+) -> String {
+    if let Ok(res) = dispatch_raw_mcp(
+        local_handler,
+        device,
+        target_instance,
+        "screen.scrollback_text",
+        json!({ "id": pane_id, "max_lines": 160 }),
+    ) {
+        if let Some(t) = res.get("text").and_then(Value::as_str) {
+            if !t.trim().is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    if let Ok(res) = dispatch_raw_mcp(
+        local_handler,
+        device,
+        target_instance,
+        "screen.text",
+        json!({ "id": pane_id }),
+    ) {
+        if let Some(t) = res.get("text").and_then(Value::as_str) {
+            return t.to_string();
+        }
+    }
+    String::new()
+}
+
+fn dispatch_raw_mcp(
+    local_handler: &McpHandler,
+    device: &PairedDevice,
+    target_instance: Option<&str>,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
     let current_info = server_info::read_current();
     let target = target_instance
         .map(str::trim)
@@ -1138,12 +1492,14 @@ pub fn collect_mobile_overview(
     });
 
     let mut screen_text = String::new();
+    let mut watched_cwd = String::new();
     if let Some(pane_id) = target_pane {
         let dummy_dev = PairedDevice {
             device_id: String::new(),
             device_name: "overview".to_string(),
             platform: "mobile".to_string(),
             token_hash: String::new(),
+            scope: "full".to_string(),
             paired_at: String::new(),
             last_seen_at: String::new(),
             last_ip: String::new(),
@@ -1161,7 +1517,24 @@ pub fn collect_mobile_overview(
                 screen_text = t.to_string();
             }
         }
+        watched_cwd = resolve_rpc_cwd(
+            local_handler,
+            target_inst.as_deref(),
+            &json!({ "pane_id": pane_id }),
+        );
     }
+    if watched_cwd.is_empty() {
+        watched_cwd = current_info.cwd.clone().unwrap_or_default();
+    }
+
+    let port = current_bound_port(DEFAULT_REMOTE_PORT);
+    let ports = crate::harness::discover_listening_ports(&[
+        port,
+        current_info.mcp_port,
+        current_info.http_port,
+    ]);
+    let checkpoints = crate::harness::list_git_checkpoints(&watched_cwd).unwrap_or_default();
+    let routes = detect_network_addresses();
 
     let instances_json: Vec<Value> = live_instances
         .iter()
@@ -1182,6 +1555,10 @@ pub fn collect_mobile_overview(
         "agents": all_agents,
         "sessions": all_sessions,
         "approvals": all_approvals,
+        "ports": ports,
+        "checkpoints": checkpoints,
+        "routes": routes,
+        "watched_cwd": watched_cwd,
         "watched_instance": target_inst,
         "watched_pane": target_pane,
         "screen_text": screen_text,

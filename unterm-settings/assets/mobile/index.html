@@ -211,11 +211,35 @@
     input.text-in:focus { border-color: var(--accent); }
     nav.tabs {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       background: #0f1522;
       border-top: 1px solid var(--border);
       padding-bottom: var(--safe-bottom);
       flex-shrink: 0;
+    }
+    .ports-bar {
+      display: none;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 6px 12px;
+      background: #0d1420;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .port-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgba(16, 185, 129, 0.14);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      font-size: 11px;
+      font-family: monospace;
+      text-decoration: none;
+      white-space: nowrap;
     }
     .tab-btn {
       background: none;
@@ -256,8 +280,13 @@
       <span id="connDot" class="dot"></span>
       <span id="hostTitle">Unterm Pocket</span>
     </div>
-    <span class="net-badge">仅限局域网 / Tailscale</span>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span id="scopeBadge" class="net-badge" style="display:none;">完全控制</span>
+      <span class="net-badge">局域网 / Tailscale</span>
+    </div>
   </header>
+
+  <div id="portsBar" class="ports-bar"></div>
 
   <main id="mainView"></main>
 
@@ -271,6 +300,9 @@
     </button>
     <button class="tab-btn" onclick="switchTab('terminal')" id="tab-terminal">
       <span>终端分屏</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('harness')" id="tab-harness">
+      <span>检查点/接力</span>
     </button>
     <button class="tab-btn" onclick="switchTab('approvals')" id="tab-approvals">
       <span>审批</span>
@@ -293,6 +325,12 @@
       agents: [],
       sessions: [],
       approvals: [],
+      ports: [],
+      checkpoints: [],
+      watchedCwd: '',
+      deviceScope: 'full',
+      deviceScopeLabel: '完全控制',
+      checkpointDiffText: '',
       watchedInstance: '',
       watchedPane: null,
       screenText: '',
@@ -386,6 +424,19 @@
       state.agents = data.agents || [];
       state.sessions = data.sessions || [];
       state.approvals = data.approvals || [];
+      state.ports = data.ports || [];
+      state.checkpoints = data.checkpoints || [];
+      if (data.watched_cwd) state.watchedCwd = data.watched_cwd;
+      if (data.device_scope) state.deviceScope = data.device_scope;
+      if (data.device_scope_label) {
+        state.deviceScopeLabel = data.device_scope_label;
+        const sb = document.getElementById('scopeBadge');
+        if (sb) {
+          sb.style.display = 'inline-block';
+          sb.textContent = state.deviceScopeLabel;
+        }
+      }
+      renderPortsBar();
       if (typeof data.screen_text === 'string') {
         state.screenText = data.screen_text;
       }
@@ -497,11 +548,92 @@
 
     function switchTab(t) {
       state.tab = t;
-      ['inbox', 'agents', 'terminal', 'approvals'].forEach(k => {
+      ['inbox', 'agents', 'terminal', 'harness', 'approvals'].forEach(k => {
         const el = document.getElementById('tab-' + k);
         if (el) el.className = 'tab-btn' + (k === t ? ' active' : '');
       });
       render();
+    }
+
+    function renderPortsBar() {
+      const bar = document.getElementById('portsBar');
+      if (!bar) return;
+      if (!state.paired || !state.ports || state.ports.length === 0) {
+        bar.style.display = 'none';
+        bar.innerHTML = '';
+        return;
+      }
+      bar.style.display = 'flex';
+      bar.innerHTML = `<span style="font-size:11px;color:var(--muted);white-space:nowrap;">本地预览:</span>` +
+        state.ports.map(p => {
+          const href = `/preview/${p.port}/?token=${encodeURIComponent(state.token)}`;
+          return `<a class="port-pill" href="${href}" target="_blank" rel="noopener">● :${p.port} ${escapeHtml(p.label || p.framework_hint || '')}</a>`;
+        }).join('');
+    }
+
+    async function createMobileCheckpoint() {
+      const inp = document.getElementById('cpLabelInput');
+      const label = (inp && inp.value.trim()) || '手机端检查点';
+      const r = await callRpc(state.watchedInstance, 'checkpoint.create', {
+        cwd: state.watchedCwd,
+        pane_id: state.watchedPane,
+        label,
+        agent: 'mobile'
+      });
+      if (r && r.ok === false) { alert(r.error || '创建失败'); return; }
+      if (inp) inp.value = '';
+      await fetchOverview();
+    }
+
+    async function viewMobileCheckpointDiff(id) {
+      const r = await callRpc(state.watchedInstance, 'checkpoint.diff', {
+        cwd: state.watchedCwd,
+        pane_id: state.watchedPane,
+        id
+      });
+      if (r && r.result) {
+        state.checkpointDiffText = r.result.diff || '(与当前工作区无差异)';
+        render();
+      }
+    }
+
+    async function restoreMobileCheckpoint(id) {
+      if (!confirm('确定将工作区回滚到检查点 ' + id + ' 吗？（会自动创建回滚前备份）')) return;
+      const r = await callRpc(state.watchedInstance, 'checkpoint.restore', {
+        cwd: state.watchedCwd,
+        pane_id: state.watchedPane,
+        id
+      });
+      if (r && r.ok === false) { alert(r.error || '回滚失败'); return; }
+      state.checkpointDiffText = '';
+      await fetchOverview();
+    }
+
+    async function executeMobileHandoff() {
+      const targetEl = document.getElementById('handoffAgentSel');
+      const reqEl = document.getElementById('handoffReqInput');
+      const target_agent = (targetEl && targetEl.value) || 'claude-code';
+      const user_request = (reqEl && reqEl.value.trim()) || '请阅读接力上下文并继续完成当前任务';
+      const r = await callRpc(state.watchedInstance, 'handoff.execute', {
+        cwd: state.watchedCwd,
+        pane_id: state.watchedPane ?? 0,
+        target_pane_id: state.watchedPane ?? 0,
+        target_agent,
+        user_request
+      });
+      if (r && r.ok === false) { alert(r.error || '接力失败'); return; }
+      alert('已生成上下文接力包并发送至分屏 #' + (state.watchedPane ?? 0));
+      switchTab('terminal');
+    }
+
+    async function captureMobileSnapshot() {
+      const r = await callRpc(state.watchedInstance, 'snapshot.capture', {
+        include_a11y: true,
+        paste_to_pane: state.watchedPane ?? 0
+      });
+      if (r && r.ok === false) { alert(r.error || '截图失败'); return; }
+      alert('已抓取电脑窗口截图 + A11y 控件树并粘贴到当前分屏');
+      switchTab('terminal');
     }
 
     function renderPairScreen() {
@@ -615,6 +747,50 @@
         `;
         const pre = document.getElementById('termScreenPre');
         if (pre) pre.scrollTop = pre.scrollHeight;
+      } else if (state.tab === 'harness') {
+        const cpHtml = (state.checkpoints || []).length === 0
+          ? `<div class="sub" style="padding:10px 0;">当前仓库暂无隐藏检查点</div>`
+          : state.checkpoints.map(cp => `
+              <div style="border-top:1px solid var(--border);padding:8px 0;margin-top:6px;">
+                <div class="row">
+                  <strong style="font-family:monospace;color:#34d399;font-size:12px;">${escapeHtml(cp.id)} · ${escapeHtml(cp.label || '')}</strong>
+                  <div style="display:flex;gap:6px;">
+                    <button class="btn secondary" style="padding:4px 8px;font-size:11px;" onclick="viewMobileCheckpointDiff('${escapeHtml(cp.id)}')">Diff</button>
+                    <button class="btn warn" style="padding:4px 8px;font-size:11px;" onclick="restoreMobileCheckpoint('${escapeHtml(cp.id)}')">回滚</button>
+                  </div>
+                </div>
+                <div class="sub">${escapeHtml((cp.commit_sha || cp.head_sha || '').slice(0, 8))} · ${escapeHtml((cp.created_at || '').slice(0, 19).replace('T', ' '))} ${escapeHtml(cp.stat_summary || '')}</div>
+              </div>
+            `).join('');
+        m.innerHTML = `
+          <div class="card">
+            <div style="font-weight:700;font-size:14px;">零污染 Git 检查点 (refs/unterm/checkpoints)</div>
+            <div class="sub">毫秒级保存含未跟踪文件的快照，不污染当前分支 commit 历史与 .git/index</div>
+            <div style="display:flex;gap:6px;margin-top:8px;">
+              <input id="cpLabelInput" class="text-in" placeholder="检查点备注（如：重构前）" />
+              <button class="btn ok" onclick="createMobileCheckpoint()">+ 存档</button>
+            </div>
+            ${cpHtml}
+            ${state.checkpointDiffText ? `<pre class="term-screen" style="max-height:180px;margin-top:8px;background:#06090f;border:1px solid var(--border);border-radius:8px;">${escapeHtml(state.checkpointDiffText)}</pre>` : ''}
+          </div>
+          <div class="card">
+            <div style="font-weight:700;font-size:14px;">跨 Agent 上下文接力 (Portable Handoff)</div>
+            <div class="sub">自动打包 Git 状态、Diff 与近期终端输出，一键注入当前分屏 (#${state.watchedPane ?? 0})</div>
+            <div style="display:flex;gap:6px;margin-top:8px;">
+              <select id="handoffAgentSel" style="background:#090d16;color:#fff;border:1px solid var(--border);border-radius:8px;padding:8px;">
+                <option value="claude-code">Claude Code</option>
+                <option value="codex-cli">Codex CLI</option>
+                <option value="gemini-cli">Gemini CLI</option>
+                <option value="kimi-code">Kimi Code</option>
+              </select>
+              <input id="handoffReqInput" class="text-in" placeholder="接力指令（永不截断）" />
+            </div>
+            <div class="quick-actions">
+              <button class="btn" onclick="executeMobileHandoff()">打包并接力发送至分屏</button>
+              <button class="btn secondary" onclick="captureMobileSnapshot()">窗口截图 + A11y 控件树粘贴</button>
+            </div>
+          </div>
+        `;
       } else if (state.tab === 'approvals') {
         if (state.approvals.length === 0) {
           m.innerHTML = `<div class="empty">暂无待审批的高风险操作</div>`;

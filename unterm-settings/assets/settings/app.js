@@ -75,6 +75,16 @@ function untermSettings() {
       notice: '仅支持同一局域网（Wi-Fi / 有线）或 Tailscale 连接',
       addresses: [],
       selectedIp: '',
+      pairScope: 'full',
+      ports: [],
+      watched_cwd: '',
+      checkpoints: [],
+      checkpointLabel: '',
+      checkpointDiff: null,
+      handoffPrompt: '',
+      handoffTarget: 'claude-code',
+      lastHandoff: null,
+      lastSnapshot: null,
       pairing: null,
       devices: [],
     },
@@ -452,7 +462,9 @@ function untermSettings() {
     async generateRemotePairCode() {
       this.remote.loading = true;
       try {
-        const j = await this.api('POST', '/api/remote/pair-code', {});
+        const j = await this.api('POST', '/api/remote/pair-code', {
+          scope: this.remote.pairScope || 'full',
+        });
         if (j.status) this.remote = Object.assign({}, this.remote, j.status);
         if (j.pairing) this.remote.pairing = j.pairing;
         if (!this.remote.selectedIp && Array.isArray(this.remote.addresses) && this.remote.addresses.length > 0) {
@@ -473,6 +485,91 @@ function untermSettings() {
         this.toast('已撤销该手机设备的访问权限');
       } catch (e) {
         this.toast('撤销失败: ' + e.message, 'error');
+      }
+    },
+
+    async remoteRpc(method, params = {}) {
+      const j = await this.api('POST', '/api/remote/rpc', { method, params });
+      if (j.status) this.remote = Object.assign({}, this.remote, j.status);
+      return j.result;
+    },
+
+    async createGitCheckpoint() {
+      this.remote.loading = true;
+      try {
+        const cp = await this.remoteRpc('checkpoint.create', {
+          cwd: this.remote.watched_cwd || this.state.project?.path || '',
+          label: this.remote.checkpointLabel || '手动安全检查点',
+          agent: 'manual',
+        });
+        this.remote.checkpointLabel = '';
+        this.toast('已创建零污染 Git 检查点: ' + (cp.id || ''));
+      } catch (e) {
+        this.toast('创建检查点失败: ' + e.message, 'error');
+      } finally {
+        this.remote.loading = false;
+      }
+    },
+
+    async viewCheckpointDiff(cpId) {
+      try {
+        const res = await this.remoteRpc('checkpoint.diff', {
+          cwd: this.remote.watched_cwd || this.state.project?.path || '',
+          id: cpId,
+        });
+        this.remote.checkpointDiff = { id: cpId, diff: res.diff || '(与当前工作区无差异)' };
+      } catch (e) {
+        this.toast('读取检查点差异失败: ' + e.message, 'error');
+      }
+    },
+
+    async restoreGitCheckpoint(cpId) {
+      if (!confirm('确定将工作区回滚到检查点 ' + cpId + ' 吗？（回滚前会自动创建一个备份检查点）')) return;
+      this.remote.loading = true;
+      try {
+        await this.remoteRpc('checkpoint.restore', {
+          cwd: this.remote.watched_cwd || this.state.project?.path || '',
+          id: cpId,
+        });
+        this.remote.checkpointDiff = null;
+        this.toast('已回滚至检查点 ' + cpId);
+      } catch (e) {
+        this.toast('回滚失败: ' + e.message, 'error');
+      } finally {
+        this.remote.loading = false;
+      }
+    },
+
+    async buildPortableHandoff() {
+      this.remote.loading = true;
+      try {
+        const bundle = await this.remoteRpc('handoff.build', {
+          cwd: this.remote.watched_cwd || this.state.project?.path || '',
+          target_agent: this.remote.handoffTarget || 'claude-code',
+          user_request: this.remote.handoffPrompt || '请根据当前进度与 git diff 继续完成任务',
+        });
+        this.remote.lastHandoff = bundle;
+        this.copyText(bundle.prompt_text || bundle.markdown || '');
+        this.toast('已生成跨 Agent 接力包并复制到剪贴板 (' + bundle.markdown_path + ')');
+      } catch (e) {
+        this.toast('生成接力包失败: ' + e.message, 'error');
+      } finally {
+        this.remote.loading = false;
+      }
+    },
+
+    async captureWindowA11y() {
+      this.remote.loading = true;
+      try {
+        const snap = await this.remoteRpc('snapshot.capture', { include_a11y: true });
+        this.remote.lastSnapshot = snap;
+        this.copyText(snap.agent_prompt_snippet || '');
+        const cnt = (snap.controls && snap.controls.length) || snap.control_count || 0;
+        this.toast('已抓取窗口截图与 A11y 控件树（' + cnt + ' 个控件），提示词已复制');
+      } catch (e) {
+        this.toast('抓取截图与控件树失败: ' + e.message, 'error');
+      } finally {
+        this.remote.loading = false;
       }
     },
 
