@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.71.22 — 2026-11-05
+
+### Added
+
+- **Unterm Pocket & Mobile Remote Gateway (`unterm-cli remote`).** Pair phones or
+  tablets over LAN / Tailscale with a 6-digit single-use pairing code or QR code
+  in Web Settings (`Remote / Mobile`). Includes a mobile web cockpit and Flutter
+  companion app (`mobile/`) with scoped permissions (`full`, `approve`, `readonly`),
+  live terminal streaming, approval decisions, localhost dev-server port discovery
+  and reverse-proxy preview (`/preview/<port>/`), zero-pollution hidden Git
+  checkpoints (`refs/unterm/checkpoints/<id>`), cross-agent portable handoffs, and
+  window + Accessibility (A11y) control tree snapshots.
+
+### Fixed
+
+- **Terminal reflow on resize.** Re-wraps soft-wrapped lines on main-screen width
+  changes while preserving hard line breaks, wide characters, and SGR attributes,
+  and keeps the cursor line visible when shrinking window height.
+- **Terminal grid & xterm/ECMA-48 compliance.**
+  - Preserves 8-column default tab stops across narrow resizes and implements
+    `DECST8C` (`CSI ? 5 W`).
+  - Retains synchronized-output (`?2026`) hold during viewport scroll and keeps
+    `?2026` as global state across main/alternate screen switches.
+  - `LF` / `VT` / `FF` preserve the cursor column by default and respect Line Feed /
+    New Line Mode (`LNM`, `CSI 20 h/l`).
+  - Grapheme clusters (`UAX #29`) join only onto the cell immediately preceding the
+    active cursor, carrying each cell's full grapheme in `StyledCell`.
+  - Soft-wrap flags belong to the row (`ICH`, `DCH`, `ECH`, `SL`, `SR`, `EL 1`,
+    `DECERA`, `DECFRA`, `DECSERA` preserve; `EL 0`, `EL 2`, `ED`, `DECSED` clear).
+  - Pending-wrap (`C-cursor`) clamps cursor snapshots to the last column and aligns
+    `BS` with `CUB 1` (`xterm CursorBack`).
+  - Aligns `DECLRMM` left/right margins and top/bottom scroll regions with xterm,
+    splits wide characters cleanly on `DECFRA` / `DECERA` / `DECSERA` rectangle
+    boundaries, caps repeat counts, ignores `IL` / `DL` outside the scroll region,
+    implements `XTSAVE` / `XTRESTORE`, answers `XTSMGRAPHICS`, and ignores unknown
+    private-prefix CSI sequences.
+  - Fixes `CSI 2 J` viewport scrollback bleed and reports dirty rows in viewport
+    coordinates.
+- **GPU & scrollback rendering.**
+  - Places, inverts, and clips glyphs strictly by the cell they came from, and
+    rounds HarfBuzz 26.6 shaping offsets to the nearest pixel.
+  - Measures selection, clickable links, and IME preedit/caret geometry from each
+    pane's own origin and cell width.
+  - Skips width-0 continuation cells in the scrollback PNG renderer so wide CJK
+    characters advance 2 columns instead of 3.
+- **Windows startup frame flash.** Enforces synchronous `LWA_ALPHA=0` layered
+  cloaking and DWM cloaking before `ShowWindow` until the first GPU frame is
+  presented, eliminating startup black shadow or white frame flashes.
+
 ## v0.71.21 — 2026-10-19
 
 ### Fixed

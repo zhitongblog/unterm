@@ -3,7 +3,7 @@
         xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
     <loc>https://unterm.app/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -19,7 +19,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -35,7 +35,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -51,7 +51,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -67,7 +67,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -83,7 +83,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -99,7 +99,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -115,7 +115,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -131,7 +131,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/"/>
@@ -153,55 +153,55 @@
   </url>
   <url>
     <loc>https://unterm.app/docs/agent-integration</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/agent-recipes</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/architecture</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/cli-reference</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/configuration</loc>
-    <lastmod>2026-10-01</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/config-reference</loc>
-    <lastmod>2026-10-01</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/shell-integration</loc>
-    <lastmod>2026-10-01</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/inline-images</loc>
-    <lastmod>2026-10-04</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/agent-cockpit</loc>
-    <lastmod>2026-07-11</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
@@ -213,19 +213,49 @@
   </url>
   <url>
     <loc>https://unterm.app/docs/mcp-reference</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/multi-instance</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://unterm.app/docs/profiles</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://unterm.app/docs/product-roadmap</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://unterm.app/blog/next-core-v061</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://unterm.app/blog/next-core-v061-zh</loc>
+    <lastmod>2026-08-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://unterm.app/blog/smooth-typing-ecma48-v071</loc>
+    <lastmod>2026-10-20</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://unterm.app/blog/smooth-typing-ecma48-v071-zh</loc>
+    <lastmod>2026-10-20</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -237,7 +267,7 @@
   </url>
   <url>
     <loc>https://unterm.app/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -253,7 +283,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -269,7 +299,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -285,7 +315,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -301,7 +331,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -317,7 +347,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -333,7 +363,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -349,7 +379,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -365,7 +395,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/compare/wezterm</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wezterm"/>
@@ -381,7 +411,7 @@
   </url>
   <url>
     <loc>https://unterm.app/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -397,7 +427,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -413,7 +443,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -429,7 +459,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -445,7 +475,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -461,7 +491,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -477,7 +507,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -493,7 +523,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -509,7 +539,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/compare/warp</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/warp"/>
@@ -525,7 +555,7 @@
   </url>
   <url>
     <loc>https://unterm.app/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -541,7 +571,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -557,7 +587,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -573,7 +603,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -589,7 +619,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -605,7 +635,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -621,7 +651,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -637,7 +667,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -653,7 +683,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/compare/wave-terminal</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/wave-terminal"/>
@@ -669,7 +699,7 @@
   </url>
   <url>
     <loc>https://unterm.app/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -685,7 +715,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -701,7 +731,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -717,7 +747,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -733,7 +763,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -749,7 +779,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -765,7 +795,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -781,7 +811,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -797,7 +827,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/compare/terax</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/terax"/>
@@ -812,8 +842,152 @@
     <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/terax"/>
   </url>
   <url>
+    <loc>https://unterm.app/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-CN/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/zh-TW/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ja-JP/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/ko-KR/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/de-DE/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/fr-FR/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/it-IT/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
+    <loc>https://unterm.app/hi-IN/compare/rmux</loc>
+    <lastmod>2026-10-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://unterm.app/zh-CN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="zh-TW" href="https://unterm.app/zh-TW/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ja-JP" href="https://unterm.app/ja-JP/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="ko-KR" href="https://unterm.app/ko-KR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="de-DE" href="https://unterm.app/de-DE/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="fr-FR" href="https://unterm.app/fr-FR/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="it-IT" href="https://unterm.app/it-IT/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="hi-IN" href="https://unterm.app/hi-IN/compare/rmux"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://unterm.app/compare/rmux"/>
+  </url>
+  <url>
     <loc>https://unterm.app/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -829,7 +1003,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -845,7 +1019,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -861,7 +1035,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -877,7 +1051,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -893,7 +1067,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -909,7 +1083,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -925,7 +1099,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -941,7 +1115,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/compare/iterm2</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/iterm2"/>
@@ -957,7 +1131,7 @@
   </url>
   <url>
     <loc>https://unterm.app/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -973,7 +1147,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -989,7 +1163,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1005,7 +1179,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1021,7 +1195,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1037,7 +1211,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1053,7 +1227,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1069,7 +1243,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1085,7 +1259,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/compare/ghostty</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/compare/ghostty"/>
@@ -1101,7 +1275,7 @@
   </url>
   <url>
     <loc>https://unterm.app/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1117,7 +1291,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1133,7 +1307,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1149,7 +1323,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1165,7 +1339,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1181,7 +1355,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1197,7 +1371,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1213,7 +1387,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1229,7 +1403,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/features</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/features"/>
@@ -1245,7 +1419,7 @@
   </url>
   <url>
     <loc>https://unterm.app/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1261,7 +1435,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1277,7 +1451,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1293,7 +1467,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1309,7 +1483,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1325,7 +1499,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1341,7 +1515,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1357,7 +1531,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1373,7 +1547,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/guide</loc>
-    <lastmod>2026-09-25</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/guide"/>
@@ -1389,7 +1563,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1405,7 +1579,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-CN/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1421,7 +1595,7 @@
   </url>
   <url>
     <loc>https://unterm.app/zh-TW/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1437,7 +1611,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ja-JP/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1453,7 +1627,7 @@
   </url>
   <url>
     <loc>https://unterm.app/ko-KR/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1469,7 +1643,7 @@
   </url>
   <url>
     <loc>https://unterm.app/de-DE/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1485,7 +1659,7 @@
   </url>
   <url>
     <loc>https://unterm.app/fr-FR/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1501,7 +1675,7 @@
   </url>
   <url>
     <loc>https://unterm.app/it-IT/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>
@@ -1517,7 +1691,7 @@
   </url>
   <url>
     <loc>https://unterm.app/hi-IN/ambassador</loc>
-    <lastmod>2026-10-02</lastmod>
+    <lastmod>2026-10-22</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
     <xhtml:link rel="alternate" hreflang="en-US" href="https://unterm.app/ambassador"/>

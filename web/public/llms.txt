@@ -1,33 +1,41 @@
 # Unterm
 
-> Unterm is "the terminal AI agents can drive." It is a free, open-source (MIT), cross-platform terminal emulator (macOS, Linux, Windows) built on Unterm's native next-core engine. Its product thesis is the inverse of AI-in-the-terminal products: instead of embedding an AI chatbox inside the terminal, Unterm exposes the terminal itself as a controllable surface that any external AI agent (Claude Code, Codex CLI, Gemini CLI, Cursor, or a custom script) can drive from the outside. Since v0.55 it is also an Agent Cockpit: the terminal sees, aggregates, and orchestrates the AI agents running inside its panes.
+> Unterm is "the terminal AI agents can drive." It is a free, open-source (MIT), cross-platform terminal emulator (macOS, Linux, Windows) built on Unterm's own `next-core` engine. Instead of embedding an AI chatbox inside the terminal, Unterm exposes the terminal itself as a controllable surface that any external AI agent (Claude Code, Codex CLI, Gemini CLI, Cursor, or a custom script) can drive from the outside. It is also an Agent Cockpit: the terminal sees, aggregates, and orchestrates the AI agents running inside its panes.
+
+Expanded single-file reference: https://unterm.app/llms-full.txt
 
 ## What it does
 
-- **Four control surfaces, one engine.** Every window starts a local MCP server (line-delimited JSON-RPC over TCP, bound to 127.0.0.1, auth-token gated), an HTTP Web Settings server, a CLI (`unterm-cli`), and the GUI. They share the same state but do not all expose everything: theme, language and the `unterm.conf` config file are deliberately not on MCP.
-- **152 MCP methods plus `auth.login`** and the product CLI families. An agent calls `meta.surface` (or runs `unterm-cli reference`) once to receive the entire API live: every method with param schemas, every CLI subcommand, and every currently-bound keybinding.
-- **Agent Cockpit (v0.55).** Live per-pane agent state (working / needs-you / done / idle) for Claude Code, Codex CLI, Gemini CLI, Aider and others — zero-config via title/OSC parsing and process detection, exact via official lifecycle hooks that `unterm-cli agent enable-hooks` wires up. Tab-badge dots, a cross-window tally chip, and an Agent Inbox (`Ctrl+Shift+A`) sorted waiting-first with jump-to-pane.
-- **Fleet.** One task × N agents × N isolated git worktrees (`unterm-cli fleet launch --agents claude,claude,codex -- <task>`): each member gets its own worktree, branch, tab, and state badge. Crew presets include `claude+codex+gemini` for cross-model comparison of the same task.
-- **Review.** The moment an agent starts working in a repo, Unterm takes a non-invasive checkpoint (dangling commit; HEAD/index/files untouched). The Review page shows line-level diffs including agent-created untracked files, squash-merges a chosen take into the repo as staged changes (the commit stays with the user), discards rejects, rolls back to any checkpoint, and compares two members side by side.
-- **Pane control without keystroke simulation.** `session.split` / `session.focus` / `session.input` let an external agent carve panes, hand focus, and type character-by-character. `screen.text` / `screen.scrollback_text` read pane output back on the same socket.
-- **Built-in AI coding-agent launcher.** Install, authenticate, configure, and launch Claude Code, Codex CLI, Gemini CLI, OpenCode, and Aider — one click each. Launched agents auto-wire back to that terminal's MCP server via the `unterm-cli mcp-stdio` bridge, with each agent's native config written in its own schema (`.mcp.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`, `opencode.json`).
-- **Auditable & revocable.** Every agent write is logged with the calling agent's identity; the first write from a new agent triggers an Allow / Block / Always-allow prompt; trust is one-click revocable.
+- **Four control surfaces, one engine.** A local MCP server (line-delimited JSON-RPC 2.0 over TCP, bound to 127.0.0.1, token-gated; `unterm-cli mcp-stdio` bridges it to stdio), an HTTP Web Settings server, a CLI (`unterm-cli`), and the GUI. They share the same state but do not all expose everything: theme, language and the `unterm.conf` config file are deliberately not on MCP.
+- **152 MCP methods plus `auth.login`.** An agent calls `meta.surface` (or runs `unterm-cli reference`) once to receive the entire API live: every method with param schemas, every CLI subcommand, and every currently-bound keybinding.
+- **Agent Cockpit.** Live per-pane agent state (`working` / `waiting` / `done` / `idle`) for Claude Code, Codex CLI, Gemini CLI, Aider and others — zero-config via terminal titles, OSC 9 / 9;4 / 777 sequences and screen heuristics, exact via the agents' own lifecycle hooks, which `unterm-cli agent enable-hooks` wires up. Tab dots, a cross-window tally chip, and an Agent Inbox (`Ctrl+Shift+A`) sorted waiting-first with jump-to-pane.
+- **Fleet.** One task × N agents × N isolated git worktrees (`unterm-cli fleet launch --agents claude,claude,codex -- <task>`): each member gets its own worktree, branch, tab, and state badge.
+- **Review.** When an agent starts working in a repo, Unterm takes a non-invasive checkpoint (a dangling commit; HEAD, index and files untouched). The Review page shows diffs including agent-created untracked files, runs the project's tests in a member's worktree, merges a chosen result into the repo as staged changes (the commit stays with the user), discards rejects, and rolls back to any checkpoint.
+- **Pane control without keystroke simulation.** `session.create` / `session.split` / `session.focus` / `session.input` let an external agent carve panes, hand focus, and type; `exec.run_wait` runs a command and returns its result; `screen.text` / `screen.scrollback_text` read pane output back.
+- **Built-in AI coding-agent launcher.** Install, authenticate, configure, and launch Claude Code, Codex CLI, Gemini CLI, OpenCode, and Aider. Launched agents are wired back to the terminal's MCP server through `unterm-cli mcp-stdio`, with each agent's native config written in its own format.
+- **Auditable and revocable.** Requests fall into seven risk bands; the first write from a new agent triggers an Allow / Block / Always-allow prompt; agent actions are kept in a redacted audit log; trust is revocable from Web Settings.
+
+## Recent releases
+
+- **v0.71.21 (2026-10-20):** recovers orphaned `WM_CHAR` messages on Windows so fast typing and IME commits no longer drop characters; keeps the cursor column unchanged on Insert Line / Delete Line (ECMA-48), clamps DSR cursor reports to the screen, and fixes backspace at the pending-wrap boundary, which removes tearing in TUIs such as Claude Code; the GUI reads screens from an event-driven local frame cache instead of making synchronous calls to the Core, removing UI stalls under heavy output.
+- **v0.61 (2026-08-02):** replaced the WezTerm fork with `next-core`, an in-house kernel of about 12,000 lines and 10 direct dependencies. Launch to a live MCP surface went from 7.1 s to 22 ms; idle CPU at a prompt from 80% of a core to 6.6%.
+- **v0.55 (2026-07-11):** Agent Cockpit — live agent state, Inbox, fleets, checkpoints and review.
 
 ## Key facts
 
-- License: MIT (open-source client). Price: $0 forever — no paid tier, no subscription, no in-app purchase.
-- Privacy: zero telemetry, no account, no analytics; every server bound to 127.0.0.1. Two outbound requests of its own: a plain GET to the GitHub releases API every 6 hours (update check, no identifiers) and a GET of the signed agent catalog from unterm.app when the AI Agents page or `unterm-cli agent` is used. Neither can be switched off in settings yet. The Agent Cockpit is fully local: state detection, fleets, checkpoints, and review never touch a cloud.
-- Platforms: macOS (universal, signed + Apple-notarized DMG), Linux x86_64/arm64 (.deb + AppImage), Windows 10/11 x64/arm64 (.msi + portable .zip).
+- License: MIT. Price: $0 — no paid tier, no subscription, no in-app purchase.
+- Privacy: no telemetry, no account, no analytics; every server bound to 127.0.0.1. Two outbound requests of its own: a plain GET to the GitHub releases API every 6 hours (update check, no identifiers) and a GET of the signed agent catalog from unterm.app when the AI Agents page or `unterm-cli agent` is used. Neither can be switched off in settings yet. The Agent Cockpit is fully local.
+- Platforms: macOS (universal, signed and Apple-notarized DMG), Linux x86_64/arm64 (.deb and AppImage), Windows 10/11 x64/arm64 (.msi and portable .zip).
+- Rendering: wgpu — Metal on macOS, Direct3D 12 on Windows, Vulkan on Linux, with OpenGL and software fallbacks.
 - UI languages: 9 (English, 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français, Italiano, हिन्दी) with system-locale auto-detect.
-- Tech stack: Rust, native next-core terminal engine, wgpu rendering, MCP, Tailwind + Alpine for Web Settings.
-- How it differs from Warp: Warp embeds AI inside a closed cloud orchestrator and cannot be driven from outside; Unterm keeps AI outside and exposes the terminal as the MCP-controllable surface — and its agent orchestration (fleets, review) is local and open rather than a cloud service.
-- Common questions it answers: "how do I see when Claude Code needs my approval" (Inbox + amber chip), "how do I run multiple Claude Code instances in parallel without them conflicting" (Fleet: isolated git worktrees), "how do I review or undo what an AI agent changed" (Review: checkpoints, diffs, rollback, squash-merge as staged).
+- How it differs from Warp: Warp embeds AI inside a closed, login-based product that external tools cannot drive; Unterm keeps AI outside and exposes the terminal as an MCP-controllable surface, and its agent orchestration (fleets, review) is local and open.
+- Common questions it answers: "how do I see when Claude Code needs my approval" (Inbox + amber chip), "how do I run multiple Claude Code instances in parallel without conflicts" (Fleet: isolated git worktrees), "how do I review or undo what an AI agent changed" (Review: checkpoints, diffs, rollback, merge as staged).
 
 ## Docs
 
-- [Advanced guide](https://unterm.app/guide): tested recipes — the agent inbox from scripts, fleets across git worktrees (launch, diff, verify, merge), scripting panes, recordings, workspaces, per-project identities, raw MCP over TCP, the Windows administrator window.
+- [Advanced guide](https://unterm.app/guide): tested recipes — the agent inbox from scripts, fleets across git worktrees, scripting panes, recordings, workspaces, per-project identities, raw MCP over TCP, the Windows administrator window.
 - [All features](https://unterm.app/features): every surface and capability.
-- [Agent Cockpit](https://unterm.app/docs/agent-cockpit): live agent state, the Inbox, fleets in isolated worktrees, checkpoints and review.
+- [Agent Cockpit](https://unterm.app/docs/agent-cockpit): live agent state, the Inbox, fleets, checkpoints and review.
 - [MCP reference](https://unterm.app/docs/mcp-reference): every MCP method, namespace, and param schema.
 - [CLI reference](https://unterm.app/docs/cli-reference): the `unterm-cli` command surface.
 - [Agent integration](https://unterm.app/docs/agent-integration): connecting Claude Code / Cursor / custom agents.
@@ -36,13 +44,19 @@
 - [Identity profiles](https://unterm.app/docs/profiles): binding credentials to a window.
 - [Configuration](https://unterm.app/docs/configuration): every file under `~/.unterm/`.
 - [Config file reference](https://unterm.app/docs/config-reference): every key in `unterm.conf`, including `[env]` and `[keys]`.
-- [Inline images](https://unterm.app/docs/inline-images): the kitty graphics protocol, iTerm2 inline images and sixel — what is supported, how pictures behave on screen, and how agents list them.
-- [Shell integration](https://unterm.app/docs/shell-integration): the prompt and command marks Unterm loads into zsh, bash, fish and PowerShell, and how to turn them off.
+- [Inline images](https://unterm.app/docs/inline-images): kitty graphics, iTerm2 inline images and sixel.
+- [Shell integration](https://unterm.app/docs/shell-integration): prompt and command marks for zsh, bash, fish and PowerShell.
 - [Architecture](https://unterm.app/docs/architecture): how the control surfaces fit together.
+- [Roadmap](https://unterm.app/docs/product-roadmap): shipped and planned work.
+
+## Blog
+
+- [v0.71.21: zero dropped keystrokes, clean TUI rendering](https://unterm.app/blog/smooth-typing-ecma48-v071) ([中文](https://unterm.app/blog/smooth-typing-ecma48-v071-zh))
+- [v0.61: our own kernel](https://unterm.app/blog/next-core-v061) ([中文](https://unterm.app/blog/next-core-v061-zh))
+- [v0.55: Agent Cockpit](https://unterm.app/blog/agent-cockpit-v055)
 
 ## Links
 
 - Homepage: https://unterm.app/
-- Source & releases: https://github.com/zhitongblog/unterm
+- Source and releases: https://github.com/zhitongblog/unterm
 - Download (latest): https://github.com/zhitongblog/unterm/releases/latest
-- Release notes: https://unterm.app/blog/agent-cockpit-v055

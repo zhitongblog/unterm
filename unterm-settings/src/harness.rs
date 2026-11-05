@@ -23,6 +23,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn silent_command(program: &str) -> Command {
+    #[allow(unused_mut)]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
@@ -240,11 +241,16 @@ fn scan_listening_ports_once(excluded_ports: &[u16]) -> Vec<DiscoveredPort> {
                 if !is_likely_dev_port(port, excluded_ports) || !seen_ports.insert(port) {
                     continue;
                 }
+                let label = if proc_name.is_empty() {
+                    guess_port_label(port)
+                } else {
+                    format!("{} (:{})", proc_name, port)
+                };
                 out.push(DiscoveredPort {
                     port,
                     pid,
                     bind_addr: addr_part.to_string(),
-                    label: format!("{} (:{} )", proc_name, port),
+                    label,
                     local_url: format!("http://127.0.0.1:{}/", port),
                     preview_path: format!("/preview/{}/", port),
                 });
@@ -954,9 +960,123 @@ $res | ConvertTo-Json -Depth 5 -Compress
         });
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = include_a11y;
+        let _ = silent_command("screencapture")
+            .args(["-x", &img_path.to_string_lossy()])
+            .output();
+
+        let jxa_script = format!(
+            r#"
+ObjC.import('stdlib');
+var se = Application('System Events');
+var procName = 'macOS';
+var winTitle = 'Window';
+var bounds = {{ x: 0, y: 0, width: 0, height: 0 }};
+var controls = [];
+try {{
+    var procs = se.applicationProcesses.whose({{ frontmost: true }})();
+    if (procs.length > 0) {{
+        var p = procs[0];
+        procName = p.name();
+        var wins = p.windows();
+        if (wins.length > 0) {{
+            var w = wins[0];
+            winTitle = w.name() || procName;
+            var pos = w.position();
+            var sz = w.size();
+            bounds = {{ x: pos[0] || 0, y: pos[1] || 0, width: sz[0] || 0, height: sz[1] || 0 }};
+            if ({inc_a11y}) {{
+                var btns = w.buttons();
+                var limit = Math.min(30, btns.length);
+                for (var i = 0; i < limit; i++) {{
+                    try {{
+                        var b = btns[i];
+                        var nm = b.name() || b.description() || '';
+                        var bp = b.position();
+                        var bs = b.size();
+                        if (nm) {{
+                            controls.push({{
+                                name: String(nm),
+                                type: 'Button',
+                                rect: [bp[0] - bounds.x, bp[1] - bounds.y, bs[0], bs[1]]
+                            }});
+                        }}
+                    }} catch (e) {{}}
+                }}
+            }}
+        }}
+    }}
+}} catch (e) {{}}
+JSON.stringify({{
+    window_title: String(winTitle),
+    process_name: String(procName),
+    bounds: bounds,
+    controls: controls
+}});
+"#,
+            inc_a11y = if include_a11y { "true" } else { "false" }
+        );
+
+        let out = silent_command("osascript")
+            .args(["-l", "JavaScript", "-e", &jxa_script])
+            .output()
+            .map_err(|e| anyhow!("执行 macOS 窗口快照失败: {}", e))?;
+
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let parsed: Value = serde_json::from_str(&stdout).unwrap_or_else(|_| {
+            json!({
+                "window_title": "Captured Window",
+                "process_name": "macos",
+                "bounds": {"x": 0, "y": 0, "width": 0, "height": 0},
+                "controls": []
+            })
+        });
+
+        let window_title = parsed
+            .get("window_title")
+            .and_then(Value::as_str)
+            .unwrap_or("Window")
+            .to_string();
+        let process_name = parsed
+            .get("process_name")
+            .and_then(Value::as_str)
+            .unwrap_or("app")
+            .to_string();
+        let bounds = parsed.get("bounds").cloned().unwrap_or_else(|| json!({}));
+        let controls = parsed
+            .get("controls")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        std::fs::write(&a11y_path, serde_json::to_string_pretty(&parsed)?)?;
+
+        let snippet = format!(
+            "[SnapShot `{}` | Window: `{}` (`{}`) | Image: `{}` | A11y JSON ({} controls): `{}`]",
+            id,
+            window_title,
+            process_name,
+            img_path.display(),
+            controls.len(),
+            a11y_path.display()
+        );
+
+        return Ok(WindowSnapShotResult {
+            id,
+            window_title,
+            process_name,
+            image_path: img_path.to_string_lossy().to_string(),
+            a11y_path: a11y_path.to_string_lossy().to_string(),
+            bounds,
+            controls,
+            agent_prompt_snippet: snippet,
+        });
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let _ = (include_a11y, img_path, a11y_path);
         Err(anyhow!("当前平台暂未配置窗口 A11y 捕获脚本"))
     }
 }

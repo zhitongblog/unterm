@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Doc.astro
 title: "Unterm v0.71.21: Zero Dropped Keystrokes, Flawless TUI Rendering"
-subtitle: "Recovering orphaned Win32 WM_CHAR messages, ECMA-48 cursor column compliance, and lock-free GUI frame caching."
+subtitle: "Recovering orphaned Win32 WM_CHAR messages, ECMA-48 cursor column compliance, and an event-driven GUI frame cache."
 kicker: Blog / Release
 date: 2026-10-20
 ---
@@ -15,7 +15,7 @@ Over the past few weeks, power users and AI agent developers surfaced three real
 
 None of these showed up in basic synthetic benchmarks, but in daily production workflows with AI coding agents, they were noticeable pain points.
 
-**Unterm v0.71.21** eliminates these issues with deep architectural fixes in the Windows message queue layer, strict ECMA-48 protocol compliance, and a lock-free IPC caching engine.
+**Unterm v0.71.21** eliminates these issues with deep architectural fixes in the Windows message queue layer, strict ECMA-48 protocol compliance, and an event-driven frame cache between the GUI and the Core.
 
 ---
 
@@ -33,10 +33,10 @@ If an event loop observes an `Unidentified` key without an immediate character p
 
 In v0.71.21:
 1. **Message Queue Lookahead**: On receiving an unidentified key event, `recover_unidentified_windows_key` inspects the Win32 message queue for pending `WM_CHAR` entries;
-2. **Physical Scancode Fallback**: If `WM_CHAR` is not yet present, it translates physical scan codes against the active keyboard layout into an ASCII fallback;
-3. **Optimized IME Lock Ordering**: Removes lock contention between candidate commits and the main render loop.
+2. **Virtual-Key Fallback**: If no `WM_CHAR` is pending, letters and digits are recovered from the virtual-key code (`fallback_ascii_for_windows_vkey`);
+3. **No Post-IME Suppression**: Removed the time window after an IME commit during which the next keystroke was discarded.
 
-**Result**: 0 dropped characters in 150+ WPM typing tests and automated million-keystroke synthetic stress runs.
+**Result**: keystrokes that winit used to report as `Unidentified` and drop are now delivered to the shell.
 
 ---
 
@@ -67,22 +67,22 @@ In v0.71.21:
 
 ---
 
-## 3. Zero GUI Stalls: Lock-Free FrameCache
+## 3. Zero GUI Stalls: an Event-Driven FrameCache
 
-In Unterm's architecture, the terminal core engine runs in an isolated daemon while the GUI provides 120 FPS hardware-accelerated rendering.
+In Unterm's architecture, the terminal core engine runs in an isolated daemon while the GUI renders through wgpu.
 
 Previously, certain GUI operations (like window focus updates or session enumerations) made synchronous queries to the Core process. If the Core was busy streaming massive PTY throughput, the GUI main thread could experience a slight hitch.
 
-In v0.71.21, we migrated session state synchronization to a **lock-free atomic `FrameCache`**:
-- The Core daemon pushes state updates asynchronously;
-- The GUI rendering pipeline reads exclusively from local, non-blocking cache;
-- Zero blocking cross-process mutexes or IPC waits on the UI thread, ensuring a rock-solid 120 FPS frame rate under all workloads.
+In v0.71.21, we moved session state reads onto **`FrameCache`**, an event-driven client-side cache:
+- The cache subscribes to the Core's event feed and refetches a pane only when the Core says its screen changed;
+- The GUI reads screens and the session list from local memory instead of making a synchronous IPC call per read;
+- The UI thread no longer waits on the Core when it is busy streaming heavy PTY output.
 
 ---
 
 ## 4. More Improvements
 
-- **Win11 Native DWM Cloaking for Screen Capture**: AI agents capturing terminal snapshots (`screen.shot`) now use native DWM cloaking, eliminating window flicker or focus loss.
+- **Win11 Native DWM Cloaking for Screen Capture**: Window screenshots (`capture.window`, `unterm-cli screenshot`) now use native DWM cloaking, eliminating window flicker or focus loss.
 - **Cross-Platform Packages Ready**: Updated across Homebrew, Scoop, and GitHub Releases with native notarized DMG, Windows MSI/ZIP, and Linux AppImage/DEB.
 
 ---

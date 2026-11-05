@@ -14,9 +14,27 @@ User-agent: ClaudeBot
 Allow: /
 User-agent: Claude-Web
 Allow: /
+User-agent: anthropic-ai
+Allow: /
 User-agent: Google-Extended
 Allow: /
 User-agent: Applebot-Extended
 Allow: /
+User-agent: Meta-ExternalAgent
+Allow: /
+User-agent: Meta-ExternalFetcher
+Allow: /
+User-agent: Amazonbot
+Allow: /
+User-agent: Bytespider
+Allow: /
+User-agent: cohere-ai
+Allow: /
 
+# Standard Sitemap
 Sitemap: https://unterm.app/sitemap.xml
+
+# LLM Context Entrypoints (GEO)
+# https://unterm.app/llms.txt
+# https://unterm.app/llms-full.txt
+
