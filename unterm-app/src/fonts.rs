@@ -247,12 +247,48 @@ impl FontStack {
     /// Which face should draw `ch`, if any can.
     ///
     /// Falls back to the primary when nothing has it, so the character comes
-    /// out as that face's box rather than as a hole in the line.
+    /// out as that face's box rather than as a hole in the line. Drawing asks
+    /// `drawing_face`; this is the character map's answer alone, which only
+    /// tests still want.
+    #[cfg(test)]
     pub fn face_for(&self, ch: char) -> usize {
         self.faces
             .iter()
             .position(|face| face.has_glyph(ch))
             .unwrap_or(0)
+    }
+
+    /// How many faces the stack holds, the primary included.
+    pub fn face_count(&self) -> usize {
+        self.faces.len()
+    }
+
+    /// Which face actually draws `ch`: the first that has it *and* renders
+    /// ink for it, the same walk `rasterize` makes.
+    ///
+    /// `face_for` stops at the first face whose character map has the code
+    /// point. A colour face claims plenty of text symbols and renders them
+    /// blank, so `rasterize` moves on to the next face -- and a glyph keyed
+    /// under `face_for`'s answer was filed under one face with another's
+    /// bitmap, size and bearings. Anything that keys, fits or shapes a glyph
+    /// asks this instead. Falls back to the first face that has the
+    /// character, then to the primary, like `face_for`.
+    pub fn drawing_face(&mut self, ch: char) -> usize {
+        let candidates: Vec<usize> = self
+            .faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| face.has_glyph(ch))
+            .map(|(index, _)| index)
+            .collect();
+        for &index in &candidates {
+            if let Ok(glyph) = self.faces[index].rasterize(ch) {
+                if glyph.width > 0 && glyph.height > 0 {
+                    return index;
+                }
+            }
+        }
+        candidates.first().copied().unwrap_or(0)
     }
 
     /// Shape a run of text with one face.
@@ -320,48 +356,6 @@ impl FontStack {
             log::warn!("could not restore font size {base}: {err:#}");
         }
         rasterized.ok()
-    }
-
-    /// As `rasterize`, at a pixel size other than the stack's own.
-    ///
-    /// The same face-by-face walk, with each candidate resized for its one
-    /// glyph and put back before the next thing touches it. The blank-bitmap
-    /// skip is kept: a colour face that reports a glyph and renders nothing
-    /// renders nothing at every size.
-    pub fn rasterize_at(&mut self, ch: char, pixel_size: u32) -> Option<(usize, RasterizedGlyph)> {
-        if pixel_size == self.pixel_size {
-            return self.rasterize(ch);
-        }
-        let candidates: Vec<usize> = self
-            .faces
-            .iter()
-            .enumerate()
-            .filter(|(_, face)| face.has_glyph(ch))
-            .map(|(index, _)| index)
-            .collect();
-
-        let base = self.pixel_size;
-        let mut first: Option<(usize, RasterizedGlyph)> = None;
-        for index in candidates {
-            let face = &mut self.faces[index];
-            if face.set_pixel_size(pixel_size).is_err() {
-                continue;
-            }
-            let rasterized = face.rasterize(ch);
-            if let Err(err) = face.set_pixel_size(base) {
-                log::warn!("could not restore font size {base}: {err:#}");
-            }
-            let Ok(glyph) = rasterized else {
-                continue;
-            };
-            if glyph.width > 0 && glyph.height > 0 {
-                return Some((index, glyph));
-            }
-            // Keep the first answer as a fallback: a character with no ink
-            // anywhere still needs its advance.
-            first.get_or_insert((index, glyph));
-        }
-        first
     }
 
     /// Rasterize `ch` from whichever face can actually draw it.

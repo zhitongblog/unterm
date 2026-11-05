@@ -243,6 +243,133 @@ fn to_rgba(color: StyledColor, palette: &Palette) -> [f32; 4] {
     }
 }
 
+/// How a glyph is set in the columns it belongs to.
+///
+/// One answer for both drawing paths -- the shaper's and the per-character
+/// one -- so a character lands in the same place whichever drew it. They
+/// used to disagree: IME preedit drew a hanzi flush left in its two cells,
+/// and the same hanzi committed a moment later sat centred, so the text
+/// jumped by a fraction of a cell on Enter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GlyphFit {
+    /// At the pen, by the glyph's own bearing: the primary face, whose
+    /// advance *is* the cell.
+    #[default]
+    Pen,
+    /// Centred across its columns, and nudged down (or up) to stay inside its
+    /// row when it fits: a fallback face, designed around an em of its own.
+    Centre,
+}
+
+/// Where the pen goes for a glyph set in `span_width` pixels starting at
+/// `cell_left`.
+///
+/// For `Centre`, the ink is centred: the air the glyph leaves is split
+/// either side rather than piled up on the right. A glyph wider than its
+/// span starts at the span's left edge, which is where the clip keeps it.
+pub fn fit_pen(slot: GlyphSlot, fit: GlyphFit, cell_left: f32, span_width: f32) -> f32 {
+    match fit {
+        GlyphFit::Pen => cell_left,
+        GlyphFit::Centre => {
+            let air = (span_width - slot.width as f32).max(0.0);
+            cell_left + (air / 2.0).floor() - slot.bearing_x as f32
+        }
+    }
+}
+
+/// The baseline a glyph is drawn on, in a row starting at `row_top`.
+///
+/// The row's own baseline, except that a `Centre`d glyph whose ink would
+/// poke out of the row -- a tall emoji above, a symbol below -- is moved
+/// back inside it when it is short enough to fit. Anything still outside is
+/// the clip's to cut.
+pub fn fit_baseline(slot: GlyphSlot, fit: GlyphFit, row_top: f32, metrics: CellMetrics) -> f32 {
+    let baseline = row_top + metrics.baseline;
+    if fit != GlyphFit::Centre || slot.height as f32 > metrics.height {
+        return baseline;
+    }
+    let top = baseline - slot.bearing_y as f32;
+    let bottom = top + slot.height as f32;
+    if top < row_top {
+        baseline + (row_top - top)
+    } else if bottom > row_top + metrics.height {
+        baseline - (bottom - (row_top + metrics.height))
+    } else {
+        baseline
+    }
+}
+
+/// A rectangle in pixels a glyph may not draw outside of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipRect {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl ClipRect {
+    /// The columns `[column, column + span)` of a row, in pixels.
+    pub fn cells(left_origin: f32, top: f32, column: usize, span: usize, metrics: CellMetrics) -> Self {
+        Self {
+            left: left_origin + column as f32 * metrics.width,
+            top,
+            right: left_origin + (column + span.max(1)) as f32 * metrics.width,
+            bottom: top + metrics.height,
+        }
+    }
+}
+
+/// Cut a glyph down to `clip`, moving its texture coordinates in step so
+/// what is left samples the same pixels it did before. `None` when nothing
+/// is left.
+///
+/// Every terminal glyph is drawn through this, so ink can never land on a
+/// neighbouring cell -- a Nerd Font icon wider than its column, a fallback
+/// glyph that came out a pixel too big, a tall glyph reaching into the row
+/// above -- and then be painted over (or not) depending on draw order.
+pub fn clip_glyph(glyph: GlyphQuad, clip: ClipRect) -> Option<GlyphQuad> {
+    let quad = glyph.quad;
+    let (left, top) = (quad.left.max(clip.left), quad.top.max(clip.top));
+    let right = (quad.left + quad.width).min(clip.right);
+    let bottom = (quad.top + quad.height).min(clip.bottom);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    if (left, top, right, bottom) == (quad.left, quad.top, quad.left + quad.width, quad.top + quad.height) {
+        return Some(glyph);
+    }
+    let u = |x: f32| glyph.tex_left + (x - quad.left) / quad.width * (glyph.tex_right - glyph.tex_left);
+    let v = |y: f32| glyph.tex_top + (y - quad.top) / quad.height * (glyph.tex_bottom - glyph.tex_top);
+    Some(GlyphQuad {
+        quad: Quad {
+            left,
+            top,
+            width: right - left,
+            height: bottom - top,
+            color: quad.color,
+        },
+        tex_left: u(left),
+        tex_top: v(top),
+        tex_right: u(right),
+        tex_bottom: v(bottom),
+    })
+}
+
+/// What a row's per-character glyphs are drawn with, beyond the cells.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowOptions {
+    /// The column under a block cursor and the colour its glyph takes, so
+    /// the character stays readable on the block. Decided here, for the
+    /// glyph drawn from that cell, rather than afterwards by guessing which
+    /// glyphs a pixel position belongs to.
+    pub inverted: Option<(usize, [f32; 4])>,
+    /// Whether to cut each glyph to its own cells. The terminal grid does;
+    /// the chrome's proportional labels draw at the face's own advances and
+    /// do not.
+    pub clip: bool,
+}
+
 /// Build one row's quads.
 ///
 /// `slot_for` is asked for a glyph's place in the atlas; returning None skips
@@ -258,6 +385,42 @@ pub fn build_row(
     mut slot_for: impl FnMut(char) -> Option<GlyphSlot>,
     out: &mut FrameQuads,
     already_drawn: &std::collections::HashSet<usize>,
+) {
+    build_row_with(
+        cells,
+        left_origin,
+        top,
+        metrics,
+        colors,
+        atlas,
+        |cell| slot_for(cell.ch).map(|slot| (slot, GlyphFit::Pen)),
+        out,
+        already_drawn,
+        RowOptions {
+            inverted: None,
+            clip: true,
+        },
+    );
+}
+
+/// As `build_row`, with each glyph's fit chosen by the caller and the
+/// cursor's cell inverted.
+///
+/// `slot_for` gets the whole cell, so the glyph can be fitted to the columns
+/// the cell actually occupies rather than to a width worked out again from
+/// the character.
+#[allow(clippy::too_many_arguments)]
+pub fn build_row_with(
+    cells: &[StyledCell],
+    left_origin: f32,
+    top: f32,
+    metrics: CellMetrics,
+    colors: FrameColors,
+    atlas: &GlyphAtlas,
+    mut slot_for: impl FnMut(&StyledCell) -> Option<(GlyphSlot, GlyphFit)>,
+    out: &mut FrameQuads,
+    already_drawn: &std::collections::HashSet<usize>,
+    options: RowOptions,
 ) {
     let mut column = 0usize;
 
@@ -304,15 +467,31 @@ pub fn build_row(
             && cell.ch != ' '
             && cell.ch != '\0'
         {
-            if let Some(slot) = slot_for(cell.ch) {
+            if let Some((slot, fit)) = slot_for(cell) {
                 if slot.width > 0 && slot.height > 0 {
-                    out.glyphs.push(glyph_quad(
+                    // The cursor's own cell, known here by the cell the glyph
+                    // was drawn from -- never by where its ink happens to land.
+                    let color = match options.inverted {
+                        Some((inverted, color)) if inverted == column => color,
+                        _ => foreground,
+                    };
+                    let span_width = metrics.width * span;
+                    let glyph = glyph_quad(
                         slot,
-                        left,
-                        top + metrics.baseline,
-                        foreground,
+                        fit_pen(slot, fit, left, span_width),
+                        fit_baseline(slot, fit, top, metrics),
+                        color,
                         atlas,
-                    ));
+                    );
+                    let glyph = if options.clip {
+                        clip_glyph(
+                            glyph,
+                            ClipRect::cells(left_origin, top, column, cell.width, metrics),
+                        )
+                    } else {
+                        Some(glyph)
+                    };
+                    out.glyphs.extend(glyph);
                 }
             }
         }
@@ -334,6 +513,10 @@ pub fn build_row(
 }
 
 /// Place one glyph relative to a pen sitting on the baseline.
+///
+/// On whole pixels: the atlas is sampled linearly, so a bitmap placed at a
+/// fractional position is resampled -- blurred by an amount that differs
+/// column to column, which reads as uneven spacing.
 pub fn glyph_quad(
     slot: GlyphSlot,
     pen_x: f32,
@@ -346,9 +529,9 @@ pub fn glyph_quad(
 
     GlyphQuad {
         quad: Quad {
-            left: pen_x + slot.bearing_x as f32,
+            left: (pen_x + slot.bearing_x as f32).round(),
             // Bearing is measured up from the baseline; the screen counts down.
-            top: baseline_y - slot.bearing_y as f32,
+            top: (baseline_y - slot.bearing_y as f32).round(),
             width: slot.width as f32,
             height: slot.height as f32,
             color,
@@ -700,6 +883,141 @@ mod tests {
 
         // A gap is easier to diagnose than a blank line.
         assert_eq!(out.glyphs.len(), 1);
+    }
+
+    /// A glyph on a fractional pen still lands on whole pixels.
+    #[test]
+    fn a_glyph_is_placed_on_whole_pixels() {
+        let (atlas, slot) = atlas_with_glyph();
+        let quad = glyph_quad(slot, 100.4, 50.6, [1.0; 4], &atlas);
+        assert_eq!((quad.quad.left, quad.quad.top), (101.0, 44.0));
+    }
+
+    /// Clipping cuts the rectangle and moves the texture coordinates with
+    /// it, so what is left samples the same pixels it did.
+    #[test]
+    fn a_clipped_glyph_keeps_sampling_the_same_pixels() {
+        let (atlas, slot) = atlas_with_glyph();
+        // 6x8 at (1, 8)..(7, 16).
+        let glyph = glyph_quad(slot, 0.0, 15.0, [1.0; 4], &atlas);
+        let clip = ClipRect {
+            left: 0.0,
+            top: 10.0,
+            right: 4.0,
+            bottom: 20.0,
+        };
+        let cut = clip_glyph(glyph, clip).expect("part of it is inside");
+        assert_eq!((cut.quad.left, cut.quad.top), (1.0, 10.0));
+        assert_eq!((cut.quad.width, cut.quad.height), (3.0, 6.0));
+        let u_per_px = (glyph.tex_right - glyph.tex_left) / 6.0;
+        let v_per_px = (glyph.tex_bottom - glyph.tex_top) / 8.0;
+        assert!((cut.tex_left - glyph.tex_left).abs() < 1e-6);
+        assert!((cut.tex_right - (glyph.tex_left + 3.0 * u_per_px)).abs() < 1e-6);
+        assert!((cut.tex_top - (glyph.tex_top + 2.0 * v_per_px)).abs() < 1e-6);
+        assert!((cut.tex_bottom - glyph.tex_bottom).abs() < 1e-6);
+
+        // Wholly outside: nothing.
+        let away = ClipRect {
+            left: 50.0,
+            top: 0.0,
+            right: 60.0,
+            bottom: 20.0,
+        };
+        assert!(clip_glyph(glyph, away).is_none());
+        // Wholly inside: untouched.
+        let all = ClipRect {
+            left: 0.0,
+            top: 0.0,
+            right: 100.0,
+            bottom: 100.0,
+        };
+        assert_eq!(clip_glyph(glyph, all), Some(glyph));
+    }
+
+    /// An icon wider than its one column is cut at the column's edge rather
+    /// than drawn over the character beside it.
+    #[test]
+    fn a_glyph_wider_than_its_cell_is_cut_at_the_cell() {
+        let atlas = GlyphAtlas::new(64, 64);
+        let wide = GlyphSlot {
+            x: 0,
+            y: 0,
+            width: 16,
+            height: 12,
+            bearing_x: 0,
+            bearing_y: 12,
+            advance_x: 16,
+        };
+        let mut out = FrameQuads::default();
+        build_row(
+            &[cell('a', CellStyle::default()), cell('x', CellStyle::default())],
+            0.0,
+            0.0,
+            metrics(),
+            colors(),
+            &atlas,
+            |_| Some(wide),
+            &mut out,
+            &Default::default(),
+        );
+        assert_eq!(out.glyphs.len(), 2);
+        for (column, glyph) in out.glyphs.iter().enumerate() {
+            let left = column as f32 * metrics().width;
+            assert!(glyph.quad.left >= left);
+            assert!(glyph.quad.left + glyph.quad.width <= left + metrics().width, "{glyph:?}");
+        }
+    }
+
+    /// A centred glyph splits its air either side, and a tall one is moved
+    /// down into its row rather than poking into the one above.
+    #[test]
+    fn a_centred_glyph_sits_in_the_middle_of_its_span_and_inside_its_row() {
+        let slot = GlyphSlot {
+            x: 0,
+            y: 0,
+            width: 14,
+            height: 18,
+            bearing_x: 2,
+            bearing_y: 19,
+            advance_x: 18,
+        };
+        let pen = fit_pen(slot, GlyphFit::Centre, 100.0, 20.0);
+        assert_eq!(pen + slot.bearing_x as f32, 103.0, "3px of air on each side");
+        let baseline = fit_baseline(slot, GlyphFit::Centre, 40.0, metrics());
+        assert_eq!(baseline - slot.bearing_y as f32, 40.0, "top of the ink at the top of the row");
+        // The primary face's pen is the cell's, untouched.
+        assert_eq!(fit_pen(slot, GlyphFit::Pen, 100.0, 20.0), 100.0);
+        assert_eq!(fit_baseline(slot, GlyphFit::Pen, 40.0, metrics()), 56.0);
+    }
+
+    /// The cursor's colour goes to the glyph drawn from the cursor's cell,
+    /// and to no other.
+    #[test]
+    fn the_inverted_column_takes_the_cursor_colour() {
+        let (atlas, slot) = atlas_with_glyph();
+        let mut out = FrameQuads::default();
+        let marked = [0.25, 0.5, 0.75, 1.0];
+        build_row_with(
+            &[
+                cell('a', CellStyle::default()),
+                cell('b', CellStyle::default()),
+                cell('c', CellStyle::default()),
+            ],
+            0.0,
+            0.0,
+            metrics(),
+            colors(),
+            &atlas,
+            |_| Some((slot, GlyphFit::Pen)),
+            &mut out,
+            &Default::default(),
+            RowOptions {
+                inverted: Some((1, marked)),
+                clip: true,
+            },
+        );
+        let colours: Vec<[f32; 4]> = out.glyphs.iter().map(|glyph| glyph.quad.color).collect();
+        assert_eq!(colours, vec![colors().foreground, marked, colors().foreground]);
     }
 }
 
