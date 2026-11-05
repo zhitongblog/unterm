@@ -740,32 +740,44 @@ impl NextCoreScreen {
     fn put_char(&mut self, c: char) {
         self.ensure_cursor_line();
         self.mark_dirty_row(self.cursor_y);
-        {
-            let line = &mut self.lines[self.cursor_y];
-            let end = self.cursor_x.min(line.len());
-            if end > 0 {
-                if let Some(previous) = line[..end]
-                    .iter_mut()
-                    .rev()
-                    .find(|cell| cell.width > 0 && cell.joins_trailing_cluster_char(c))
-                {
-                    previous.push_combining(c);
-                    return;
-                }
+        // Only the cell immediately before the cursor can take the character
+        // into its cluster. Scanning further left hung a flag half on a cell
+        // across the row (`🇺 A 🇸`) and swallowed characters after a joiner,
+        // and every swallowed character left the rest of the row a column
+        // short.
+        let previous = self.previous_cell_index();
+        if let Some(idx) = previous {
+            let cell = &mut self.lines[self.cursor_y][idx];
+            if cell.joins_trailing_cluster_char(c) {
+                cell.push_combining(c);
+                return;
             }
         }
-        let cell = ScreenCell::new(c, self.current_attr);
-        if cell.width == 0 {
-            let line = &mut self.lines[self.cursor_y];
-            let end = self.cursor_x.min(line.len());
-            if end > 0 {
-                if let Some(previous) = line[..end].iter_mut().rev().find(|cell| cell.width > 0) {
-                    previous.push_combining(c);
-                }
+        if ScreenCell::char_width(c) == 0 {
+            // A combining mark, a variation selector, a joiner: it belongs to
+            // whatever stands right before the cursor (xterm), and with
+            // nothing there it has nothing to attach to.
+            if let Some(idx) = previous {
+                self.lines[self.cursor_y][idx].push_combining(c);
             }
             return;
         }
-        self.put_cell(cell);
+        self.put_cell(ScreenCell::new(c, self.current_attr));
+    }
+
+    /// The head of the cell immediately before the cursor: column
+    /// `cursor_x - 1` -- the last column in pending-wrap -- stepping back
+    /// over a wide character's continuation to the cell that owns it.
+    fn previous_cell_index(&self) -> Option<usize> {
+        let line = self.lines.get(self.cursor_y)?;
+        let mut idx = self.cursor_x.min(self.cols).checked_sub(1)?;
+        if idx >= line.len() {
+            return None;
+        }
+        while line[idx].width == 0 {
+            idx = idx.checked_sub(1)?;
+        }
+        Some(idx)
     }
 
     /// Flag `row` as soft-wrapping into the next one.
