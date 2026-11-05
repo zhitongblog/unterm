@@ -825,6 +825,13 @@ impl NextCoreScreen {
                 self.cursor_x = right_margin.saturating_sub(width.saturating_sub(1));
             }
         }
+        // The soft-wrap flag belongs to the row, not to the cell that holds
+        // it: overwriting the last column (an app redrawing the line, or
+        // writing there with autowrap off) or sliding the row in insert mode
+        // must not drop it. Like xterm and VTE, only erasing the row's end
+        // (EL 0/2, ED) clears it.
+        let row = self.cursor_y;
+        let was_wrapped = self.row_is_wrapped(row);
         {
             let line = &mut self.lines[self.cursor_y];
             if self.cursor_x > line.len() {
@@ -891,6 +898,9 @@ impl NextCoreScreen {
             if line.len() > self.cols {
                 line.truncate(self.cols);
             }
+        }
+        if was_wrapped && !self.row_is_wrapped(row) {
+            self.set_row_wrapped(row, true);
         }
         self.cursor_x += width;
     }
@@ -1365,6 +1375,7 @@ impl NextCoreScreen {
         };
 
         self.ensure_rows_through(bottom);
+        let wrapped = self.rows_wrapped(top, bottom);
         let cell = ScreenCell::new(ch, self.current_attr);
         for row in top..=bottom {
             let line = &mut self.lines[row];
@@ -1378,6 +1389,7 @@ impl NextCoreScreen {
                 line[col] = cell.clone();
             }
         }
+        self.restore_rows_wrapped(top, &wrapped);
         self.mark_dirty_range(top, bottom);
     }
 
@@ -1390,6 +1402,7 @@ impl NextCoreScreen {
         };
 
         self.ensure_rows_through(bottom);
+        let wrapped = self.rows_wrapped(top, bottom);
         let blank = ScreenCell::blank(self.current_attr);
         for row in top..=bottom {
             let line = &mut self.lines[row];
@@ -1402,6 +1415,7 @@ impl NextCoreScreen {
                 line[col] = blank.clone();
             }
         }
+        self.restore_rows_wrapped(top, &wrapped);
         self.mark_dirty_range(top, bottom);
     }
 
@@ -1414,6 +1428,7 @@ impl NextCoreScreen {
         };
 
         self.ensure_rows_through(bottom);
+        let wrapped = self.rows_wrapped(top, bottom);
         let blank = ScreenCell::blank(self.current_attr);
         for row in top..=bottom {
             let line = &mut self.lines[row];
@@ -1439,6 +1454,7 @@ impl NextCoreScreen {
                 }
             }
         }
+        self.restore_rows_wrapped(top, &wrapped);
         self.mark_dirty_range(top, bottom);
     }
 
@@ -1662,6 +1678,7 @@ impl NextCoreScreen {
             return;
         }
         self.ensure_rows_through(row);
+        let was_wrapped = self.row_is_wrapped(row);
         let line = &mut self.lines[row];
         let end = end.min(self.cols);
         if line.len() < end {
@@ -1677,6 +1694,9 @@ impl NextCoreScreen {
                 *cell = blank.clone();
             }
         }
+        // Blanking the last column does not end the row's soft wrap; EL 0/2
+        // clear it explicitly (xterm ClearRight / ClearLine).
+        self.reset_row_wrapped(row, was_wrapped);
         self.mark_dirty_row(row);
     }
 
@@ -1699,6 +1719,7 @@ impl NextCoreScreen {
                     if selective {
                         for row in start..self.rows.min(self.lines.len()) {
                             self.erase_line_range(row, 0, self.cols, true);
+                            self.set_row_wrapped(row, false);
                         }
                     } else if start < self.lines.len() {
                         for line in self.lines.iter_mut().skip(start) {
@@ -1715,6 +1736,7 @@ impl NextCoreScreen {
                 if selective {
                     for row in 0..self.cursor_y.min(self.lines.len()) {
                         self.erase_line_range(row, 0, self.cols, true);
+                        self.set_row_wrapped(row, false);
                     }
                 } else {
                     for line in self.lines.iter_mut().take(end) {
@@ -1728,6 +1750,7 @@ impl NextCoreScreen {
                 if selective {
                     for row in 0..self.rows.min(self.lines.len()) {
                         self.erase_line_range(row, 0, self.cols, true);
+                        self.set_row_wrapped(row, false);
                     }
                 } else {
                     self.clear_display();
@@ -1765,6 +1788,8 @@ impl NextCoreScreen {
             0 => {
                 let start = col.min(self.cols);
                 self.erase_line_range(self.cursor_y, start, self.cols, selective);
+                // The row's end is gone, so it no longer continues.
+                self.set_row_wrapped(self.cursor_y, false);
             }
             1 => {
                 let end = col.saturating_add(1).min(self.cols);
@@ -1772,6 +1797,7 @@ impl NextCoreScreen {
             }
             2 => {
                 self.erase_line_range(self.cursor_y, 0, self.cols, selective);
+                self.set_row_wrapped(self.cursor_y, false);
             }
             _ => {}
         }
@@ -1787,6 +1813,7 @@ impl NextCoreScreen {
             return;
         }
         let count = count.max(1).min(right + 1 - left);
+        let was_wrapped = self.row_is_wrapped(self.cursor_y);
         let line = &mut self.lines[self.cursor_y];
         if line.len() < right + 1 {
             line.resize(right + 1, ScreenCell::blank(self.current_attr));
@@ -1801,6 +1828,7 @@ impl NextCoreScreen {
         // Everything from the cursor rightwards just moved one way; whatever
         // wide character that walked through has to be made whole again.
         Self::repair_wide_pairs(line, left, right);
+        self.reset_row_wrapped(self.cursor_y, was_wrapped);
         self.mark_dirty_row(self.cursor_y);
     }
 
@@ -1814,6 +1842,7 @@ impl NextCoreScreen {
             return;
         }
         let count = count.max(1).min(right + 1 - left);
+        let was_wrapped = self.row_is_wrapped(self.cursor_y);
         let line = &mut self.lines[self.cursor_y];
         if line.len() < right + 1 {
             line.resize(right + 1, ScreenCell::blank(self.current_attr));
@@ -1828,6 +1857,7 @@ impl NextCoreScreen {
         }
         // Same slide, opposite direction, same repair.
         Self::repair_wide_pairs(line, left, right);
+        self.reset_row_wrapped(self.cursor_y, was_wrapped);
         self.mark_dirty_row(self.cursor_y);
     }
 
@@ -1838,6 +1868,7 @@ impl NextCoreScreen {
             .cursor_x
             .saturating_add(count.max(1))
             .min(self.active_right_margin() + 1);
+        let was_wrapped = self.row_is_wrapped(self.cursor_y);
         let line = &mut self.lines[self.cursor_y];
         if line.len() < end {
             line.resize(end, ScreenCell::blank(self.current_attr));
@@ -1849,6 +1880,7 @@ impl NextCoreScreen {
         for cell in line.iter_mut().take(end).skip(self.cursor_x) {
             *cell = ScreenCell::blank(self.current_attr);
         }
+        self.reset_row_wrapped(self.cursor_y, was_wrapped);
         self.mark_dirty_row(self.cursor_y);
     }
 
@@ -1877,6 +1909,7 @@ impl NextCoreScreen {
         let count = count.max(1).min(right + 1 - left);
         let blank = ScreenCell::blank(self.current_attr);
         for row in self.scroll_top..=self.scroll_bottom {
+            let was_wrapped = self.row_is_wrapped(row);
             let Some(line) = self.lines.get_mut(row) else {
                 continue;
             };
@@ -1897,6 +1930,7 @@ impl NextCoreScreen {
             // The slide is the one `ESC[P` performs, so it cuts wide
             // characters in exactly the same places.
             Self::repair_wide_pairs(line, left, right);
+            self.reset_row_wrapped(row, was_wrapped);
             self.mark_dirty_row(row);
         }
     }
@@ -1912,6 +1946,7 @@ impl NextCoreScreen {
         let count = count.max(1).min(right + 1 - left);
         let blank = ScreenCell::blank(self.current_attr);
         for row in self.scroll_top..=self.scroll_bottom {
+            let was_wrapped = self.row_is_wrapped(row);
             let Some(line) = self.lines.get_mut(row) else {
                 continue;
             };
@@ -1930,6 +1965,7 @@ impl NextCoreScreen {
             }
             // And this one is `ESC[@`.
             Self::repair_wide_pairs(line, left, right);
+            self.reset_row_wrapped(row, was_wrapped);
             self.mark_dirty_row(row);
         }
     }
@@ -2184,6 +2220,31 @@ impl NextCoreScreen {
         }
         if let Some(last) = line.last_mut() {
             last.wrapped = wrapped;
+        }
+    }
+
+    /// After a slide that may have carried the flag into the middle of the
+    /// row (DCH, SL) or dropped the last cell (ICH, SR): no cell but the
+    /// last may carry it, and the last carries what the row had before.
+    fn reset_row_wrapped(&mut self, row: usize, wrapped: bool) {
+        if let Some(line) = self.lines.get_mut(row) {
+            for cell in line.iter_mut() {
+                cell.wrapped = false;
+            }
+        }
+        self.set_row_wrapped(row, wrapped);
+    }
+
+    /// The soft-wrap flags of rows `top..=bottom`, to put back with
+    /// [`Self::restore_rows_wrapped`] after a rectangle edit overwrote the
+    /// last column.
+    fn rows_wrapped(&self, top: usize, bottom: usize) -> Vec<bool> {
+        (top..=bottom).map(|row| self.row_is_wrapped(row)).collect()
+    }
+
+    fn restore_rows_wrapped(&mut self, top: usize, wrapped: &[bool]) {
+        for (offset, &flag) in wrapped.iter().enumerate() {
+            self.reset_row_wrapped(top + offset, flag);
         }
     }
 

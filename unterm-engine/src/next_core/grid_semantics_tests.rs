@@ -580,3 +580,78 @@ fn cpr_counts_from_the_margins_under_origin_mode() {
     );
     assert_eq!((screen.cursor_x, screen.cursor_y), (5, 2));
 }
+
+// --- C-wrapped: the soft-wrap flag belongs to the row ---------------------
+
+/// "abcde" soft-wrapped into "fg" on a 5x3 screen.
+fn wrapped_row() -> NextCoreScreen {
+    let mut screen = screen(5, 3);
+    screen.feed("abcdefg");
+    assert_eq!(wrapped_cells(&screen, 0), vec![4]);
+    screen
+}
+
+/// Columns of `row` carrying the soft-wrap flag.
+fn wrapped_cells(screen: &NextCoreScreen, row: usize) -> Vec<usize> {
+    screen.lines[row]
+        .iter()
+        .enumerate()
+        .filter(|(_, cell)| cell.wrapped)
+        .map(|(col, _)| col)
+        .collect()
+}
+
+#[test]
+fn overwriting_the_last_column_keeps_the_soft_wrap() {
+    let mut screen = wrapped_row();
+    screen.feed("\x1b[1;5HZ");
+    assert_eq!(row(&screen, 0), "abcdZ");
+    assert_eq!(wrapped_cells(&screen, 0), vec![4]);
+    // With autowrap off too.
+    screen.feed("\x1b[?7l\x1b[1;5HY");
+    assert_eq!(wrapped_cells(&screen, 0), vec![4]);
+}
+
+#[test]
+fn dch_and_ich_keep_the_flag_on_the_last_cell() {
+    let mut screen = wrapped_row();
+    screen.feed("\x1b[1;2H\x1b[2P");
+    assert_eq!(row(&screen, 0).trim_end(), "ade");
+    assert_eq!(wrapped_cells(&screen, 0), vec![4]);
+
+    let mut screen = wrapped_row();
+    screen.feed("\x1b[1;2H\x1b[2@");
+    assert_eq!(row(&screen, 0), "a  bc");
+    assert_eq!(wrapped_cells(&screen, 0), vec![4]);
+}
+
+#[test]
+fn ech_el1_and_rectangle_edits_keep_the_soft_wrap() {
+    for edit in [
+        "\x1b[1;5H\x1b[X",
+        "\x1b[1;5H\x1b[1K",
+        "\x1b[1;1;1;5$z",
+        "\x1b[88;1;1;1;5$x",
+        "\x1b[1;1;1;5${",
+        "\x1b[1;1H\x1b[2 @",
+        "\x1b[1;1H\x1b[2 A",
+    ] {
+        let mut screen = wrapped_row();
+        screen.feed(edit);
+        assert_eq!(wrapped_cells(&screen, 0), vec![4], "after {edit:?}");
+        // SL/SR slide every row of the region; the rest touch row 0 only.
+        if !edit.contains(' ') {
+            assert_eq!(row(&screen, 1).trim_end(), "fg", "after {edit:?}");
+        }
+        assert!(wrapped_cells(&screen, 1).is_empty(), "after {:?}", edit);
+    }
+}
+
+#[test]
+fn erasing_the_end_of_the_row_ends_the_soft_wrap() {
+    for edit in ["\x1b[1;3H\x1b[K", "\x1b[1;3H\x1b[2K", "\x1b[2J", "\x1b[1;3H\x1b[J"] {
+        let mut screen = wrapped_row();
+        screen.feed(edit);
+        assert!(wrapped_cells(&screen, 0).is_empty(), "after {:?}", edit);
+    }
+}
