@@ -1278,6 +1278,9 @@ impl NextCoreScreen {
             if line.len() <= right {
                 line.resize(right + 1, ScreenCell::blank(self.current_attr));
             }
+            // A wide character straddling either edge loses its other half.
+            Self::split_wide_cell(line, left);
+            Self::split_wide_cell(line, right);
             for col in left..=right {
                 line[col] = cell.clone();
             }
@@ -1300,6 +1303,8 @@ impl NextCoreScreen {
             if line.len() <= right {
                 line.resize(right + 1, ScreenCell::blank(self.current_attr));
             }
+            Self::split_wide_cell(line, left);
+            Self::split_wide_cell(line, right);
             for col in left..=right {
                 line[col] = blank.clone();
             }
@@ -1322,13 +1327,36 @@ impl NextCoreScreen {
             if line.len() <= right {
                 line.resize(right + 1, ScreenCell::blank(self.current_attr));
             }
-            for col in left..=right {
-                if !line[col].attr.protected {
+            // A wide pair is protected or not as a whole, by its head: an
+            // erased tail beside a protected head (or the reverse) would be
+            // half a character. Read every column's protection before any of
+            // them is blanked, and split an edge only when it is erased.
+            let protected: Vec<bool> = (left..=right)
+                .map(|col| line[Self::cell_owner(line, col)].attr.protected)
+                .collect();
+            if !protected[0] {
+                Self::split_wide_cell(line, left);
+            }
+            if !protected[right - left] {
+                Self::split_wide_cell(line, right);
+            }
+            for (offset, col) in (left..=right).enumerate() {
+                if !protected[offset] {
                     line[col] = blank.clone();
                 }
             }
         }
         self.mark_dirty_range(top, bottom);
+    }
+
+    /// The cell owning column `idx`: itself, or for a wide character's
+    /// continuation the head it belongs to.
+    fn cell_owner(line: &[ScreenCell], idx: usize) -> usize {
+        let mut owner = idx;
+        while owner > 0 && line[owner].width == 0 {
+            owner -= 1;
+        }
+        owner
     }
 
     fn change_rect_attributes(

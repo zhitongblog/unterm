@@ -275,3 +275,34 @@ fn deccolm_changes_neither_the_width_nor_the_history() {
     assert_eq!(screen.snapshot_viewport_lines(), vec!["two", "three", "four"]);
     assert_eq!((screen.cursor_x, screen.cursor_y), (4, 2));
 }
+
+// --- B5: rectangle ops split wide characters at their edges -------------
+
+fn widths(screen: &NextCoreScreen, row: usize) -> Vec<u8> {
+    screen.lines[row].iter().map(|cell| cell.width).collect()
+}
+
+#[test]
+fn decfra_splits_wide_characters_at_both_edges() {
+    let mut screen = screen(10, 2);
+    screen.feed("中文\x1b[88;1;2;1;3$x");
+    assert_eq!(row(&screen, 0), " XX");
+    assert_eq!(widths(&screen, 0), vec![1, 1, 1, 1]);
+}
+
+#[test]
+fn decera_splits_wide_characters_at_both_edges() {
+    let mut screen = screen(10, 2);
+    screen.feed("中文ab\x1b[1;2;1;3$z");
+    assert_eq!(row(&screen, 0), "    ab");
+    assert!(!widths(&screen, 0).contains(&0));
+    assert!(!widths(&screen, 0).contains(&2));
+}
+
+#[test]
+fn decsera_treats_a_wide_pair_as_protected_by_its_head() {
+    let mut screen = screen(10, 2);
+    screen.feed("\x1b[1\"q中\x1b[0\"q文b\x1b[1;2;1;3${");
+    assert_eq!(row(&screen, 0), "中  b");
+    assert_eq!(widths(&screen, 0), vec![2, 0, 1, 1, 1]);
+}
