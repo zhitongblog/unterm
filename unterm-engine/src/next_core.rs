@@ -890,7 +890,8 @@ impl NextCoreScreen {
         else {
             return;
         };
-        for _ in 0..count.max(1) {
+        // A screenful at most: `x CSI 999999999 b` must not hang the pane.
+        for _ in 0..count.max(1).min(self.rows.saturating_mul(self.cols)) {
             self.mark_dirty_row(self.cursor_y);
             self.put_cell(cell.clone());
         }
@@ -986,7 +987,7 @@ impl NextCoreScreen {
 
     fn cursor_forward_tab(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        for _ in 0..count.max(1) {
+        for _ in 0..count.max(1).min(self.cols) {
             let next_tab = self
                 .tab_stops
                 .range((self.cursor_x + 1)..)
@@ -1000,7 +1001,7 @@ impl NextCoreScreen {
     fn reverse_horizontal_tab(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
         self.cursor_x = self.cursor_x.min(self.active_right_margin());
-        for _ in 0..count.max(1) {
+        for _ in 0..count.max(1).min(self.cols) {
             let previous = self
                 .tab_stops
                 .range(..self.cursor_x)
@@ -1168,14 +1169,14 @@ impl NextCoreScreen {
     fn move_cursor_down(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
         self.cursor_x = self.cursor_x.min(self.active_right_margin());
-        self.cursor_y = (self.cursor_y + count).min(self.active_bottom_margin());
+        self.cursor_y = self.cursor_y.saturating_add(count).min(self.active_bottom_margin());
         self.ensure_cursor_line();
         self.mark_dirty_row(self.cursor_y);
     }
 
     fn move_cursor_right(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = (self.cursor_x.min(self.active_right_margin()) + count)
+        self.cursor_x = (self.cursor_x.min(self.active_right_margin()).saturating_add(count))
             .min(self.active_right_margin());
     }
 
@@ -1922,20 +1923,23 @@ impl NextCoreScreen {
 
     fn insert_lines(&mut self, count: usize) {
         self.ensure_cursor_line();
-        let bottom = if self.cursor_y >= self.scroll_top && self.cursor_y <= self.scroll_bottom {
-            self.scroll_bottom
-        } else {
-            self.rows.saturating_sub(1)
-        };
+        // Outside the top/bottom margins IL does nothing (xterm, VT510).
+        if self.cursor_y < self.scroll_top || self.cursor_y > self.scroll_bottom {
+            return;
+        }
+        let bottom = self.scroll_bottom;
+        // Never more than the rows it can move: `CSI 999999999 L` is one
+        // region's worth of work, not a billion Vec shifts.
+        let count = count.max(1).min(bottom + 1 - self.cursor_y);
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(self.cursor_y, bottom);
         let top = self.image_top_row();
         self.images.region_scrolled(
             top + self.cursor_y as i64,
             top + bottom as i64,
-            count.max(1) as i64,
+            count as i64,
         );
-        for _ in 0..count.max(1) {
+        for _ in 0..count {
             self.lines.insert(self.cursor_y, Vec::new());
             if self.lines.len() > bottom + 1 {
                 self.lines.remove(bottom + 1);
@@ -1945,20 +1949,20 @@ impl NextCoreScreen {
 
     fn delete_lines(&mut self, count: usize) {
         self.ensure_cursor_line();
-        let bottom = if self.cursor_y >= self.scroll_top && self.cursor_y <= self.scroll_bottom {
-            self.scroll_bottom
-        } else {
-            self.rows.saturating_sub(1)
-        };
+        if self.cursor_y < self.scroll_top || self.cursor_y > self.scroll_bottom {
+            return;
+        }
+        let bottom = self.scroll_bottom;
+        let count = count.max(1).min(bottom + 1 - self.cursor_y);
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(self.cursor_y, bottom);
         let top = self.image_top_row();
         self.images.region_scrolled(
             top + self.cursor_y as i64,
             top + bottom as i64,
-            -(count.max(1) as i64),
+            -(count as i64),
         );
-        for _ in 0..count.max(1) {
+        for _ in 0..count {
             if self.cursor_y <= bottom && self.cursor_y < self.lines.len() {
                 self.lines.remove(self.cursor_y);
             }
@@ -1978,6 +1982,9 @@ impl NextCoreScreen {
         if top > bottom {
             return;
         }
+        // At most one region's height: more scrolls nothing further but
+        // would push a flood of blank rows through the scrollback.
+        let count = count.max(1).min(bottom + 1 - top);
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(top, bottom);
         // Rows that go into the history keep their absolute numbers; rows
@@ -1986,9 +1993,9 @@ impl NextCoreScreen {
         if !(top == 0 && bottom + 1 >= self.rows && self.alternate.is_none()) {
             let base = self.image_top_row();
             self.images
-                .region_scrolled(base + top as i64, base + bottom as i64, -(count.max(1) as i64));
+                .region_scrolled(base + top as i64, base + bottom as i64, -(count as i64));
         }
-        for _ in 0..count.max(1) {
+        for _ in 0..count {
             let removed = self.lines.remove(top);
             let mut blank = Vec::new();
             if top == 0 && bottom + 1 >= self.rows && self.alternate.is_none() {
@@ -2012,12 +2019,13 @@ impl NextCoreScreen {
         if top > bottom {
             return;
         }
+        let count = count.max(1).min(bottom + 1 - top);
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(top, bottom);
         let base = self.image_top_row();
         self.images
-            .region_scrolled(base + top as i64, base + bottom as i64, count.max(1) as i64);
-        for _ in 0..count.max(1) {
+            .region_scrolled(base + top as i64, base + bottom as i64, count as i64);
+        for _ in 0..count {
             self.lines.remove(bottom);
             self.lines.insert(top, Vec::new());
         }

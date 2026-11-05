@@ -348,3 +348,63 @@ fn soft_reset_ends_the_hold_with_the_flag() {
     assert!(!screen.synchronized_output);
     assert!(screen.synchronized_since.is_none());
 }
+
+// --- B8: repeat counts are clamped --------------------------------------
+
+fn assert_fast(started: std::time::Instant) {
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn huge_insert_and_delete_line_counts_return_at_once() {
+    let mut screen = screen(10, 5);
+    screen.feed("a\r\nb\r\nc\x1b[2;1H");
+    let started = std::time::Instant::now();
+    screen.feed("\x1b[999999999L");
+    assert_eq!(screen.snapshot_viewport_lines(), vec!["a", "", "", "", ""]);
+    screen.feed("\x1b[1;1H\x1b[999999999M");
+    assert_fast(started);
+    assert_eq!(screen.snapshot_viewport_lines(), vec!["", "", "", "", ""]);
+}
+
+#[test]
+fn huge_repeat_count_returns_at_once() {
+    let mut screen = screen(10, 3);
+    let started = std::time::Instant::now();
+    screen.feed("x\x1b[999999999b");
+    assert_fast(started);
+    assert!(screen.scrollback_rows() <= 3);
+}
+
+#[test]
+fn huge_scroll_up_puts_at_most_one_screenful_into_history() {
+    let mut screen = screen(10, 4);
+    screen.feed("one\r\ntwo");
+    let started = std::time::Instant::now();
+    screen.feed("\x1b[99999999S");
+    assert_fast(started);
+    assert_eq!(screen.scrollback_rows(), 4);
+    assert_eq!(screen.history_text_range(0, 2), vec!["one", "two"]);
+    screen.feed("\x1b[99999999T\x1b[99999999I\x1b[99999999Z\x1b[99999999C\x1b[99999999B");
+    assert_fast(started);
+    assert_eq!((screen.cursor_x, screen.cursor_y), (9, 3));
+}
+
+// --- B9: IL/DL outside the margins do nothing ---------------------------
+
+#[test]
+fn insert_and_delete_lines_outside_the_scroll_region_do_nothing() {
+    let mut screen = screen(10, 6);
+    screen.feed("r0\r\nr1\r\nr2\r\nr3\r\nr4\r\nr5");
+    screen.feed("\x1b[3;5r\x1b[2;1H\x1b[3L");
+    assert_eq!(screen.snapshot_viewport_lines(), vec!["r0", "r1", "r2", "r3", "r4", "r5"]);
+    screen.feed("\x1b[6;1H\x1b[2M");
+    assert_eq!(screen.snapshot_viewport_lines(), vec!["r0", "r1", "r2", "r3", "r4", "r5"]);
+    // Inside the region they still work, and stay inside it.
+    screen.feed("\x1b[3;1H\x1b[L");
+    assert_eq!(screen.snapshot_viewport_lines(), vec!["r0", "r1", "", "r2", "r3", "r5"]);
+}
