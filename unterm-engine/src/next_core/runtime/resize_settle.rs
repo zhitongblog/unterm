@@ -1,10 +1,12 @@
 //! Shrinks that wait until they are sure.
 //!
-//! A shrink cuts every row to the new width and drops the rows that no longer
-//! fit; growing back does not restore them. Claude Code repaints only when the
-//! size it reads differs from the last one it drew at, so a pane that went
-//! 159x43 -> 69x20 -> 159x43 faster than it read its size kept the 69x20
-//! remnant, with the program writing timer ticks into rows now blank.
+//! A shrink used to cut every row to the new width; the main screen is now
+//! re-wrapped instead (see `next_core/reflow.rs`), so text survives a
+//! round trip. A passing shrink still costs, though: rows go to the
+//! scrollback, the alternate screen is cut, and Claude Code repaints only
+//! when the size it reads differs from the last one it drew at, so a pane
+//! that went 159x43 -> 69x20 -> 159x43 faster than it read its size kept the
+//! 69x20 remnant, with the program writing timer ticks into rows now blank.
 //!
 //! Those sizes are passing ones -- a window made at a provisional size, a
 //! backlog of resizes after a GUI stall. So a window's shrink is held until the

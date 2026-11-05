@@ -412,6 +412,16 @@ impl Images {
         self.list().retain(|placement| !placement.overlaps(from, to));
     }
 
+    /// The main screen was re-wrapped for a new width: every row moved to
+    /// wherever `map` says, and the pictures anchored to them follow. Applies
+    /// to the main screen's pictures even while the alternate one is up,
+    /// since that is the screen that was re-wrapped.
+    pub fn main_rows_remapped(&mut self, mut map: impl FnMut(i64) -> i64) {
+        for placement in &mut self.main {
+            placement.row = map(placement.row);
+        }
+    }
+
     /// Every picture on the current screen goes.
     pub fn screen_cleared(&mut self) {
         self.list().clear();
