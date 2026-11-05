@@ -824,6 +824,7 @@ pub fn capture_window_with_a11y(include_a11y: bool) -> Result<WindowSnapShotResu
         let ps_script = format!(
             r#"
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
@@ -853,7 +854,7 @@ $g.Dispose()
 $bmp.Save('{img}', [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 
-$pidOut = 0
+[uint32]$pidOut = 0
 [void][Win32Snap]::GetWindowThreadProcessId($hwnd, [ref]$pidOut)
 $proc = Get-Process -Id $pidOut -ErrorAction SilentlyContinue
 $title = if ($proc) {{ $proc.MainWindowTitle }} else {{ "ForegroundWindow" }}
