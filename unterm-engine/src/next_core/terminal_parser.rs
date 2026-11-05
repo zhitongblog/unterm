@@ -202,6 +202,28 @@ impl TerminalParser {
             .collect::<Vec<_>>();
         let first = || numbers.first().copied().filter(|n| *n > 0).unwrap_or(1);
 
+        // A private marker (`?`, `>`, `<`, `=`) makes a different sequence
+        // out of the same final byte. Only the finals below give a marked
+        // form a meaning on the screen; every other marked sequence is a
+        // query answered elsewhere (`CSI ? Pi;Pa;Pv S` is XTSMGRAPHICS,
+        // answered in terminal_queries) or a setting this terminal does not
+        // keep (`CSI > Ps T` resets title modes). Run as the unmarked ANSI
+        // action they scrolled the screen: chafa, yazi and notcurses probe
+        // sixel geometry with `CSI ? 2;1;0 S`, which read as `SU 2`.
+        if let Some(marker) = raw_params
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '?' | '>' | '<' | '='))
+        {
+            let meaningful = matches!(
+                (marker, final_byte),
+                ('?', 'h' | 'l' | 'J' | 'K' | 'W' | 'r' | 's' | 'm') | ('>', 'm') | (_, 'u')
+            );
+            if !meaningful {
+                return;
+            }
+        }
+
         match final_byte {
             '@' => {
                 if raw_params.ends_with(' ') {

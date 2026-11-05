@@ -166,6 +166,12 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
         }
     }
 
+    if let Some(params) = csi.strip_prefix('?').and_then(|p| p.strip_suffix('S')) {
+        if params.chars().all(|c| c.is_ascii_digit() || c == ';') {
+            return Some(xtsmgraphics(params, screen).into_bytes());
+        }
+    }
+
     match csi {
         "?6n" => {
             let row = (screen.cursor_y + 1).min(screen.rows);
@@ -256,6 +262,43 @@ fn response_for_osc(body: &str, terminator: &str) -> Option<String> {
         _ => return None,
     }
     (!answer.is_empty()).then_some(answer)
+}
+
+/// Colour registers a sixel picture may use: `REGISTERS` in
+/// unterm-images' sixel decoder, which is fixed -- so "set" and "reset"
+/// succeed and leave it where it is.
+const SIXEL_COLOR_REGISTERS: u64 = 1024;
+
+/// XTSMGRAPHICS, `CSI ? Pi ; Pa ; Pv S`, answered `CSI ? Pi ; Ps ; Pv S`.
+///
+/// DA1 advertises sixel (`4`), so the sixel items answer: Pi 1 is the
+/// number of colour registers, Pi 2 the sixel geometry in pixels -- the
+/// text area, capped at the largest picture side the image store keeps.
+/// ReGIS (Pi 3) is not offered, which is an error in Pi. Pa 1 reads,
+/// 2 resets, 3 sets (to what this terminal can do, the only value it
+/// has) and 4 reads the maximum. Ps: 0 success, 1 bad Pi, 2 bad Pa.
+fn xtsmgraphics(params: &str, screen: &NextCoreScreen) -> String {
+    let mut numbers = params.split(';').map(|part| part.parse::<u64>().unwrap_or(0));
+    let item = numbers.next().unwrap_or(0);
+    let action = numbers.next().unwrap_or(0);
+    let max_side = u64::from(unterm_images::MAX_TEXTURE_SIDE);
+    match item {
+        1 => match action {
+            1..=4 => format!("\x1b[?1;0;{SIXEL_COLOR_REGISTERS}S"),
+            _ => "\x1b[?1;2;0S".to_string(),
+        },
+        2 => {
+            let (cell_width, cell_height) = cell_pixels();
+            let width = (screen.cols as u64 * u64::from(cell_width)).min(max_side);
+            let height = (screen.rows as u64 * u64::from(cell_height)).min(max_side);
+            match action {
+                1..=3 => format!("\x1b[?2;0;{width};{height}S"),
+                4 => format!("\x1b[?2;0;{max_side};{max_side}S"),
+                _ => "\x1b[?2;2;0S".to_string(),
+            }
+        }
+        _ => format!("\x1b[?{item};1;0S"),
+    }
 }
 
 #[cfg(test)]

@@ -162,3 +162,56 @@ fn screen_with_pending_wrap() -> NextCoreScreen {
     screen.feed("ABCDE");
     screen
 }
+
+// --- A4: private-marked finals without a private meaning do nothing -----
+
+fn three_rows() -> NextCoreScreen {
+    let mut screen = screen(10, 4);
+    screen.feed("A\r\nB\r\nC");
+    screen
+}
+
+#[test]
+fn xtsmgraphics_queries_do_not_scroll() {
+    let mut screen = three_rows();
+    screen.feed("\x1b[?2;1;0S\x1b[?1;1;0S\x1b[?1;4S");
+    assert_eq!(screen.snapshot_viewport_lines()[..3], ["A", "B", "C"]);
+    assert_eq!(screen.scrollback_rows(), 0);
+    assert_eq!((screen.cursor_x, screen.cursor_y), (1, 2));
+}
+
+#[test]
+fn title_mode_reset_does_not_scroll_down() {
+    let mut screen = three_rows();
+    screen.feed("\x1b[>0T\x1b[>2T\x1b[>1t");
+    assert_eq!(screen.snapshot_viewport_lines()[..3], ["A", "B", "C"]);
+}
+
+#[test]
+fn other_marked_finals_run_no_ansi_action() {
+    let mut screen = three_rows();
+    // `?`/`>`/`=` forms of IL, DL, ICH, DCH, CUP, ED-less finals and REP.
+    screen.feed("\x1b[?2L\x1b[>2M\x1b[=3@\x1b[?3P\x1b[>1;1H\x1b[?5b\x1b[=2X");
+    assert_eq!(screen.snapshot_viewport_lines()[..3], ["A", "B", "C"]);
+    assert_eq!((screen.cursor_x, screen.cursor_y), (1, 2));
+    // The unmarked form still works.
+    screen.feed("\x1b[S");
+    assert_eq!(screen.snapshot_viewport_lines()[..2], ["B", "C"]);
+}
+
+#[test]
+fn xtsmgraphics_is_answered_consistently_with_da1() {
+    let screen = screen(10, 4);
+    let ask = |csi: &str| {
+        String::from_utf8(terminal_queries::response_for_csi_for_tests(csi, &screen).unwrap())
+            .unwrap()
+    };
+    assert_eq!(ask("?1;1;0S"), "\x1b[?1;0;1024S");
+    assert_eq!(ask("?1;4;0S"), "\x1b[?1;0;1024S");
+    let (w, h) = terminal_queries::cell_pixels();
+    assert_eq!(ask("?2;1;0S"), format!("\x1b[?2;0;{};{}S", 10 * w, 4 * h));
+    assert_eq!(ask("?2;4;0S"), "\x1b[?2;0;4096;4096S");
+    // ReGIS is not offered; a bad action is an error in Pa.
+    assert_eq!(ask("?3;1;0S"), "\x1b[?3;1;0S");
+    assert_eq!(ask("?1;9;0S"), "\x1b[?1;2;0S");
+}
