@@ -807,7 +807,9 @@ impl NextCoreScreen {
         let width = usize::from(cell.width);
         let attr = cell.attr;
         let left_margin = self.active_left_margin();
-        let right_margin = self.active_right_margin();
+        // The right margin while the cursor is inside it; the screen edge
+        // when the cursor was placed beyond it (DECLRMM without DECOM).
+        let right_margin = self.right_bound_for(self.cursor_x);
         if self.cursor_x > right_margin || self.cursor_x + width - 1 > right_margin {
             if self.auto_wrap {
                 // Record that this row continues into the next one before
@@ -832,22 +834,36 @@ impl NextCoreScreen {
                 );
             }
             if self.insert_mode && self.cursor_x < self.cols {
-                for _ in 0..width {
-                    line.insert(self.cursor_x, ScreenCell::blank(self.current_attr));
-                }
-                if line.len() > self.cols {
-                    line.truncate(self.cols);
+                // Slide the cells up to the right margin (DECLRMM) or the
+                // screen edge; what passes it falls off, and cells beyond
+                // the margin stay where they are.
+                let right = right_margin.max(self.cursor_x);
+                let shift = width.max(1).min(right + 1 - self.cursor_x);
+                if line.len() <= right {
+                    // Nothing reaches the margin yet: open the gap without
+                    // padding the row out with blanks in the current colours.
+                    for _ in 0..shift {
+                        line.insert(self.cursor_x, ScreenCell::blank(self.current_attr));
+                    }
+                    line.truncate(right + 1);
+                } else {
+                    for idx in (self.cursor_x..=right).rev() {
+                        line[idx] = if idx >= self.cursor_x + shift {
+                            line[idx - shift].clone()
+                        } else {
+                            ScreenCell::blank(self.current_attr)
+                        };
+                    }
                 }
                 // Insert mode is `ESC[@` arriving one keystroke at a time, and
                 // it slides the row for every character typed. Unlike `ESC[@`
                 // the slide is always one uninterrupted block, so it can only
                 // cut a wide character at its two seams -- the column the
-                // blanks went into, and the tail the truncation took off --
-                // and this sits on the per-character path, so it repairs those
+                // blanks went into, and the tail the slide took off -- and
+                // this sits on the per-character path, so it repairs those
                 // two rather than sweeping the whole row.
-                Self::repair_wide_pairs(line, self.cursor_x, self.cursor_x + width.max(1) - 1);
-                let tail = line.len().saturating_sub(1);
-                Self::repair_wide_pairs(line, tail, tail);
+                Self::repair_wide_pairs(line, self.cursor_x, self.cursor_x + shift - 1);
+                Self::repair_wide_pairs(line, right, right);
             }
             // Whatever this write lands on, it must not leave half of a wide
             // character behind.
@@ -897,9 +913,10 @@ impl NextCoreScreen {
         }
     }
 
+    /// The autowrap move: to the left margin of the next row.
     fn newline(&mut self) {
         let old_y = self.cursor_y;
-        self.cursor_x = 0;
+        self.cursor_x = self.active_left_margin();
         self.index();
         self.mark_dirty_row(old_y);
     }
@@ -920,11 +937,19 @@ impl NextCoreScreen {
         self.mark_dirty_row(old_y);
     }
 
+    /// IND (and LF): down a row, scrolling the region at its bottom margin.
+    /// With DECLRMM margins narrower than the screen the scroll moves only
+    /// the cells between them, and only when the cursor is between them;
+    /// outside, the cursor stays on the bottom margin (xterm `xtermIndex`).
     fn index(&mut self) {
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
+        self.cursor_x = self.logical_cursor_x();
         let old_y = self.cursor_y;
         if self.cursor_y == self.scroll_bottom {
-            self.scroll_up_region(self.scroll_top, self.scroll_bottom, 1);
+            if !self.horizontal_margins_partial() {
+                self.scroll_up_region(self.scroll_top, self.scroll_bottom, 1);
+            } else if self.cursor_in_horizontal_margins() {
+                self.shift_rect_rows(self.scroll_top, self.scroll_bottom, 1, true);
+            }
         } else if self.cursor_y + 1 < self.rows {
             self.cursor_y += 1;
             self.mark_dirty_row(old_y);
@@ -939,10 +964,14 @@ impl NextCoreScreen {
     }
 
     fn reverse_index(&mut self) {
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
+        self.cursor_x = self.logical_cursor_x();
         let old_y = self.cursor_y;
         if self.cursor_y == self.scroll_top {
-            self.scroll_down_region(self.scroll_top, self.scroll_bottom, 1);
+            if !self.horizontal_margins_partial() {
+                self.scroll_down_region(self.scroll_top, self.scroll_bottom, 1);
+            } else if self.cursor_in_horizontal_margins() {
+                self.shift_rect_rows(self.scroll_top, self.scroll_bottom, 1, false);
+            }
         } else if self.cursor_y > 0 {
             self.cursor_y = self.cursor_y.saturating_sub(1);
             self.mark_dirty_row(old_y);
@@ -1018,31 +1047,41 @@ impl NextCoreScreen {
         self.cursor_forward_tab(1);
     }
 
+    /// CHT/HT: to the next tab stop, stopping at the right margin while the
+    /// cursor is inside it (DECLRMM), at the last column otherwise.
     fn cursor_forward_tab(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
+        let mut x = self.logical_cursor_x();
+        let bound = self.right_bound_for(x);
         for _ in 0..count.max(1).min(self.cols) {
-            let next_tab = self
+            x = self
                 .tab_stops
-                .range((self.cursor_x + 1)..)
+                .range((x + 1)..)
                 .next()
                 .copied()
-                .unwrap_or_else(|| self.cols.saturating_sub(1));
-            self.cursor_x = next_tab.min(self.cols.saturating_sub(1));
+                .unwrap_or(bound)
+                .min(bound);
         }
+        self.cursor_x = x;
     }
 
+    /// CBT: to the previous tab stop, stopping at the left margin when the
+    /// cursor starts at or right of it.
     fn reverse_horizontal_tab(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
+        let mut x = self.logical_cursor_x();
+        let left = self.active_left_margin();
+        let bound = if x >= left { left } else { 0 };
         for _ in 0..count.max(1).min(self.cols) {
-            let previous = self
+            x = self
                 .tab_stops
-                .range(..self.cursor_x)
+                .range(..x)
                 .next_back()
                 .copied()
-                .unwrap_or(0);
-            self.cursor_x = previous;
+                .unwrap_or(bound)
+                .max(bound);
         }
+        self.cursor_x = x;
     }
 
     fn set_tab_stop(&mut self) {
@@ -1126,24 +1165,6 @@ impl NextCoreScreen {
         }
     }
 
-    fn active_top_margin(&self) -> usize {
-        if self.origin_mode {
-            self.scroll_top.min(self.rows.saturating_sub(1))
-        } else {
-            0
-        }
-    }
-
-    fn active_bottom_margin(&self) -> usize {
-        if self.origin_mode {
-            self.scroll_bottom
-                .min(self.rows.saturating_sub(1))
-                .max(self.active_top_margin())
-        } else {
-            self.rows.saturating_sub(1)
-        }
-    }
-
     fn set_origin_mode(&mut self, enabled: bool) {
         self.origin_mode = enabled;
         self.set_cursor_position(0, 0);
@@ -1161,18 +1182,26 @@ impl NextCoreScreen {
         }
     }
 
+    /// Put the cursor at an absolute position. Only DECOM confines it to
+    /// the margins; without it CUP/HVP/CHA reach every column, including
+    /// those outside DECLRMM's left/right margins (xterm `CursorSet`).
     fn set_cursor(&mut self, row: usize, col: usize) {
         self.mark_dirty_row(self.cursor_y);
         self.cursor_y = row.min(self.rows.saturating_sub(1));
-        self.cursor_x = col
-            .max(self.active_left_margin())
-            .min(self.active_right_margin());
+        self.cursor_x = if self.origin_mode {
+            col.max(self.active_left_margin())
+                .min(self.active_right_margin())
+        } else {
+            col.min(self.cols.saturating_sub(1))
+        };
         self.ensure_cursor_line();
         self.mark_dirty_row(self.cursor_y);
     }
 
-    fn set_cursor_position(&mut self, row: usize, col: usize) {
-        let row = if self.origin_mode {
+    /// The absolute row for an origin-relative one: under DECOM it counts
+    /// from the top margin and stops at the bottom margin.
+    fn origin_row(&self, row: usize) -> usize {
+        if self.origin_mode {
             self.scroll_top
                 .saturating_add(row)
                 .min(self.scroll_bottom)
@@ -1180,37 +1209,69 @@ impl NextCoreScreen {
         } else {
             row.min(self.rows.saturating_sub(1))
         }
-        ;
-        let col = if self.origin_mode && self.left_right_margin_mode {
+    }
+
+    /// The absolute column for an origin-relative one: under DECOM with
+    /// DECLRMM it counts from the left margin.
+    fn origin_col(&self, col: usize) -> usize {
+        if self.origin_mode && self.left_right_margin_mode {
             self.active_left_margin().saturating_add(col)
         } else {
             col
-        };
+        }
+    }
+
+    fn set_cursor_position(&mut self, row: usize, col: usize) {
+        let row = self.origin_row(row);
+        let col = self.origin_col(col);
         self.set_cursor(row, col);
     }
 
+    /// CUU: stops at the top margin when the cursor starts at or below it,
+    /// at row 0 otherwise -- whether or not DECOM is on (xterm).
     fn move_cursor_up(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
-        self.cursor_y = self
-            .cursor_y
-            .saturating_sub(count)
-            .max(self.active_top_margin());
+        self.cursor_x = self.logical_cursor_x();
+        let top = if self.cursor_y >= self.scroll_top {
+            self.scroll_top
+        } else {
+            0
+        };
+        self.cursor_y = self.cursor_y.saturating_sub(count).max(top);
         self.mark_dirty_row(self.cursor_y);
     }
 
+    /// CUD: stops at the bottom margin when the cursor starts at or above
+    /// it, at the last row otherwise.
     fn move_cursor_down(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
-        self.cursor_y = self.cursor_y.saturating_add(count).min(self.active_bottom_margin());
+        self.cursor_x = self.logical_cursor_x();
+        let bottom = if self.cursor_y <= self.scroll_bottom {
+            self.scroll_bottom
+        } else {
+            self.rows.saturating_sub(1)
+        };
+        self.cursor_y = self.cursor_y.saturating_add(count).min(bottom);
         self.ensure_cursor_line();
         self.mark_dirty_row(self.cursor_y);
     }
 
+    /// The right edge a horizontal move or a write runs up against: the
+    /// right margin while the cursor is inside it (or pending-wrap at it),
+    /// the screen edge when the cursor was placed beyond it.
+    fn right_bound_for(&self, x: usize) -> usize {
+        let right = self.active_right_margin();
+        if x <= right + 1 {
+            right
+        } else {
+            self.cols.saturating_sub(1)
+        }
+    }
+
     fn move_cursor_right(&mut self, count: usize) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = (self.cursor_x.min(self.active_right_margin()).saturating_add(count))
-            .min(self.active_right_margin());
+        let x = self.logical_cursor_x();
+        self.cursor_x = x.saturating_add(count).min(self.right_bound_for(x));
     }
 
     fn move_cursor_left(&mut self, count: usize) {
@@ -1227,17 +1288,20 @@ impl NextCoreScreen {
         self.cursor_x = self.active_left_margin();
     }
 
+    /// HPA and CHA: origin-relative columns on the cursor's row.
     fn set_horizontal_position(&mut self, col: usize) {
-        let col = if self.origin_mode && self.left_right_margin_mode {
-            self.active_left_margin().saturating_add(col)
-        } else {
-            col
-        };
+        let col = self.origin_col(col);
         self.set_cursor(self.cursor_y, col);
     }
 
+    /// VPA: an origin-relative row, the column kept. The column is already
+    /// absolute, so it is not offset by the left margin a second time
+    /// (xterm's `CursorCol` takes the margin back off before `CursorSet`
+    /// adds it); pending-wrap is cancelled.
     fn set_vertical_position(&mut self, row: usize) {
-        self.set_cursor_position(row, self.cursor_x);
+        let row = self.origin_row(row);
+        let col = self.logical_cursor_x();
+        self.set_cursor(row, col);
     }
 
     fn clear_screen(&mut self) {
@@ -1715,10 +1779,11 @@ impl NextCoreScreen {
 
     fn insert_chars(&mut self, count: usize) {
         self.ensure_cursor_line();
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
-        let left = self.cursor_x.max(self.active_left_margin());
+        self.cursor_x = self.logical_cursor_x();
+        let left = self.cursor_x;
         let right = self.active_right_margin();
-        if left > right {
+        // Outside the left/right margins ICH does nothing (xterm).
+        if left < self.active_left_margin() || left > right {
             return;
         }
         let count = count.max(1).min(right + 1 - left);
@@ -1741,10 +1806,11 @@ impl NextCoreScreen {
 
     fn delete_chars(&mut self, count: usize) {
         self.ensure_cursor_line();
-        self.cursor_x = self.cursor_x.min(self.active_right_margin());
-        let left = self.cursor_x.max(self.active_left_margin());
+        self.cursor_x = self.logical_cursor_x();
+        let left = self.cursor_x;
         let right = self.active_right_margin();
-        if left > right {
+        // Outside the left/right margins DCH does nothing (xterm).
+        if left < self.active_left_margin() || left > right {
             return;
         }
         let count = count.max(1).min(right + 1 - left);
@@ -1951,14 +2017,22 @@ impl NextCoreScreen {
 
     fn insert_lines(&mut self, count: usize) {
         self.ensure_cursor_line();
-        // Outside the top/bottom margins IL does nothing (xterm, VT510).
-        if self.cursor_y < self.scroll_top || self.cursor_y > self.scroll_bottom {
+        // Outside the top/bottom margins IL does nothing (xterm, VT510),
+        // and with DECLRMM outside the left/right ones too.
+        if self.cursor_y < self.scroll_top
+            || self.cursor_y > self.scroll_bottom
+            || !self.cursor_in_horizontal_margins()
+        {
             return;
         }
         let bottom = self.scroll_bottom;
         // Never more than the rows it can move: `CSI 999999999 L` is one
         // region's worth of work, not a billion Vec shifts.
         let count = count.max(1).min(bottom + 1 - self.cursor_y);
+        if self.horizontal_margins_partial() {
+            self.shift_rect_rows(self.cursor_y, bottom, count, false);
+            return;
+        }
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(self.cursor_y, bottom);
         let top = self.image_top_row();
@@ -1977,11 +2051,18 @@ impl NextCoreScreen {
 
     fn delete_lines(&mut self, count: usize) {
         self.ensure_cursor_line();
-        if self.cursor_y < self.scroll_top || self.cursor_y > self.scroll_bottom {
+        if self.cursor_y < self.scroll_top
+            || self.cursor_y > self.scroll_bottom
+            || !self.cursor_in_horizontal_margins()
+        {
             return;
         }
         let bottom = self.scroll_bottom;
         let count = count.max(1).min(bottom + 1 - self.cursor_y);
+        if self.horizontal_margins_partial() {
+            self.shift_rect_rows(self.cursor_y, bottom, count, true);
+            return;
+        }
         self.ensure_rows_through(bottom);
         self.mark_dirty_range(self.cursor_y, bottom);
         let top = self.image_top_row();
@@ -2002,8 +2083,108 @@ impl NextCoreScreen {
         self.ensure_cursor_line();
     }
 
+    /// SU, and IND/LF at the bottom margin: with DECLRMM margins narrower
+    /// than the screen only the cells between them move.
     fn scroll_up(&mut self, count: usize) {
+        if self.horizontal_margins_partial() {
+            let count = count.max(1).min(self.scroll_bottom + 1 - self.scroll_top);
+            self.shift_rect_rows(self.scroll_top, self.scroll_bottom, count, true);
+            return;
+        }
         self.scroll_up_region(self.scroll_top, self.scroll_bottom, count);
+    }
+
+    /// Whether DECLRMM is on with margins that leave columns outside them,
+    /// so vertical scrolls have to move part of each row only.
+    fn horizontal_margins_partial(&self) -> bool {
+        self.left_right_margin_mode
+            && (self.active_left_margin() > 0
+                || self.active_right_margin() + 1 < self.cols)
+    }
+
+    fn cursor_in_horizontal_margins(&self) -> bool {
+        let x = self.logical_cursor_x();
+        x >= self.active_left_margin() && x <= self.active_right_margin()
+    }
+
+    /// Move the cells between the left and right margins of rows
+    /// `top..=bottom` up (or down) by `count` rows, blanking what opens up.
+    ///
+    /// DECLRMM's vertical scroll: whole-row moves would drag the text
+    /// outside the margins along. Nothing goes into the scrollback (xterm
+    /// keeps none for a margin-bounded scroll), and each row keeps its own
+    /// soft-wrap flag -- that belongs to the row, not to the cells moving
+    /// through it.
+    fn shift_rect_rows(&mut self, top: usize, bottom: usize, count: usize, up: bool) {
+        if top > bottom {
+            return;
+        }
+        let left = self.active_left_margin();
+        let right = self.active_right_margin();
+        self.ensure_rows_through(bottom);
+        let blank = ScreenCell::blank(self.current_attr);
+        let mut wrapped = Vec::with_capacity(bottom + 1 - top);
+        for row in top..=bottom {
+            wrapped.push(self.row_is_wrapped(row));
+            let line = &mut self.lines[row];
+            if line.len() < right + 1 {
+                line.resize(right + 1, blank.clone());
+            }
+            // No wide character may straddle a margin while the inside moves.
+            Self::split_wide_cell(line, left);
+            Self::split_wide_cell(line, right);
+        }
+        let segments: Vec<Vec<ScreenCell>> = (top..=bottom)
+            .map(|row| self.lines[row][left..=right].to_vec())
+            .collect();
+        let height = bottom + 1 - top;
+        for (offset, row) in (top..=bottom).enumerate() {
+            let source = if up {
+                Some(offset + count).filter(|source| *source < height)
+            } else {
+                offset.checked_sub(count)
+            };
+            let line = &mut self.lines[row];
+            for (col, cell) in line[left..=right].iter_mut().enumerate() {
+                *cell = match source {
+                    Some(source) => segments[source][col].clone(),
+                    None => blank.clone(),
+                };
+                cell.wrapped = false;
+            }
+            self.set_row_wrapped(row, wrapped[offset]);
+        }
+        self.mark_dirty_range(top, bottom);
+    }
+
+    /// Whether `row` soft-wraps into the next one. The flag belongs to the
+    /// row and lives on its last cell (index `cols - 1` once the row is
+    /// full width) -- the convention selection, snapshots and reflow read.
+    fn row_is_wrapped(&self, row: usize) -> bool {
+        self.lines
+            .get(row)
+            .and_then(|line| line.last())
+            .is_some_and(|cell| cell.wrapped)
+    }
+
+    /// Set `row`'s soft-wrap flag. Setting pads the row to the full width
+    /// so the flag sits on column `cols - 1`; clearing only touches the
+    /// last cell.
+    fn set_row_wrapped(&mut self, row: usize, wrapped: bool) {
+        let cols = self.cols;
+        let attr = self.current_attr;
+        let Some(line) = self.lines.get_mut(row) else {
+            return;
+        };
+        if wrapped && line.len() < cols {
+            if let Some(last) = line.last_mut() {
+                last.wrapped = false;
+            }
+            line.resize(cols, ScreenCell::blank(attr));
+        }
+        if let Some(last) = line.last_mut() {
+            last.wrapped = wrapped;
+        }
     }
 
     fn scroll_up_region(&mut self, top: usize, bottom: usize, count: usize) {
@@ -2040,6 +2221,11 @@ impl NextCoreScreen {
     }
 
     fn scroll_down(&mut self, count: usize) {
+        if self.horizontal_margins_partial() {
+            let count = count.max(1).min(self.scroll_bottom + 1 - self.scroll_top);
+            self.shift_rect_rows(self.scroll_top, self.scroll_bottom, count, false);
+            return;
+        }
         self.scroll_down_region(self.scroll_top, self.scroll_bottom, count);
     }
 

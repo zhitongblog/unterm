@@ -256,10 +256,8 @@ impl TerminalParser {
             'b' => screen.repeat_previous_char(first()),
             'd' => screen.set_vertical_position(first().saturating_sub(1)),
             'e' => screen.move_cursor_down(first()),
-            'G' => {
-                let row = screen.cursor_y;
-                screen.set_cursor(row, first().saturating_sub(1));
-            }
+            // CHA is origin-relative, exactly like HPA.
+            'G' => screen.set_horizontal_position(first().saturating_sub(1)),
             'I' => screen.cursor_forward_tab(first()),
             'W' => {
                 if private && numbers.as_slice() == [5] {

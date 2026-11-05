@@ -421,3 +421,162 @@ fn backspace_and_cub_from_pending_wrap_both_land_one_left_of_the_last_column() {
     assert_eq!(row(&cub, 0), "ABCXE");
     assert_eq!(bs.cursor_x, cub.cursor_x);
 }
+
+// --- C-DECLRMM: left/right margins --------------------------------------
+
+/// 10x6 with DECLRMM on and margins at columns 3..=6 (1-based 4;7).
+fn margined() -> NextCoreScreen {
+    let mut screen = screen(10, 6);
+    screen.feed("\x1b[?69h\x1b[4;7s");
+    screen
+}
+
+/// `rows` rows of distinct letters, then the margins of `margined`.
+fn margined_filled(rows: usize) -> NextCoreScreen {
+    let mut screen = screen(10, 6);
+    for r in 0..rows {
+        let text: String = (0..10).map(|c| char::from(b'a' + ((r + c) % 26) as u8)).collect();
+        screen.feed(&format!("\x1b[{};1H{}", r + 1, text));
+    }
+    screen.feed("\x1b[?69h\x1b[4;7s");
+    screen
+}
+
+#[test]
+fn cub_left_of_the_left_margin_goes_on_to_column_zero() {
+    let mut screen = margined();
+    screen.feed("\x1b[1;3H\x1b[9D");
+    assert_eq!(screen.cursor_x, 0);
+    screen.feed("\x1b[1;7H\x1b[9D");
+    assert_eq!(screen.cursor_x, 3);
+}
+
+#[test]
+fn carriage_return_goes_to_the_left_margin_or_column_zero() {
+    let mut screen = margined();
+    screen.feed("\x1b[1;6H\r");
+    assert_eq!(screen.cursor_x, 3);
+    screen.feed("\x1b[1;2H\r");
+    assert_eq!(screen.cursor_x, 0);
+    screen.feed("\x1b[2;9H\x1bE");
+    assert_eq!((screen.cursor_x, screen.cursor_y), (3, 2));
+}
+
+#[test]
+fn cup_reaches_columns_outside_the_margins_without_origin_mode() {
+    let mut screen = screen(40, 3);
+    screen.feed("\x1b[?69h\x1b[10;20s\x1b[1;30HX");
+    assert_eq!(screen.lines[0][29].ch, 'X');
+    screen.feed("\x1b[1;2HY");
+    assert_eq!(screen.lines[0][1].ch, 'Y');
+}
+
+#[test]
+fn origin_mode_keeps_cup_inside_the_margins() {
+    let mut screen = margined();
+    screen.feed("\x1b[?6h\x1b[1;9H");
+    assert_eq!(screen.cursor_x, 6);
+    screen.feed("\x1b[1;2H");
+    assert_eq!(screen.cursor_x, 4);
+}
+
+#[test]
+fn vpa_does_not_add_the_left_margin_twice() {
+    let mut screen = margined();
+    screen.feed("\x1b[?6h\x1b[1;2H\x1b[3d");
+    assert_eq!((screen.cursor_x, screen.cursor_y), (4, 2));
+}
+
+#[test]
+fn cha_is_origin_relative_like_hpa() {
+    let mut screen = margined();
+    screen.feed("\x1b[?6h\x1b[2G");
+    assert_eq!(screen.cursor_x, 4);
+    screen.feed("\x1b[1`");
+    assert_eq!(screen.cursor_x, 3);
+}
+
+#[test]
+fn insert_and_delete_lines_move_only_the_columns_between_the_margins() {
+    let mut screen = margined_filled(3);
+    screen.feed("\x1b[1;4H\x1b[L");
+    assert_eq!(row(&screen, 0), "abc    hij");
+    assert_eq!(row(&screen, 1), "bcddefgijk");
+    assert_eq!(row(&screen, 2), "cdeefghjkl");
+    screen.feed("\x1b[M");
+    assert_eq!(row(&screen, 0), "abcdefghij");
+    assert_eq!(row(&screen, 1), "bcdefghijk");
+    // Outside the left/right margins IL does nothing.
+    screen.feed("\x1b[1;2H\x1b[L");
+    assert_eq!(row(&screen, 0), "abcdefghij");
+}
+
+#[test]
+fn su_sd_and_index_scroll_only_between_the_margins() {
+    let mut screen = margined_filled(6);
+    let before = screen.snapshot_viewport_lines();
+    screen.feed("\x1b[S");
+    assert_eq!(row(&screen, 0), "abcefghhij");
+    assert_eq!(row(&screen, 5), "fgh    mno");
+    assert_eq!(screen.scrollback_rows(), 0);
+    screen.feed("\x1b[T");
+    assert_eq!(row(&screen, 0), "abc    hij");
+    assert_eq!(row(&screen, 1), before[1]);
+    // LF on the bottom row, inside the margins, scrolls the same way.
+    screen.feed("\x1b[6;5H\n");
+    assert_eq!(row(&screen, 4), "efgijkllmn");
+    assert_eq!(screen.scrollback_rows(), 0);
+}
+
+#[test]
+fn ich_dch_and_insert_mode_stop_at_the_right_margin() {
+    let mut screen = margined_filled(1);
+    screen.feed("\x1b[1;4H\x1b[2@");
+    assert_eq!(row(&screen, 0), "abc  dehij");
+    screen.feed("\x1b[2P");
+    assert_eq!(row(&screen, 0), "abcde  hij");
+    screen.feed("\x1b[4h\x1b[1;4HZ\x1b[4l");
+    assert_eq!(row(&screen, 0), "abcZde hij");
+    // Outside the margins ICH does nothing.
+    screen.feed("\x1b[1;9H\x1b[@");
+    assert_eq!(row(&screen, 0), "abcZde hij");
+}
+
+#[test]
+fn tabs_stop_at_the_margins() {
+    let mut screen = screen(30, 2);
+    screen.feed("\x1b[?69h\x1b[3;12s\x1b[1;5H\t\t");
+    assert_eq!(screen.cursor_x, 11);
+    screen.feed("\x1b[Z\x1b[Z");
+    assert_eq!(screen.cursor_x, 2);
+    // From beyond the right margin a tab runs on to the screen edge.
+    screen.feed("\x1b[1;14H\t\t\t");
+    assert_eq!(screen.cursor_x, 29);
+}
+
+// --- C-vertical: CUU/CUD clamp to the region; CPR is origin-relative -----
+
+#[test]
+fn cuu_and_cud_stop_at_the_scroll_margins_without_origin_mode() {
+    let mut screen = screen(10, 10);
+    screen.feed("\x1b[3;7r\x1b[5;1H\x1b[9A");
+    assert_eq!(screen.cursor_y, 2);
+    screen.feed("\x1b[9B");
+    assert_eq!(screen.cursor_y, 6);
+    // Starting outside the region they run to the screen edge.
+    screen.feed("\x1b[2;1H\x1b[9A");
+    assert_eq!(screen.cursor_y, 0);
+    screen.feed("\x1b[9;1H\x1b[9B");
+    assert_eq!(screen.cursor_y, 9);
+}
+
+#[test]
+fn cpr_counts_from_the_margins_under_origin_mode() {
+    let mut screen = margined();
+    screen.feed("\x1b[2;5r\x1b[?6h\x1b[2;3H");
+    assert_eq!(
+        terminal_queries::response_for_csi_for_tests("6n", &screen).unwrap(),
+        b"\x1b[2;3R"
+    );
+    assert_eq!((screen.cursor_x, screen.cursor_y), (5, 2));
+}

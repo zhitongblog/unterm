@@ -174,8 +174,7 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
 
     match csi {
         "?6n" => {
-            let row = (screen.cursor_y + 1).min(screen.rows);
-            let col = (screen.cursor_x + 1).min(screen.cols);
+            let (row, col) = cursor_report(screen);
             Some(format!("\x1b[?{row};{col}R").into_bytes())
         }
         // Image tools size their pictures from these two: the text area,
@@ -200,8 +199,7 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
         // The kitty keyboard query: the flags in force, of those supported.
         "?u" => Some(format!("\x1b[?{}u", screen.kitty_keyboard_flags()).into_bytes()),
         "6n" => {
-            let row = (screen.cursor_y + 1).min(screen.rows);
-            let col = (screen.cursor_x + 1).min(screen.cols);
+            let (row, col) = cursor_report(screen);
             Some(format!("\x1b[{row};{col}R").into_bytes())
         }
         ">c" | ">0c" => Some(b"\x1b[>0;0;0c".to_vec()),
@@ -262,6 +260,21 @@ fn response_for_osc(body: &str, terminator: &str) -> Option<String> {
         _ => return None,
     }
     (!answer.is_empty()).then_some(answer)
+}
+
+/// The 1-based row and column CPR reports. Under DECOM they count from the
+/// top margin (and, with DECLRMM, the left margin), as CUP takes them --
+/// what a program reads back is what it would send to come back here.
+fn cursor_report(screen: &NextCoreScreen) -> (usize, usize) {
+    let mut row = (screen.cursor_y + 1).min(screen.rows);
+    let mut col = (screen.cursor_x + 1).min(screen.cols);
+    if screen.origin_mode {
+        row = row.saturating_sub(screen.scroll_top).max(1);
+        if screen.left_right_margin_mode {
+            col = col.saturating_sub(screen.active_left_margin()).max(1);
+        }
+    }
+    (row, col)
 }
 
 /// Colour registers a sixel picture may use: `REGISTERS` in
