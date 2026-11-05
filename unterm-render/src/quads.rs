@@ -387,6 +387,7 @@ mod tests {
             ch,
             style,
             width: 1,
+            combining: None,
         }
     }
 
@@ -518,6 +519,7 @@ mod tests {
             ch: '漢',
             style,
             width: 2,
+            combining: None,
         };
 
         build_row(
@@ -549,6 +551,7 @@ mod tests {
             ch: '漢',
             style: style.clone(),
             width: 2,
+            combining: None,
         };
 
         build_row(
@@ -791,6 +794,7 @@ mod drawn_glyph_tests {
             ch,
             width: 1,
             style: CellStyle::default(),
+            combining: None,
         }
     }
 
@@ -871,6 +875,7 @@ mod drawn_glyph_tests {
             ch: '\u{2500}',
             width: 1,
             style,
+            combining: None,
         }]);
         let blue = quads
             .backgrounds

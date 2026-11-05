@@ -13901,6 +13901,7 @@ mod tests {
             ch,
             style: Default::default(),
             width,
+            combining: None,
         };
         let line = |cells| unterm_engine::StyledScreenLine {
             row: 0,
@@ -13926,6 +13927,7 @@ mod tests {
             ch,
             style: Default::default(),
             width,
+            combining: None,
         };
         // 你好 ab on the grid: each hanzi owns a lead cell and a spacer.
         let cells = vec![

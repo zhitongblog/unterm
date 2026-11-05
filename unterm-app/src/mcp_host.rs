@@ -711,6 +711,7 @@ mod tests {
                     ch,
                     style: style.clone(),
                     width: 1,
+                    combining: None,
                 })
                 .collect(),
         }
@@ -752,12 +753,14 @@ mod tests {
             ch: 'x',
             style: style.clone(),
             width: 1,
+            combining: None,
         });
         style.inverse = true;
         let inverted = colors(&StyledCell {
             ch: 'x',
             style,
             width: 1,
+            combining: None,
         });
         assert_eq!(plain.0, inverted.1);
         assert_eq!(plain.1, inverted.0);

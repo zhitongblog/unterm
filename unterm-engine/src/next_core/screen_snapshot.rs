@@ -1,7 +1,9 @@
 use crate::{
-    CellStyle, CursorSnapshot, DirtyRows, ScreenLine, ScreenSnapshot, StyledCell, StyledScreenLine,
-    StyledScreenSnapshot, StyledScrollbackSnapshot,
+    CursorSnapshot, DirtyRows, ScreenLine, ScreenSnapshot, StyledScreenLine, StyledScreenSnapshot,
+    StyledScrollbackSnapshot,
 };
+#[cfg(test)]
+use crate::CellStyle;
 
 #[derive(Clone, Debug)]
 pub(super) struct ScreenSnapshotMeta {
@@ -108,17 +110,10 @@ pub(super) fn escaped_styled_scrollback(
             row: first_row + idx as i64,
             // Plain-text fallback: the source has no wrap state to carry.
             wrapped: false,
-            cells: line
-                .chars()
-                .map(|ch| {
-                    let mut buf = [0u8; 4];
-                    StyledCell {
-                        ch,
-                        style: CellStyle::default(),
-                        width: termwiz::cell::unicode_column_width(ch.encode_utf8(&mut buf), None),
-                    }
-                })
-                .collect(),
+            // Column-true, like a live snapshot: a continuation cell after
+            // each wide character and marks on their base, so the cursor and
+            // a selection index the same column here as on the screen.
+            cells: crate::styled_cells_from_text(line),
         })
         .collect();
 
@@ -191,5 +186,44 @@ mod tests {
         assert_eq!(snapshot.lines[0].cells[0].width, 1);
         assert_eq!(snapshot.lines[0].cells[1].width, 2);
         assert_eq!(snapshot.physical_top, 2);
+    }
+
+    /// A cell index is a column, as in a live snapshot: the wide character
+    /// is followed by a width-0 continuation, so the `b` after it is cell 3
+    /// and column 3.
+    #[test]
+    fn escaped_styled_scrollback_is_column_true_after_wide_characters() {
+        let snapshot = escaped_styled_scrollback(&["a你b".to_string()], 0, 1, 8, 0, 0, 5);
+        let widths: Vec<usize> = snapshot.lines[0].cells.iter().map(|c| c.width).collect();
+        assert_eq!(widths, vec![1, 2, 0, 1]);
+        assert_eq!(snapshot.lines[0].cells[3].ch, 'b');
+    }
+
+    /// Marks attach to their base cell rather than becoming cells.
+    #[test]
+    fn escaped_styled_scrollback_attaches_marks_to_their_base() {
+        let snapshot = escaped_styled_scrollback(
+            &["e\u{301}x\u{2764}\u{fe0f}\u{1f1e8}\u{1f1f3}".to_string()],
+            0,
+            1,
+            8,
+            0,
+            0,
+            5,
+        );
+        let cells = &snapshot.lines[0].cells;
+        assert_eq!(cells[0].text(), "e\u{301}");
+        assert_eq!(cells[1].ch, 'x');
+        assert_eq!(cells[2].text(), "\u{2764}\u{fe0f}");
+        let flag = cells
+            .iter()
+            .find(|cell| cell.ch == '\u{1f1e8}')
+            .expect("the flag's first half is a cell");
+        assert_eq!(flag.combining(), "\u{1f1f3}");
+        assert!(
+            !cells.iter().any(|cell| cell.ch == '\u{1f1f3}' || cell.ch == '\u{301}'),
+            "no mark is a cell of its own: {:?}",
+            cells
+        );
     }
 }

@@ -133,10 +133,15 @@ impl ScreenCell {
         if reverse_video {
             style.inverse = !style.inverse;
         }
+        let combining = self.combining();
         StyledCell {
             ch: self.ch,
             style,
             width: usize::from(self.width),
+            // The rest of the grapheme, so a renderer can draw the accent,
+            // the VS16 emoji form, the ZWJ family or the flag the program
+            // wrote. The width above is unchanged by it.
+            combining: (!combining.is_empty()).then(|| combining.into()),
         }
     }
 }
@@ -233,6 +238,18 @@ mod tests {
     #[test]
     fn screen_cell_stays_compact() {
         assert_eq!(std::mem::size_of::<ScreenCell>(), 48);
+    }
+
+    #[test]
+    fn a_styled_cell_carries_its_marks_without_changing_width() {
+        let mut cell = ScreenCell::new('e', CellAttributes::default());
+        assert_eq!(cell.styled().combining, None, "no marks, no allocation");
+        cell.push_combining('\u{301}');
+        let styled = cell.styled();
+        assert_eq!(styled.ch, 'e');
+        assert_eq!(styled.combining(), "\u{301}");
+        assert_eq!(styled.text(), "e\u{301}");
+        assert_eq!(styled.width, 1);
     }
 
     #[test]

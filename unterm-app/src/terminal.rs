@@ -893,6 +893,7 @@ pub fn append_text(
             ch,
             style: Default::default(),
             width: column_width(ch),
+            combining: None,
         })
         .collect();
     // Keyed the same way `ensure_glyph` filed them. Working the key out
@@ -1416,6 +1417,7 @@ mod tests {
                         ch,
                         style: CellStyle::default(),
                         width: 1,
+                        combining: None,
                     })
                     .collect(),
             }],
@@ -1651,16 +1653,19 @@ mod tests {
                     ch: '地',
                     style: CellStyle::default(),
                     width: 2,
+                    combining: None,
                 },
                 StyledCell {
                     ch: ' ',
                     style: CellStyle::default(),
                     width: 0,
+                    combining: None,
                 },
                 StyledCell {
                     ch: 'b',
                     style: CellStyle::default(),
                     width: 1,
+                    combining: None,
                 },
             ]
         };
@@ -1950,6 +1955,7 @@ mod shaped_row_tests {
                 ch,
                 style: CellStyle::default(),
                 width: if ch.is_ascii() { 1 } else { 2 },
+                combining: None,
             })
             .collect()
     }
@@ -2024,6 +2030,7 @@ mod fallback_fit_tests {
                 ch,
                 style: CellStyle::default(),
                 width: column_width(ch),
+                combining: None,
             })
             .collect();
         let cols = cells.iter().map(|cell| cell.width.max(1)).sum();
@@ -2090,6 +2097,7 @@ mod fallback_fit_tests {
                 ch: ' ',
                 style: CellStyle::default(),
                 width: 0,
+                combining: None,
             },
         );
         let quads = frame_quads(&snapshot, &mut font, &mut atlas, colors());
@@ -2284,6 +2292,7 @@ mod missing_glyph_regression {
                             ch,
                             style: CellStyle::default(),
                             width: 1,
+                            combining: None,
                         })
                         .collect(),
                 })
@@ -2361,6 +2370,7 @@ mod cursor_inversion_tests {
                             ch,
                             style: CellStyle::default(),
                             width: 1,
+                            combining: None,
                         })
                         .collect(),
                 })
@@ -2721,6 +2731,7 @@ mod focus_cursor_tests {
                         ch,
                         style: CellStyle::default(),
                         width: 1,
+                        combining: None,
                     })
                     .collect(),
             }],
@@ -2926,6 +2937,7 @@ mod text_blink_tests {
                         ch,
                         style: style.clone(),
                         width: 1,
+                        combining: None,
                     })
                     .collect(),
             }],

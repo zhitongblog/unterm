@@ -231,6 +231,113 @@ pub struct StyledCell {
     pub ch: char,
     pub style: CellStyle,
     pub width: usize,
+    /// The rest of this cell's grapheme after `ch`: combining accents,
+    /// variation selectors, ZWJ sequences, a flag's second regional
+    /// indicator. `None` on essentially every cell.
+    ///
+    /// It never changes the cell's width -- `width` is the grid's answer and
+    /// stays the only one. Omitted from JSON when empty, and defaulted when
+    /// absent, so older readers and writers of snapshots are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combining: Option<Box<str>>,
+}
+
+impl StyledCell {
+    /// A cell with no marks attached.
+    pub fn new(ch: char, style: CellStyle, width: usize) -> Self {
+        Self {
+            ch,
+            style,
+            width,
+            combining: None,
+        }
+    }
+
+    /// The marks after `ch`, or `""`.
+    pub fn combining(&self) -> &str {
+        self.combining.as_deref().unwrap_or("")
+    }
+
+    /// The whole grapheme this cell shows: `ch` and its marks.
+    pub fn text(&self) -> String {
+        let mut text = String::with_capacity(4 + self.combining().len());
+        text.push(self.ch);
+        text.push_str(self.combining());
+        text
+    }
+
+    fn push_combining(&mut self, ch: char) {
+        let mut marks = self.combining().to_string();
+        marks.push(ch);
+        self.combining = Some(marks.into_boxed_str());
+    }
+}
+
+/// How many columns one character takes, by the same tables the grid uses.
+pub fn char_columns(ch: char) -> usize {
+    if ch.is_ascii_graphic() || ch == ' ' {
+        return 1;
+    }
+    let mut buf = [0u8; 4];
+    termwiz::cell::unicode_column_width(ch.encode_utf8(&mut buf), None)
+}
+
+/// Plain text laid out as grid cells, the way the screen stores it.
+///
+/// For the places that only have text -- a plain scrollback read, a label,
+/// an input method's composition -- and still have to agree with the grid
+/// column for column:
+///
+/// - a wide character is followed by a width-0 continuation cell, so a cell
+///   index is a column, exactly as in a live snapshot;
+/// - a zero-width character (an accent, VS16, ZWJ), the character after a
+///   ZWJ, a skin-tone modifier on a wide emoji and a flag's second regional
+///   indicator ride on the cell before them as `combining`, never as cells
+///   of their own -- the same joins the screen makes when it is written to;
+/// - a zero-width character with nothing to attach to takes one column, so
+///   it is still somewhere.
+pub fn styled_cells_from_text(text: &str) -> Vec<StyledCell> {
+    fn is_regional_indicator(ch: char) -> bool {
+        matches!(ch as u32, 0x1f1e6..=0x1f1ff)
+    }
+    let mut cells: Vec<StyledCell> = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        let width = char_columns(ch);
+        // The cell a mark would attach to: the last one with columns of its
+        // own, skipping a wide character's continuation.
+        let base = cells.iter().rposition(|cell| cell.width > 0);
+        if let Some(index) = base {
+            let cell = &cells[index];
+            let joins = width == 0
+                || cell.combining().ends_with('\u{200d}')
+                || (cell.width > 1
+                    && matches!(cell.ch as u32, 0x1f000..=0x1faff)
+                    && matches!(ch as u32, 0x1f3fb..=0x1f3ff))
+                || (is_regional_indicator(cell.ch)
+                    && is_regional_indicator(ch)
+                    && !cell.combining().chars().any(is_regional_indicator));
+            if joins {
+                cells[index].push_combining(ch);
+                continue;
+            }
+        }
+        let width = width.max(1);
+        cells.push(StyledCell::new(ch, CellStyle::default(), width));
+        for _ in 1..width {
+            cells.push(StyledCell::new(' ', CellStyle::default(), 0));
+        }
+    }
+    cells
+}
+
+/// How many columns plain text takes on the grid: the sum of
+/// `styled_cells_from_text`'s widths, so anything measured with this lines up
+/// with anything drawn from those cells.
+pub fn text_columns(text: &str) -> usize {
+    styled_cells_from_text(text)
+        .iter()
+        .map(|cell| cell.width)
+        .sum()
 }
 
 #[allow(dead_code)]
@@ -1390,20 +1497,9 @@ pub trait ScreenEngine {
                 row: text.first_row + idx as i64,
                 // Plain-text fallback: the source has no wrap state to carry.
                 wrapped: false,
-                cells: line
-                    .chars()
-                    .map(|ch| {
-                        let mut buf = [0u8; 4];
-                        StyledCell {
-                            ch,
-                            style: CellStyle::default(),
-                            width: termwiz::cell::unicode_column_width(
-                                ch.encode_utf8(&mut buf),
-                                None,
-                            ),
-                        }
-                    })
-                    .collect(),
+                // Column-true cells: continuation cells after wide
+                // characters, marks on their base.
+                cells: styled_cells_from_text(line),
             })
             .collect();
         Ok(StyledScrollbackSnapshot {
@@ -2151,7 +2247,7 @@ mod tests {
     }
 
     fn cell(ch: char, style: CellStyle, width: usize) -> StyledCell {
-        StyledCell { ch, style, width }
+        StyledCell::new(ch, style, width)
     }
 
     fn frame(cells: Vec<StyledCell>) -> RenderFrameSnapshot {
@@ -2951,11 +3047,7 @@ mod pane_pulse_tests {
             row,
             cells: text
                 .chars()
-                .map(|ch| StyledCell {
-                    ch,
-                    style: CellStyle::default(),
-                    width: 1,
-                })
+                .map(|ch| StyledCell::new(ch, CellStyle::default(), 1))
                 .collect(),
             wrapped: false,
         };

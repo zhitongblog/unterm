@@ -141,6 +141,7 @@ mod tests {
                 ch,
                 style: style.clone(),
                 width: 1,
+                combining: None,
             })
             .collect()
     }
@@ -219,11 +220,13 @@ mod tests {
                 ch: '中',
                 style: CellStyle::default(),
                 width: 2,
+                combining: None,
             },
             StyledCell {
                 ch: 'a',
                 style: CellStyle::default(),
                 width: 1,
+                combining: None,
             },
         ];
         let runs = runs(&line, |_| 0);
@@ -272,6 +275,7 @@ mod url_regression {
                 ch,
                 style: CellStyle::default(),
                 width: 1,
+                combining: None,
             })
             .collect();
 
@@ -310,6 +314,7 @@ mod drawn_cell_tests {
             ch,
             width: 1,
             style: CellStyle::default(),
+            combining: None,
         }
     }
 
