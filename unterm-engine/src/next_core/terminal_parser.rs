@@ -406,6 +406,8 @@ impl TerminalParser {
                         }
                     } else if *mode == 4 {
                         screen.insert_mode = true;
+                    } else if *mode == 20 {
+                        screen.newline_mode = true;
                     }
                 }
             }
@@ -464,6 +466,8 @@ impl TerminalParser {
                         }
                     } else if *mode == 4 {
                         screen.insert_mode = false;
+                    } else if *mode == 20 {
+                        screen.newline_mode = false;
                     }
                 }
             }

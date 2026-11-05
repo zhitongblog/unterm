@@ -159,6 +159,11 @@ fn response_for_csi(csi: &str, screen: &NextCoreScreen) -> Option<Vec<u8>> {
                 format!("\x1b[4;{}$y", mode_report_state(screen.insert_mode)).into_bytes(),
             );
         }
+        if mode == 20 {
+            return Some(
+                format!("\x1b[20;{}$y", mode_report_state(screen.newline_mode)).into_bytes(),
+            );
+        }
     }
 
     match csi {

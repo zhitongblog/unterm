@@ -30,6 +30,8 @@ mod csi_params;
 pub mod font_discovery;
 pub mod font_raster;
 pub mod font_shaper;
+#[cfg(test)]
+mod grid_semantics_tests;
 mod health_snapshot;
 mod history;
 mod input_dispatch;
@@ -214,6 +216,9 @@ struct NextCoreScreen {
     alternate_screen_modes: BTreeSet<usize>,
     origin_mode: bool,
     insert_mode: bool,
+    /// LNM (`CSI 20 h`): a line feed also returns the carriage. Off by
+    /// default, as in xterm, so LF/VT/FF keep the cursor's column.
+    newline_mode: bool,
     left_right_margin_mode: bool,
     tab_stops: BTreeSet<usize>,
     bracketed_paste: bool,
@@ -883,10 +888,17 @@ impl NextCoreScreen {
         self.mark_dirty_row(old_y);
     }
 
+    /// LF, VT and FF.
+    ///
+    /// xterm keeps the cursor's column: a bare LF is "move down one row",
+    /// and the carriage return is the tty's job (`onlcr`) or the program's.
+    /// Returning to column 0 here put `def` of `stty -onlcr; printf
+    /// 'abc\ndef'` in column 0 instead of column 3, and slid every ncurses
+    /// `cud1=^J` move to the left edge. Only LNM (`CSI 20 h`) adds the CR.
     fn line_feed(&mut self) {
         let old_y = self.cursor_y;
-        if !self.synchronized_output {
-            self.cursor_x = 0;
+        if self.newline_mode {
+            self.cursor_x = self.carriage_return_column();
         }
         self.index();
         self.mark_dirty_row(old_y);
@@ -906,7 +918,7 @@ impl NextCoreScreen {
     }
 
     fn next_line(&mut self) {
-        self.cursor_x = 0;
+        self.cursor_x = self.carriage_return_column();
         self.index();
     }
 
@@ -925,7 +937,20 @@ impl NextCoreScreen {
 
     fn carriage_return(&mut self) {
         self.mark_dirty_row(self.cursor_y);
-        self.cursor_x = 0;
+        self.cursor_x = self.carriage_return_column();
+    }
+
+    /// Where CR (and NEL, and LF under LNM) puts the cursor: the left
+    /// margin when the cursor is at or right of it -- always under DECOM --
+    /// and column 0 when it sits left of the margin (xterm's
+    /// `CarriageReturn`). Without DECLRMM the margin is column 0.
+    fn carriage_return_column(&self) -> usize {
+        let left = self.active_left_margin();
+        if self.origin_mode || self.cursor_x >= left {
+            left
+        } else {
+            0
+        }
     }
 
     fn backspace(&mut self) {
@@ -4309,7 +4334,10 @@ mod tests {
             launch_policy: Default::default(),
         })?;
 
-        set_output_for_test(session.id, "one\x0btwo\x0cthree\x0bfour")?;
+        // VT and FF are line feeds: they keep the column like LF does
+        // (grid_semantics_tests covers that), so CR precedes them here to
+        // keep this test about the scrolling.
+        set_output_for_test(session.id, "one\r\x0btwo\r\x0cthree\r\x0bfour")?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.lines, vec!["two", "three", "four"]);
         assert_eq!(screen.scrollback_rows, 1);
@@ -4905,7 +4933,7 @@ mod tests {
 
         set_output_for_test(
             session.id,
-            "pre \x1b]8;id=one;https://example.test/item\x07link\x1b]8;;\x07 post\nnext",
+            "pre \x1b]8;id=one;https://example.test/item\x07link\x1b]8;;\x07 post\r\nnext",
         )?;
 
         assert_eq!(engine.read_visible_text(session.id)?, "pre link post\nnext");
@@ -6141,7 +6169,7 @@ mod tests {
         })?;
         set_output_for_test(
             session.id,
-            "old line\n\x1b[2J\x1b[Hhello\nworld\x1b[1A\x1b[3G!\x1b[K",
+            "old line\r\n\x1b[2J\x1b[Hhello\r\nworld\x1b[1A\x1b[3G!\x1b[K",
         )?;
 
         let lines = engine.read_screen(session.id)?.lines;
@@ -6505,7 +6533,7 @@ mod tests {
 
         set_output_for_test(
             session.id,
-            "\x1b[2J\x1b[Hr0\nr1\nr2\nr3\x1b[2;4r\x1b[2;1H\x1bM",
+            "\x1b[2J\x1b[Hr0\r\nr1\r\nr2\r\nr3\x1b[2;4r\x1b[2;1H\x1bM",
         )?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.lines, vec!["r0", "", "r1", "r2"]);
@@ -7357,7 +7385,7 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "one\nprefix-tail\nthree\x1b[2;7H\x1b[J")?;
+        set_output_for_test(session.id, "one\r\nprefix-tail\r\nthree\x1b[2;7H\x1b[J")?;
         assert_eq!(
             engine.read_screen(session.id)?.lines,
             vec!["one", "prefix", ""]
@@ -7372,7 +7400,7 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "one\ntwo-three\nthree\x1b[2;4H\x1b[1J")?;
+        set_output_for_test(session.id, "one\r\ntwo-three\r\nthree\x1b[2;4H\x1b[1J")?;
         assert_eq!(
             engine.read_screen(session.id)?.lines,
             vec!["", "    three", "three"]
@@ -7480,7 +7508,7 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "one\ntwo\nthree\nfour\nfive")?;
+        set_output_for_test(session.id, "one\r\ntwo\r\nthree\r\nfour\r\nfive")?;
         assert_eq!(engine.read_screen(session.id)?.scrollback_rows, 2);
         assert_eq!(engine.read_scrollback(session.id, 10)?, vec!["one", "two"]);
         engine.destroy_session(session.id)?;
@@ -7493,7 +7521,7 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "one\ntwo\nthree\nfour\nfive\x1b[3J")?;
+        set_output_for_test(session.id, "one\r\ntwo\r\nthree\r\nfour\r\nfive\x1b[3J")?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.lines, vec!["three", "four", "five"]);
         assert_eq!(screen.scrollback_rows, 0);
@@ -8114,7 +8142,7 @@ mod tests {
         set_output_for_test(
             session.id,
             concat!(
-                "main-one\nmain-two",
+                "main-one\r\nmain-two",
                 "\x1b[?1049h",
                 "alt-only\n",
                 "\x1b[?1049l",
@@ -8154,7 +8182,7 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "one\ntwo\nthree\nfour\nfive")?;
+        set_output_for_test(session.id, "one\r\ntwo\r\nthree\r\nfour\r\nfive")?;
 
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.rows, 3);
@@ -8251,7 +8279,7 @@ mod tests {
     #[test]
     fn each_screen_keeps_the_scrollback_capacity_it_was_created_with() {
         let mut small = NextCoreScreen::new_with_scrollback_limit(20, 2, 3);
-        small.feed("one\ntwo\nthree\nfour\nfive\nsix");
+        small.feed("one\r\ntwo\r\nthree\r\nfour\r\nfive\nsix");
         assert_eq!(small.scrollback_rows(), 3);
 
         let mut none = NextCoreScreen::new_with_scrollback_limit(20, 2, 0);
@@ -8290,7 +8318,7 @@ mod tests {
         let _runtime_guard = reset_state_for_test();
         let mut screen = NextCoreScreen::new(80, 3);
 
-        screen.feed("one\ntwo\nthree\nfour\nfive");
+        screen.feed("one\r\ntwo\r\nthree\r\nfour\r\nfive");
         screen.set_viewport_top_near(1);
         assert_eq!(
             screen.snapshot_viewport_lines(),
@@ -8304,7 +8332,7 @@ mod tests {
             vec!["three".to_string(), "four".to_string(), "five".to_string()]
         );
 
-        screen.feed("\nsix");
+        screen.feed("\r\nsix");
         assert_eq!(
             screen.snapshot_viewport_lines(),
             vec!["four".to_string(), "five".to_string(), "six".to_string()]
@@ -8326,7 +8354,7 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "你abc abc\nabc\n")?;
+        set_output_for_test(session.id, "你abc abc\r\nabc\r\n")?;
 
         let matches = engine.search(session.id, "abc", crate::SearchMode::CaseSensitive, 10)?;
         assert_eq!(
@@ -8366,12 +8394,12 @@ mod tests {
             env: Vec::new(),
             launch_policy: Default::default(),
         })?;
-        set_output_for_test(session.id, "a\nb\nc\x1b[S")?;
+        set_output_for_test(session.id, "a\r\nb\r\nc\x1b[S")?;
 
         let lines = engine.read_screen(session.id)?.lines;
         assert_eq!(lines, vec!["b", "c", ""]);
 
-        set_output_for_test(session.id, "a\nb\nc\x1b[T")?;
+        set_output_for_test(session.id, "a\r\nb\r\nc\x1b[T")?;
         let lines = engine.read_screen(session.id)?.lines;
         assert_eq!(lines, vec!["", "a", "b"]);
 
@@ -8611,9 +8639,9 @@ mod tests {
         set_output_for_test(
             session.id,
             concat!(
-                "main-one\nmain-two",
+                "main-one\r\nmain-two",
                 "\x1b[?1049h",
-                "alt-one\nalt-two\nalt-three",
+                "alt-one\r\nalt-two\r\nalt-three",
                 "\x1b[?1049l"
             ),
         )?;
