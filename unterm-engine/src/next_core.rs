@@ -1539,7 +1539,9 @@ impl NextCoreScreen {
         self.alternate_scroll = false;
         self.sgr_pixel_mouse = false;
         self.meta_sends_escape = false;
-        self.synchronized_output = false;
+        // Ends a hold as `?2026l` would, so `synchronized_since` and the flag
+        // never disagree.
+        self.set_synchronized_output(false);
         self.kitty_keyboard.clear();
         self.modify_other_keys = 0;
         self.cursor_visible = true;
@@ -2338,7 +2340,9 @@ impl NextCoreScreen {
         self.alternate_scroll = false;
         self.sgr_pixel_mouse = false;
         self.meta_sends_escape = false;
-        self.synchronized_output = false;
+        // Synchronized output (?2026) is terminal-wide, not per screen: an
+        // update that switches to the alternate screen mid-frame is still
+        // one update, and the hold (with its picture from before) stays.
         self.origin_mode = false;
         self.insert_mode = false;
         self.left_right_margin_mode = false;
@@ -2388,7 +2392,11 @@ impl NextCoreScreen {
         self.alternate_scroll = main.alternate_scroll;
         self.sgr_pixel_mouse = main.sgr_pixel_mouse;
         self.meta_sends_escape = main.meta_sends_escape;
-        self.synchronized_output = main.synchronized_output;
+        // ?2026 is global: whatever the program said while on the alternate
+        // screen stands. Restoring main's saved flag resurrected a finished
+        // update (stuck `true` with no hold, so the next `?2026h` never took
+        // one) or dropped one still in progress.
+        let _ = main.synchronized_output;
         self.alternate_screen_modes = main.alternate_screen_modes;
         self.origin_mode = main.origin_mode;
         self.insert_mode = main.insert_mode;

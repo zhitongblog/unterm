@@ -306,3 +306,45 @@ fn decsera_treats_a_wide_pair_as_protected_by_its_head() {
     assert_eq!(row(&screen, 0), "中  b");
     assert_eq!(widths(&screen, 0), vec![2, 0, 1, 1, 1]);
 }
+
+// --- B6: synchronized output is terminal-wide ---------------------------
+
+fn shown_text(screen: &NextCoreScreen) -> Vec<String> {
+    let (lines, _) = screen.shown_viewport_lines(screen.viewport_first_row());
+    lines
+        .iter()
+        .map(|l| l.cells.iter().map(|c| c.ch).collect::<String>().trim_end().to_string())
+        .collect()
+}
+
+#[test]
+fn entering_the_alternate_screen_keeps_the_synchronized_hold() {
+    let mut screen = screen(10, 2);
+    screen.feed("shell");
+    screen.feed("\x1b[?2026h\x1b[?1049h\x1b[Hhalf");
+    assert!(screen.synchronized_output);
+    assert!(screen.held().is_some());
+    assert_eq!(shown_text(&screen), vec!["shell", ""]);
+    screen.feed("\x1b[?2026l");
+    assert_eq!(shown_text(&screen), vec!["half", ""]);
+}
+
+#[test]
+fn leaving_the_alternate_screen_does_not_resurrect_a_finished_update() {
+    let mut screen = screen(10, 2);
+    screen.feed("\x1b[?2026h\x1b[?1049h\x1b[?2026l\x1b[?1049l");
+    assert!(!screen.synchronized_output);
+    assert!(screen.synchronized_since.is_none());
+    // A later update on the main screen takes a hold again.
+    screen.feed("\x1b[?2026h");
+    assert!(screen.held().is_some());
+    screen.feed("\x1b[?2026l");
+}
+
+#[test]
+fn soft_reset_ends_the_hold_with_the_flag() {
+    let mut screen = screen(10, 2);
+    screen.feed("\x1b[?2026h\x1b[!p");
+    assert!(!screen.synchronized_output);
+    assert!(screen.synchronized_since.is_none());
+}
