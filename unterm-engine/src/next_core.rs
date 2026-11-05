@@ -50,6 +50,9 @@ mod recording_lifecycle;
 mod recording_markdown;
 mod recording_output;
 mod recording_text;
+mod reflow;
+#[cfg(test)]
+mod reflow_tests;
 mod render_frame;
 mod render_state;
 mod runtime;
@@ -250,6 +253,87 @@ struct SynchronizedHold {
     pinned: bool,
     lines: Vec<crate::StyledScreenLine>,
     images: Vec<crate::ImagePlacementSnapshot>,
+}
+
+/// What a shrink did with the rows that no longer fit.
+#[derive(Default)]
+struct RowFit {
+    /// Rows taken off the top, oldest first: scrollback on the main screen.
+    banked: Vec<Vec<ScreenCell>>,
+    /// Rows dropped from below the last row.
+    dropped_below: usize,
+}
+
+/// One screen's rows and cursors, taken out for a reflow and put back.
+struct ReflowParts {
+    scrollback: std::collections::VecDeque<Vec<ScreenCell>>,
+    lines: Vec<Vec<ScreenCell>>,
+    cursor_x: usize,
+    cursor_y: usize,
+    saved_cursor_x: usize,
+    saved_cursor_y: usize,
+}
+
+impl ReflowParts {
+    /// Re-wrap these rows for `new_cols`, keeping which rows are live.
+    ///
+    /// The live lines begin where the first old live row's first cell landed
+    /// (never below the cursor). They are not re-fitted to the screen height
+    /// here; the caller does that with the cursor-preserving rule. A live
+    /// area that came out shorter than the screen is shown under rows of
+    /// scrollback, the same way a pane that grew is.
+    ///
+    /// `evict_budget` (scrollback limit plus screen rows) lets the reflow skip
+    /// old scrollback that would be evicted straight away; the returned rows
+    /// are then numbered with `reflowed.evicted` stand-in rows in front, which
+    /// the caller trims like any other eviction.
+    fn reflow(
+        &mut self,
+        old_cols: usize,
+        new_cols: usize,
+        evict_budget: Option<usize>,
+    ) -> reflow::Reflowed {
+        let scrollback_rows = self.scrollback.len();
+        let mut old_rows = Vec::from(std::mem::take(&mut self.scrollback));
+        old_rows.append(&mut self.lines);
+        let pending = self.cursor_x >= old_cols;
+        let mut reflowed = reflow::reflow(
+            old_rows,
+            old_cols,
+            new_cols,
+            reflow::ReflowPoint {
+                row: scrollback_rows + self.cursor_y,
+                col: self.cursor_x.min(old_cols),
+            },
+            pending,
+            reflow::ReflowPoint {
+                row: scrollback_rows + self.saved_cursor_y,
+                col: self.saved_cursor_x.min(old_cols.saturating_sub(1)),
+            },
+            evict_budget.map(|budget| reflow::Evictable {
+                protect_from: scrollback_rows,
+                budget,
+            }),
+        );
+        let cursor = reflowed.cursor;
+        let base = reflowed.evicted;
+        let live_start = reflowed
+            .row_map
+            .get(scrollback_rows)
+            .copied()
+            .unwrap_or(reflowed.total_rows.saturating_sub(1))
+            .clamp(base, cursor.row);
+        let mut rows = std::mem::take(&mut reflowed.rows);
+        let live = rows.split_off(live_start - base);
+        self.scrollback = std::collections::VecDeque::from(rows);
+        self.lines = live;
+        self.cursor_x = cursor.col;
+        self.cursor_y = cursor.row - live_start;
+        let saved = reflowed.saved_cursor;
+        self.saved_cursor_x = saved.col.min(new_cols.saturating_sub(1));
+        self.saved_cursor_y = saved.row.saturating_sub(live_start);
+        reflowed
+    }
 }
 
 impl NextCoreScreen {
@@ -2028,18 +2112,26 @@ impl NextCoreScreen {
         self.cols = cols.max(1);
         self.rows = rows.max(1);
         self.bump_revision();
-        self.clear_dirty_rows();
-        self.mark_all_dirty();
-        Self::truncate_lines_to_cols(&mut self.lines, self.cols);
-        self.history.truncate_scrollback_to_cols(self.cols);
         let cols = self.cols;
+        if cols != old_cols {
+            if self.alternate.is_none() {
+                self.reflow_main_screen(old_cols, cols);
+            } else {
+                // The alternate screen is cut or padded, never re-wrapped: the
+                // program on it repaints for the new size. The main screen
+                // waiting behind it is re-wrapped like a live one.
+                reflow::fit_rows_to_cols(&mut self.lines, cols);
+                if self.cursor_x >= cols {
+                    self.cursor_x = cols - 1;
+                }
+                self.saved_cursor_x = self.saved_cursor_x.min(cols - 1);
+                self.reflow_saved_main_screen(cols);
+            }
+        }
         if let Some(alternate) = self.alternate.as_mut() {
             let old_alt_cols = alternate.cols;
             alternate.cols = cols;
-            Self::truncate_lines_to_cols(&mut alternate.lines, cols);
-            Self::truncate_lines_to_cols(&mut alternate.scrollback, cols);
             Self::resize_tab_stops(&mut alternate.tab_stops, old_alt_cols, cols);
-            alternate.cursor_x = alternate.cursor_x.min(cols.saturating_sub(1));
             alternate.saved_cursor_x = alternate.saved_cursor_x.min(cols.saturating_sub(1));
             if changed {
                 // The saved main screen's region was for the old size too.
@@ -2051,22 +2143,31 @@ impl NextCoreScreen {
         }
         Self::resize_tab_stops(&mut self.tab_stops, old_cols, cols);
         if self.lines.len() > self.rows {
-            let trim = self.lines.len() - self.rows;
-            let drained = self.lines.drain(..trim).collect::<Vec<_>>();
+            let top = self.image_top_row();
+            let fit = Self::fit_rows_keeping_cursor(&mut self.lines, self.cursor_y, self.rows);
+            let moved = fit.banked.len();
+            if fit.dropped_below > 0 {
+                let first = top + (moved + self.lines.len()) as i64;
+                self.images
+                    .rows_cleared(first, first + fit.dropped_below as i64 - 1);
+            }
             if self.alternate.is_none() {
                 let trimmed = self
                     .history
-                    .extend_scrollback(drained, self.scrollback_limit);
+                    .extend_scrollback(fit.banked, self.scrollback_limit);
                 self.trim_prompt_rows(trimmed);
-            } else {
-                self.images.region_scrolled(0, i64::MAX / 2, -(trim as i64));
+            } else if moved > 0 {
+                self.images.region_scrolled(0, i64::MAX / 2, -(moved as i64));
             }
-            self.cursor_y = self.cursor_y.saturating_sub(trim);
-            self.saved_cursor_y = self.saved_cursor_y.saturating_sub(trim);
+            self.cursor_y -= moved;
+            self.saved_cursor_y = self.saved_cursor_y.saturating_sub(moved);
         }
-        self.cursor_x = self.cursor_x.min(self.cols.saturating_sub(1));
+        // Past the last column only in the pending-wrap state, which a
+        // re-wrap carries over and a height change leaves alone.
+        self.cursor_x = self.cursor_x.min(self.cols);
         self.saved_cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
         self.cursor_y = self.cursor_y.min(self.rows.saturating_sub(1));
+        self.saved_cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
         if changed {
             // A new size scrolls the whole screen again, as in xterm. Clamping
             // only ever shrank the region: grown from 20 rows to 43, the
@@ -2091,6 +2192,136 @@ impl NextCoreScreen {
             }
         }
         self.ensure_cursor_line();
+        // Everything may have moved; a delta reader starts over from here.
+        self.clear_dirty_rows();
+        self.mark_all_dirty();
+    }
+
+    /// Re-wrap the main screen -- scrollback and live lines together -- for
+    /// a new width. See `reflow.rs` for the rules.
+    ///
+    /// What the rows were anchored to follows them: the cursor and saved
+    /// cursor stay on their character, OSC 133 prompt marks and pictures move
+    /// to the row their old row's first cell landed on, and a viewport the
+    /// user scrolled back keeps the same text at its top (the alternative,
+    /// snapping to the bottom, would throw away where they were reading).
+    /// Hyperlinks live in the cells and travel with them.
+    fn reflow_main_screen(&mut self, old_cols: usize, new_cols: usize) {
+        let mut parts = ReflowParts {
+            scrollback: self.history.take_scrollback(),
+            lines: std::mem::take(&mut self.lines),
+            cursor_x: self.cursor_x,
+            cursor_y: self.cursor_y,
+            saved_cursor_x: self.saved_cursor_x,
+            saved_cursor_y: self.saved_cursor_y,
+        };
+        let viewport_top = self.history.take_viewport_top();
+        let budget = self.scrollback_limit.saturating_add(self.rows);
+        let reflowed = parts.reflow(old_cols, new_cols, Some(budget));
+        let viewport_top =
+            viewport_top.map(|top| reflowed.map_row(top).saturating_sub(reflowed.evicted));
+        self.remap_main_anchors(&reflowed);
+        self.trim_prompt_rows(reflowed.evicted);
+        self.cursor_x = parts.cursor_x;
+        self.cursor_y = parts.cursor_y;
+        self.saved_cursor_x = parts.saved_cursor_x;
+        self.saved_cursor_y = parts.saved_cursor_y;
+        self.lines = parts.lines;
+        self.history.replace_scrollback(parts.scrollback);
+        self.history.replace_viewport_top(viewport_top);
+        // Narrower means more rows; the oldest ones past the limit go.
+        let trimmed = self
+            .history
+            .extend_scrollback(std::iter::empty(), self.scrollback_limit);
+        self.trim_prompt_rows(trimmed);
+    }
+
+    /// The same for the main screen saved behind the alternate screen, so
+    /// that leaving a full-screen program after a resize finds the shell's
+    /// history wrapped for the new width rather than cut to it.
+    fn reflow_saved_main_screen(&mut self, new_cols: usize) {
+        let Some(mut main) = self.alternate.take() else {
+            return;
+        };
+        let old_cols = main.cols;
+        if old_cols != new_cols {
+            let mut parts = ReflowParts {
+                scrollback: std::mem::take(&mut main.scrollback),
+                lines: std::mem::take(&mut main.lines),
+                cursor_x: main.cursor_x,
+                cursor_y: main.cursor_y,
+                saved_cursor_x: main.saved_cursor_x,
+                saved_cursor_y: main.saved_cursor_y,
+            };
+            let reflowed = parts.reflow(old_cols, new_cols, None);
+            main.viewport_top = main.viewport_top.map(|top| reflowed.map_row(top));
+            self.remap_main_anchors(&reflowed);
+            main.scrollback = parts.scrollback;
+            main.lines = parts.lines;
+            main.cursor_x = parts.cursor_x;
+            main.cursor_y = parts.cursor_y;
+            main.saved_cursor_x = parts.saved_cursor_x;
+            main.saved_cursor_y = parts.saved_cursor_y;
+            let mut trimmed = 0;
+            while main.scrollback.len() > self.scrollback_limit {
+                main.scrollback.pop_front();
+                trimmed += 1;
+            }
+            if let Some(top) = main.viewport_top.as_mut() {
+                *top = top.saturating_sub(trimmed);
+            }
+            self.trim_prompt_rows(trimmed);
+        }
+        main.cols = new_cols;
+        self.alternate = Some(main);
+    }
+
+    /// Move the main screen's absolute-row anchors through a reflow.
+    fn remap_main_anchors(&mut self, reflowed: &reflow::Reflowed) {
+        for row in &mut self.prompt_rows {
+            *row = reflowed.map_row(*row);
+        }
+        self.prompt_rows.dedup();
+        self.images.main_rows_remapped(|row| {
+            if row < 0 {
+                row
+            } else {
+                reflowed.map_row(row as usize) as i64
+            }
+        });
+    }
+
+    /// Fit `lines` into `rows` without pushing the cursor's line out.
+    ///
+    /// xterm and VTE: blank rows below the cursor go first, from the bottom.
+    /// Only if the cursor would still be below the last row do rows leave
+    /// from the top -- exactly as many as that takes -- and whatever is then
+    /// left below the last row is dropped. Without this, a shell that had
+    /// just cleared the screen (`CSI 2J` fills every row) and drawn its
+    /// prompt on row 0 lost that prompt into the scrollback on a shrink, and
+    /// its next keystroke landed on a blank row.
+    fn fit_rows_keeping_cursor(
+        lines: &mut Vec<Vec<ScreenCell>>,
+        cursor_y: usize,
+        rows: usize,
+    ) -> RowFit {
+        let mut fit = RowFit::default();
+        while lines.len() > rows
+            && lines.len() > cursor_y + 1
+            && lines.last().is_some_and(|row| reflow::is_blank_row(row))
+        {
+            lines.pop();
+        }
+        if lines.len() <= rows {
+            return fit;
+        }
+        let top = (cursor_y + 1).saturating_sub(rows).min(lines.len());
+        fit.banked = lines.drain(..top).collect();
+        if lines.len() > rows {
+            fit.dropped_below = lines.len() - rows;
+            lines.truncate(rows);
+        }
+        fit
     }
 
     fn set_column_mode(&mut self, wide: bool) {
@@ -2234,19 +2465,6 @@ impl NextCoreScreen {
         false
     }
 
-    /// Takes anything that hands out its rows by mutable reference, so the
-    /// live lines (a `Vec`) and the scrollback (a `VecDeque`) share one body.
-    fn truncate_lines_to_cols<'a>(
-        lines: impl IntoIterator<Item = &'a mut Vec<ScreenCell>>,
-        cols: usize,
-    ) {
-        for line in lines {
-            if line.len() > cols {
-                line.truncate(cols);
-            }
-        }
-    }
-
     fn default_tab_stops(cols: usize) -> BTreeSet<usize> {
         (8..cols).step_by(8).collect()
     }
@@ -2388,15 +2606,22 @@ impl NextCoreScreen {
         self.saved_cursor_attr = main.saved_cursor_attr;
         if self.lines.len() > self.rows {
             // Shrunk while a program was on the alternate screen: what no
-            // longer fits goes to the scrollback, as a live resize would.
-            let trim = self.lines.len() - self.rows;
-            let drained = self.lines.drain(..trim).collect::<Vec<_>>();
+            // longer fits goes to the scrollback, as a live resize would --
+            // and by the same rule, so the shell's prompt stays on screen.
+            let top = self.image_top_row();
+            let fit = Self::fit_rows_keeping_cursor(&mut self.lines, self.cursor_y, self.rows);
+            let moved = fit.banked.len();
+            if fit.dropped_below > 0 {
+                let first = top + (moved + self.lines.len()) as i64;
+                self.images
+                    .rows_cleared(first, first + fit.dropped_below as i64 - 1);
+            }
             let trimmed = self
                 .history
-                .extend_scrollback(drained, self.scrollback_limit);
+                .extend_scrollback(fit.banked, self.scrollback_limit);
             self.trim_prompt_rows(trimmed);
-            self.cursor_y = self.cursor_y.saturating_sub(trim);
-            self.saved_cursor_y = self.saved_cursor_y.saturating_sub(trim);
+            self.cursor_y -= moved;
+            self.saved_cursor_y = self.saved_cursor_y.saturating_sub(moved);
         }
         // The rest was saved against the size the program started at. A
         // region ending on row 42 of a 20-row pane means a newline on the
@@ -4542,8 +4767,11 @@ mod tests {
         Ok(())
     }
 
+    /// Narrowing re-wraps rather than cuts: the tail of the row moves to the
+    /// next one (it used to be truncated away for good), and the cursor stays
+    /// just after the last character.
     #[test]
-    fn screen_buffer_truncates_existing_lines_on_column_resize() -> Result<()> {
+    fn screen_buffer_rewraps_existing_lines_on_column_resize() -> Result<()> {
         let _guard = test_guard();
         let _runtime_guard = reset_state_for_test();
         let engine = NextCoreEngine;
@@ -4560,8 +4788,8 @@ mod tests {
         engine.resize_session(session.id, 4, 3)?;
         let screen = engine.read_screen(session.id)?;
         assert_eq!(screen.cols, 4);
-        assert_eq!(screen.lines, vec!["abcd"]);
-        assert_eq!(screen.cursor.x, 3);
+        assert_eq!(screen.lines, vec!["abcd", "ef"]);
+        assert_eq!((screen.cursor.x, screen.cursor.y), (2, 1));
 
         engine.destroy_session(session.id)?;
         Ok(())
@@ -4827,9 +5055,12 @@ mod tests {
         assert_eq!(screen.cols, 40);
         assert_eq!(screen.lines, vec!["== Novel Studio =="]);
 
-        // And a real narrowing still narrows.
+        // And a real narrowing still narrows -- re-wrapping the line, whose
+        // start the 3-row pane now keeps in its scrollback.
         engine.resize_session(session.id, 4, 3)?;
-        assert_eq!(engine.read_screen(session.id)?.lines, vec!["== N"]);
+        let narrowed = engine.read_screen(session.id)?;
+        assert_eq!(narrowed.cols, 4);
+        assert_eq!(narrowed.lines, vec![" Stu", "dio", "=="]);
 
         engine.destroy_session(session.id)?;
         Ok(())

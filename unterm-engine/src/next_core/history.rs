@@ -94,14 +94,6 @@ impl HistoryBuffer {
         self.viewport_top = viewport_top;
     }
 
-    pub(super) fn truncate_scrollback_to_cols(&mut self, cols: usize) {
-        for line in &mut self.scrollback {
-            if line.len() > cols {
-                line.truncate(cols);
-            }
-        }
-    }
-
     pub(super) fn history_len(&self, live_lines: usize) -> usize {
         self.scrollback.len() + live_lines
     }
