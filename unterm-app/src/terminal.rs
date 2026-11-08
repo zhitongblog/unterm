@@ -3914,11 +3914,6 @@ mod alignment_tests {
         let Ok(mut font) = TerminalFont::open(16) else {
             return;
         };
-        let text = "中文";
-        let mut atlas = GlyphAtlas::new(512, 512);
-        let committed = frame_quads(&row_of(text), &mut font, &mut atlas, colors());
-        let mut composed = FrameQuads::default();
-        append_text(text, &mut font, &mut atlas, colors().foreground, (0.0, 0.0), &mut composed);
         let rects = |quads: &FrameQuads| {
             let mut rects: Vec<(f32, f32, f32, f32)> = quads
                 .glyphs
@@ -3928,7 +3923,16 @@ mod alignment_tests {
             rects.sort_by(|a, b| a.0.total_cmp(&b.0));
             rects
         };
-        assert_eq!(rects(&composed), rects(&committed));
+        for text in ["ab", "中文"] {
+            if text.chars().any(|ch| font.stack_mut().rasterize(ch).is_none()) {
+                continue;
+            }
+            let mut atlas = GlyphAtlas::new(512, 512);
+            let committed = frame_quads(&row_of(text), &mut font, &mut atlas, colors());
+            let mut composed = FrameQuads::default();
+            append_text(text, &mut font, &mut atlas, colors().foreground, (0.0, 0.0), &mut composed);
+            assert_eq!(rects(&composed), rects(&committed), "{text:?}");
+        }
     }
 
     /// A cursor at the last column on a wide character cut in half by the

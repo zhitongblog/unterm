@@ -1662,6 +1662,32 @@ and keeps your data unless you ask otherwise. The plan says what each thing
 is — "tasks.db — every task, run, step, approval and lease" — because "delete
 my data?" is answerable only if the answer says what the data is.
 
+## remote
+
+Manage **Unterm Pocket** mobile remote access (LAN / Tailscale) and **Agent Harness** workflows from the command line.
+
+```bash
+unterm-cli remote status
+unterm-cli remote enable
+unterm-cli remote disable
+unterm-cli remote pair [--scope full|approve|readonly]
+unterm-cli remote devices
+unterm-cli remote revoke <DEVICE_ID>
+unterm-cli remote ports
+unterm-cli remote checkpoint [list|create|diff|restore] [TARGET] [--cwd DIR]
+unterm-cli remote handoff [REQUEST] [--target-agent ID] [--cwd DIR]
+unterm-cli remote snapshot
+unterm-cli remote serve
+```
+
+- **`status` / `enable` / `disable`:** Shows or toggles the LAN / Tailscale mobile gateway (default TCP port `19880`). Connections outside private RFC1918 LAN and Tailscale (`100.64.0.0/10`) CIDRs are rejected at the socket level.
+- **`pair [--scope full|approve|readonly]`:** Issues a 2-minute, single-use 6-digit pairing code and pairing URL / QR code with the requested permission scope (`full`, `approve`, or `readonly`).
+- **`devices` / `revoke <DEVICE_ID>`:** Lists paired mobile devices or revokes a device's bearer token immediately.
+- **`ports`:** Discovers active localhost dev servers (e.g. `:3000`, `:4321`, `:5173`, `:8080`) that paired devices can open via the authenticated `/preview/<port>/` reverse proxy.
+- **`checkpoint [list|create|diff|restore]`:** Creates, lists, diffs, or restores zero-pollution hidden Git checkpoints under `refs/unterm/checkpoints/<id>` without touching `HEAD`, `.git/index`, or the working tree. Restoring automatically snapshots a safety backup first.
+- **`handoff [REQUEST] [--target-agent ID]`:** Packages the active pane's recent terminal output, Git status/diff summary, and your full request into a budgeted Markdown handoff bundle under `~/.unterm/handoffs/`.
+- **`snapshot`:** Captures the foreground window screenshot (`.png`) together with its Accessibility (A11y) control tree (`.a11y.json`) under `~/.unterm/snapshots/` and prints a ready-to-paste agent prompt snippet.
+
 ## agent_session (MCP only)
 
 Hosting a CLI agent as a session with structured events is currently an MCP

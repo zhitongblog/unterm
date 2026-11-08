@@ -12,6 +12,19 @@ Unterm is a terminal that agents can drive and that shows you what the agents in
 
 Most of what follows is terminal groundwork: the protocols modern command-line tools expect, and the install and update paths people expect from a daily driver. The agent surface (MCP, CLI, Agent Cockpit) already ships; see the [MCP reference](/docs/mcp-reference) and [Agent Cockpit](/docs/agent-cockpit).
 
+## Shipped in v0.71.22
+
+### Mobile & Agent Harness
+
+- **Unterm Pocket & Mobile Remote Gateway (`unterm-cli remote`)** — pair phones or tablets over LAN / Tailscale with a 6-digit single-use code or QR code in Web Settings, backed by scoped permissions (`full`, `approve`, `readonly`), live terminal streaming, and remote approval decisions.
+- **Localhost Dev-Server Preview Proxy** — automatically discovers active local web servers and proxies them at `/preview/<port>/` for paired devices.
+- **Hidden Git Checkpoints & Portable Handoffs** — zero-pollution Git checkpoints under `refs/unterm/checkpoints/<id>` (with diff and auto-backed-up restore), budgeted cross-agent Markdown handoffs, and foreground window + Accessibility (A11y) snapshots.
+
+### Terminal grid & rendering
+
+- **Main-screen reflow on resize** — re-wraps soft-wrapped lines when pane width changes and keeps the cursor line visible when shrinking height.
+- **xterm grid & ECMA-48 alignment** — `DECLRMM` left/right margins, rectangular area operations (`DECFRA`, `DECERA`, `DECSERA`) with clean wide-character splitting, global `?2026` synchronized output across screen switches, `LNM`, `DECST8C`, `XTSAVE` / `XTRESTORE`, and strict per-cell glyph placement and clipping.
+
 ## Shipped in v0.71.18
 
 ### Pictures

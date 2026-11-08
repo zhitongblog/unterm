@@ -17,6 +17,7 @@ Expanded single-file reference: https://unterm.app/llms-full.txt
 
 ## Recent releases
 
+- **v0.71.22 (2026-11-05):** adds Unterm Pocket mobile remote gateway (`unterm-cli remote`) over LAN / Tailscale with QR pairing and scoped permissions (`full`, `approve`, `readonly`), localhost dev-server discovery and `/preview/<port>/` proxy, zero-pollution hidden Git checkpoints (`refs/unterm/checkpoints/<id>`), cross-agent portable handoffs, and window + A11y snapshots; adds main-screen soft-wrap reflow on width resize, aligns `DECLRMM`, `DECFRA`/`DECERA`/`DECSERA`, `LNM`, `XTSAVE`/`XTRESTORE`, and global `?2026` synchronized output with xterm, clips glyphs strictly by cell, and eliminates Windows startup frame flash.
 - **v0.71.21 (2026-10-20):** recovers orphaned `WM_CHAR` messages on Windows so fast typing and IME commits no longer drop characters; keeps the cursor column unchanged on Insert Line / Delete Line (ECMA-48), clamps DSR cursor reports to the screen, and fixes backspace at the pending-wrap boundary, which removes tearing in TUIs such as Claude Code; the GUI reads screens from an event-driven local frame cache instead of making synchronous calls to the Core, removing UI stalls under heavy output.
 - **v0.61 (2026-08-02):** replaced the WezTerm fork with `next-core`, an in-house kernel of about 12,000 lines and 10 direct dependencies. Launch to a live MCP surface went from 7.1 s to 22 ms; idle CPU at a prompt from 80% of a core to 6.6%.
 - **v0.55 (2026-07-11):** Agent Cockpit — live agent state, Inbox, fleets, checkpoints and review.
@@ -51,6 +52,7 @@ Expanded single-file reference: https://unterm.app/llms-full.txt
 
 ## Blog
 
+- [v0.71.22: Unterm Pocket, Agent Harness, main-screen reflow & xterm grid alignment](https://unterm.app/blog/mobile-harness-reflow-v07122) ([中文](https://unterm.app/blog/mobile-harness-reflow-v07122-zh))
 - [v0.71.21: zero dropped keystrokes, clean TUI rendering](https://unterm.app/blog/smooth-typing-ecma48-v071) ([中文](https://unterm.app/blog/smooth-typing-ecma48-v071-zh))
 - [v0.61: our own kernel](https://unterm.app/blog/next-core-v061) ([中文](https://unterm.app/blog/next-core-v061-zh))
 - [v0.55: Agent Cockpit](https://unterm.app/blog/agent-cockpit-v055)
