@@ -759,9 +759,12 @@ pub fn close(id: &str) -> Result<Value> {
 
     // A question nobody answered is a refusal, said out loud: the CLI would
     // otherwise wait on it forever, and `wait` below with it.
+    let mut auto_denied = 0usize;
+    let mark = events.lock().unwrap().len();
     if let Some(host) = &host {
         let waiting: Vec<(String, Value)> = pending.lock().unwrap().drain().collect();
         for (request_id, input) in waiting {
+            auto_denied += 1;
             let decision = Decision::Deny {
                 message: "the session was closed before this was answered".into(),
                 interrupt: true,
@@ -770,6 +773,22 @@ pub fn close(id: &str) -> Result<Value> {
             let mut resolved = resolution(&request_id, &decision, "unterm");
             turn.stamp_now(&mut resolved);
             push(&events, &context, id, resolved);
+        }
+    }
+    if auto_denied > 0 {
+        // Let the CLI finish the turn it was just told to stop before its
+        // input ends. Closing stdin straight after the refusal raced it:
+        // live, Claude saw EOF mid-interrupt and exited 1, and a session
+        // that was closed on purpose read as one that failed.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let turn_over = events.lock().unwrap()[mark..]
+                .iter()
+                .any(|event| event["event"] == "turn.completed");
+            if turn_over || !running.is_running() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
     }
     let snapshot = running.wait()?;
@@ -781,10 +800,25 @@ pub fn close(id: &str) -> Result<Value> {
     // vanished must not read as success.
     let (state, reason) = match snapshot.last_stop {
         _ if snapshot.interrupted => ("interrupted", Some("interrupted".to_string())),
+        // Closed with questions open: unterm refused them and stopped the
+        // turn. That is an interruption by the host, whatever the exit code
+        // of a CLI that was cut off says -- and it says why.
+        _ if auto_denied > 0 => (
+            "interrupted",
+            Some(format!(
+                "closed with {auto_denied} unanswered approval request(s); denied and interrupted"
+            )),
+        ),
         Some(StopReason::Error) => ("failed", runtime::Running::failure_reason(&snapshot)),
-        _ if snapshot.exit_code.unwrap_or(0) != 0 => {
-            ("failed", runtime::Running::failure_reason(&snapshot))
-        }
+        _ if snapshot.exit_code.unwrap_or(0) != 0 => (
+            "failed",
+            runtime::Running::failure_reason(&snapshot).or_else(|| {
+                Some(format!(
+                    "the agent exited with {}",
+                    snapshot.exit_code.map(|c| c.to_string()).unwrap_or_default()
+                ))
+            }),
+        ),
         _ => ("exited", None),
     };
 
@@ -1412,7 +1446,8 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"i
         // Nobody answers. Close must not wait forever on a CLI that is
         // waiting on us.
         let ending = close(&id).unwrap();
-        assert_eq!(ending["state"], "finished", "{ending}");
+        assert_eq!(ending["state"], "interrupted", "{ending}");
+        assert!(ending["reason"].as_str().unwrap().contains("1 unanswered"), "{ending}");
         let (events, _) = replay_of(&id);
         let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
         assert_eq!(resolved["approval"]["decision"], "deny");
