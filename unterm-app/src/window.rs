@@ -11674,6 +11674,7 @@ impl App {
                     live.window.focus_window();
                     live.window.request_redraw();
                 }
+                self.resize_panes();
                 self.window.occluded = false;
                 self.window.quiet_since = None;
                 self.window.drawn_revision = None;
