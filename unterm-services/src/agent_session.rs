@@ -36,10 +36,84 @@ use unterm_tasks::AgentSession;
 /// is, because the consumer that receives it second-hand never saw the call
 /// it came from.
 ///
-/// A number rather than a string, matching the one the terminal manifest
-/// already publishes, so a reader has one convention to learn rather than
-/// two. Worth confirming against the schema before the contract freezes.
-const EVENT_SCHEMA_VERSION: u32 = 1;
+/// The constant `contracts/v0/brain/events.schema.json` pins it to. A string
+/// naming the object and its major version, the same convention as
+/// `provider_manifest.v0` on the terminal manifest.
+const EVENT_SCHEMA_VERSION: &str = "brain_event.v0";
+
+/// A `turn_…` id in the contract's shape: 26 Crockford base32 characters,
+/// a millisecond timestamp in the high 48 bits and randomness below it, so
+/// ids sort by when the turn began.
+///
+/// Made here rather than in the adapter on purpose: adapters are pure and
+/// reproducible, and an id needs a clock and an RNG. This is the boundary
+/// that publishes the contract, so it is the one that mints what the
+/// contract requires and the CLI never supplied.
+fn new_turn_id() -> String {
+    const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let millis = chrono::Utc::now().timestamp_millis().max(0) as u128 & ((1u128 << 48) - 1);
+    let random = uuid::Uuid::new_v4().as_u128() & ((1u128 << 80) - 1);
+    let mut value = (millis << 80) | random;
+    let mut out = [0u8; 26];
+    for slot in out.iter_mut().rev() {
+        *slot = ALPHABET[(value & 31) as usize];
+        value >>= 5;
+    }
+    format!("turn_{}", std::str::from_utf8(&out).expect("ascii"))
+}
+
+/// Which turn the events on this session belong to.
+///
+/// The CLIs have no turn ids of their own, so one is minted when a turn
+/// starts and carried on every event until it ends -- a consumer that is
+/// handed one event by itself can still say which turn it was part of.
+#[derive(Default)]
+struct TurnTracker {
+    current: Option<String>,
+}
+
+impl TurnTracker {
+    fn stamp(&mut self, event: &BrainEvent, described: &mut Value) {
+        if matches!(event, BrainEvent::TurnStarted { .. }) {
+            self.current = Some(new_turn_id());
+        }
+        if let (Some(turn), Some(map)) = (&self.current, described.as_object_mut()) {
+            map.insert("turn_id".into(), Value::String(turn.clone()));
+        }
+        if matches!(event, BrainEvent::TurnEnded { .. }) {
+            self.current = None;
+        }
+    }
+}
+
+/// How a turn ended, in the contract's terms.
+///
+/// `tool_request` is a pause -- the turn goes on after the tool runs -- so it
+/// is still `running`. A limit is resumable, which is what `interrupted`
+/// promises a consumer and `failed` would deny.
+fn turn_state(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::Completed => "finished",
+        StopReason::ToolRequest => "running",
+        StopReason::Interrupted | StopReason::Limit => "interrupted",
+        StopReason::Error => "failed",
+    }
+}
+
+/// The contract's `tool_call.arguments` is an object. A CLI that hands over
+/// a JSON-encoded string gets it decoded; anything else is wrapped rather
+/// than dropped, so nothing the model asked for disappears on the way.
+fn tool_arguments(arguments: &Value) -> Value {
+    match arguments {
+        Value::Object(_) => arguments.clone(),
+        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+            Ok(parsed @ Value::Object(_)) => parsed,
+            _ => json!({ "input": raw }),
+        },
+        Value::Null => json!({}),
+        other => json!({ "input": other }),
+    }
+}
 
 /// Where the caller's identifiers come from.
 ///
@@ -189,6 +263,8 @@ fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static 
                 "claude".into()
             } else if program.contains("codex") {
                 "codex".into()
+            } else if program.contains("gemini") {
+                "gemini".into()
             } else {
                 "generic".into()
             }
@@ -197,8 +273,9 @@ fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static 
     Ok(match chosen.as_str() {
         "claude" => ("claude", Box::new(unterm_brain::adapters::ClaudeAdapter::new())),
         "codex" => ("codex", Box::new(unterm_brain::adapters::CodexAdapter::new())),
+        "gemini" => ("gemini", Box::new(unterm_brain::adapters::GeminiAdapter::new())),
         "generic" => ("generic", Box::new(unterm_brain::adapters::GenericAdapter::new())),
-        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex or generic"),
+        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex, gemini or generic"),
     })
 }
 
@@ -258,8 +335,11 @@ pub fn start(
             let context = context.clone();
             let id = id.clone();
             move || {
+                let mut turn = TurnTracker::default();
                 for event in stream {
-                    push(&events, &context, &id, describe(&event));
+                    let mut described = describe(&event);
+                    turn.stamp(&event, &mut described);
+                    push(&events, &context, &id, described);
                 }
             }
         })
@@ -286,15 +366,18 @@ pub fn start(
 /// to know which CLI ran or which crate parsed it -- which is the whole point
 /// of not simply forwarding whatever Claude Code or Codex happened to print.
 ///
-/// `output.delta` keeps its `stream` discriminator rather than splitting
-/// reasoning into an event of its own. That is a deliberate divergence and
-/// the one place this file knowingly disagrees with `contracts/v0`: a
-/// consumer that wants to render a transcript in order needs the two
-/// interleaved, and two event names make that the consumer's problem. Raised
-/// for review on the contract side rather than settled here.
+/// The shapes are `contracts/v0/brain/events.schema.json`'s. `output.delta`
+/// keeps its `stream` discriminator rather than splitting reasoning into an
+/// event of its own -- the contract adopted that from here (`unzoo-one#15`).
+/// `turn_id` is added by [`TurnTracker`], not here.
 fn describe(event: &BrainEvent) -> Value {
     match event {
-        BrainEvent::TurnStarted { model } => json!({"event": "turn.started", "model": model}),
+        // Model is left out rather than null when the stream has not said
+        // yet: the contract types it as a string, and "unknown" is not one.
+        BrainEvent::TurnStarted { model } => match model {
+            Some(model) => json!({"event": "turn.started", "model": model}),
+            None => json!({"event": "turn.started"}),
+        },
         BrainEvent::Text { text } => {
             json!({"event": "output.delta", "stream": "assistant", "text": text, "message": text})
         }
@@ -307,9 +390,11 @@ fn describe(event: &BrainEvent) -> Value {
             arguments,
         } => json!({
             "event": "tool_call.requested",
-            "tool_call_id": call_id,
-            "name": name,
-            "arguments": arguments,
+            "tool_call": {
+                "tool": name,
+                "arguments": tool_arguments(arguments),
+                "external_call_id": call_id,
+            },
         }),
         BrainEvent::ToolResult {
             call_id,
@@ -317,14 +402,19 @@ fn describe(event: &BrainEvent) -> Value {
             output,
         } => json!({
             "event": "tool_call.result",
-            "tool_call_id": call_id,
+            // Same name as on the request, so the pair correlates by one key.
+            "external_call_id": call_id,
             "ok": ok,
             "output": output,
         }),
         BrainEvent::Usage(usage) => json!({"event": "usage.updated", "usage": usage}),
-        BrainEvent::TurnEnded { reason } => {
-            json!({"event": "turn.completed", "reason": reason.as_str()})
-        }
+        // `state` is the contract's; `reason` keeps the finer distinction
+        // (a limit and an interruption are both `interrupted`).
+        BrainEvent::TurnEnded { reason } => json!({
+            "event": "turn.completed",
+            "state": turn_state(*reason),
+            "reason": reason.as_str(),
+        }),
         // The CLI upstream has no stable code of its own -- it printed a
         // sentence -- so the code is assigned here, at the boundary that
         // owns the contract. That is the point of the field: a consumer
@@ -337,9 +427,11 @@ fn describe(event: &BrainEvent) -> Value {
             );
             json!({
                 "event": "error",
-                "code": body.code,
-                "message": body.message,
-                "retryable": body.retryable,
+                "error": {
+                    "code": body.code,
+                    "message": body.message,
+                    "retryable": body.retryable,
+                },
             })
         }
     }
@@ -469,9 +561,16 @@ pub fn close(id: &str) -> Result<Value> {
         _ => ("exited", None),
     };
 
+    // The stored record keeps unterm's own word (`exited`), which status
+    // queries and older rows already use; the event speaks the contract's,
+    // where a clean ending is `finished`.
+    let event_state = match state {
+        "exited" => "finished",
+        other => other,
+    };
     let ending = json!({
         "event": "session.closed",
-        "state": state,
+        "state": event_state,
         "exit_code": snapshot.exit_code,
         "reason": reason,
         "adapter": adapter,
@@ -580,7 +679,9 @@ printf '%s\n' '{"type":"turn.completed"}'
         )
         .unwrap();
         let ending = close(&id).unwrap();
-        assert_eq!(ending["state"], "exited");
+        // The contract's word for a clean ending; the stored row keeps
+        // `exited` (see `the_ending_outlives_the_process_that_hosted_it`).
+        assert_eq!(ending["state"], "finished");
 
         // `close` drains the reader, so everything is in by now.
         let (events, _) = replay_of(&id);
@@ -614,6 +715,93 @@ printf '%s\n' '{"type":"turn.completed"}'
             .collect();
         let ordered: Vec<u64> = (0..cursors.len() as u64).collect();
         assert_eq!(cursors, ordered, "cursors must be the events' own indices");
+    }
+
+    /// The per-event rules of `contracts/v0/brain/events.schema.json`, held
+    /// here because this crate has no JSON Schema validator. Set
+    /// `UNTERM_CONTRACT_DUMP=<file>` to write the events out and check them
+    /// against the schema itself (`contracts/v0` has ajv).
+    #[test]
+    fn every_event_has_the_contracts_shape() {
+        let _dir = isolate();
+        let script = r#"
+printf '%s\n' '{"type":"turn.started","model":"gpt-5"}'
+printf '%s\n' '{"type":"agent_reasoning","text":"look first"}'
+printf '%s\n' '{"type":"function_call","call_id":"c1","name":"shell","arguments":"{\"command\":\"ls\"}"}'
+printf '%s\n' '{"type":"function_call_output","call_id":"c1","exit_code":0,"output":"a"}'
+printf '%s\n' '{"type":"agent_message","text":"hello"}'
+printf '%s\n' '{"type":"token_count","input_tokens":3,"output_tokens":2,"cached_tokens":1}'
+printf '%s\n' '{"type":"turn.completed"}'
+printf '%s\n' 'not json at all'
+"#;
+        let id = start(
+            &a_codex_like_agent(script),
+            None,
+            &[],
+            None,
+            Some("codex"),
+            TaskContext::default(),
+        )
+        .unwrap();
+        close(&id).unwrap();
+        let (events, _) = replay_of(&id);
+
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            std::fs::write(&path, serde_json::to_string_pretty(&events).unwrap()).unwrap();
+        }
+
+        let turn_id = |event: &Value| {
+            let id = event["turn_id"].as_str().unwrap_or_default().to_string();
+            assert!(id.starts_with("turn_") && id.len() == 31, "{event}");
+            assert!(
+                id[5..].chars().all(|c| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(c)),
+                "{event}"
+            );
+            id
+        };
+        let mut turns = Vec::new();
+        for event in &events {
+            assert_eq!(event["schema_version"], "brain_event.v0", "{event}");
+            let at = event["at"].as_str().unwrap();
+            assert!(at.ends_with('Z') || at.ends_with("+00:00"), "{event}");
+            match event["event"].as_str().unwrap() {
+                "turn.started" => {
+                    assert!(event["model"].is_string(), "{event}");
+                    turns.push(turn_id(event));
+                }
+                "output.delta" => {
+                    assert!(matches!(event["stream"].as_str(), Some("assistant" | "reasoning")), "{event}");
+                    assert!(event["text"].is_string(), "{event}");
+                    assert!(event.get("message").is_none(), "{event}");
+                    turns.push(turn_id(event));
+                }
+                "tool_call.requested" => {
+                    assert_eq!(event["tool_call"]["tool"], "shell", "{event}");
+                    // A JSON-encoded string is decoded, not passed through.
+                    assert_eq!(event["tool_call"]["arguments"]["command"], "ls", "{event}");
+                    assert_eq!(event["tool_call"]["external_call_id"], "c1", "{event}");
+                }
+                "tool_call.result" => assert_eq!(event["external_call_id"], "c1", "{event}"),
+                "usage.updated" => assert!(event["usage"]["input_tokens"].is_u64(), "{event}"),
+                "turn.completed" => {
+                    assert_eq!(event["state"], "finished", "{event}");
+                    turns.push(turn_id(event));
+                }
+                "error" => {
+                    assert_eq!(event["error"]["code"], "brain.adapter_failed", "{event}");
+                    assert!(event["error"]["retryable"].is_boolean(), "{event}");
+                    assert!(event.get("turn_id").is_none(), "after the turn ended: {event}");
+                }
+                "session.closed" => {
+                    assert!(matches!(event["state"].as_str(), Some("finished" | "interrupted" | "failed")), "{event}")
+                }
+                "session.started" => {}
+                other => panic!("event the contract does not define: {other}"),
+            }
+        }
+        turns.dedup();
+        assert_eq!(turns.len(), 1, "one turn, one id carried throughout: {turns:?}");
+        assert!(events.iter().any(|e| e["event"] == "error"), "the junk line was reported");
     }
 
     // The events vector is moved into `close`; for assertions the audit trail
