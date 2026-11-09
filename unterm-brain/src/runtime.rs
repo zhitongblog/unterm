@@ -161,8 +161,9 @@ pub struct Running {
     readers: Vec<std::thread::JoinHandle<()>>,
 }
 
-/// Start a brain and begin reading it.
-pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
+/// The process a spec describes: program, args, pipes, directory, env.
+/// Split out so what the child inherits can be checked without running it.
+fn base_command(spec: &Spec) -> Command {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -171,10 +172,21 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
         .stderr(Stdio::piped());
     if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
+        // What a shell does on `cd`, and what Bun/Node agents read first:
+        // OpenCode resolved its project from an inherited, stale `PWD` and
+        // ran its tools in the directory Unterm was launched from, not the
+        // one asked for. Caller-supplied env below still wins.
+        command.env("PWD", cwd);
     }
     for (key, value) in &spec.env {
         command.env(key, value);
     }
+    command
+}
+
+/// Start a brain and begin reading it.
+pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
+    let mut command = base_command(spec);
     // Its own process group, so interrupting reaches the shells and builds the
     // agent started rather than only the agent itself.
     #[cfg(unix)]
@@ -572,6 +584,27 @@ sleep 30"#;
             Some("connection refused"),
             "a brain that failed without saying why must still be diagnosable"
         );
+    }
+
+    #[test]
+    fn the_brain_is_told_its_directory_in_pwd_too() {
+        // OpenCode (Bun) trusts PWD over the real cwd; a stale one inherited
+        // from the launching shell sent its tools to the wrong directory.
+        let dir = std::env::temp_dir();
+        let spec = Spec::new("anything").cwd(&dir);
+        let command = base_command(&spec);
+        let pwd = command
+            .get_envs()
+            .find(|(key, _)| *key == "PWD")
+            .and_then(|(_, value)| value);
+        assert_eq!(pwd, Some(dir.as_os_str()));
+        assert_eq!(command.get_current_dir(), Some(dir.as_path()));
+
+        // A caller that sets PWD itself is not overridden.
+        let spec = Spec::new("anything").cwd(&dir).env("PWD", "/elsewhere");
+        let command = base_command(&spec);
+        let pwd = command.get_envs().filter(|(key, _)| *key == "PWD").last().and_then(|(_, v)| v);
+        assert_eq!(pwd, Some(std::ffi::OsStr::new("/elsewhere")));
     }
 
     #[test]
