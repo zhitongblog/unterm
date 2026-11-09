@@ -82,14 +82,208 @@ fn global_commits() -> &'static Mutex<Vec<String>> {
 }
 
 fn push_global_commit(cmd: &str) {
+    let cmd = cmd.trim_end_matches('\\').trim();
+    if cmd.is_empty() {
+        return;
+    }
     let mut g = global_commits().lock();
-    if g.last().map_or(true, |last| last != cmd) {
-        g.push(cmd.to_string());
-        if g.len() > MAX_GLOBAL_COMMITS {
-            let drop = MAX_GLOBAL_COMMITS / 8;
-            g.drain(..drop);
+    g.retain(|existing| existing != cmd);
+    g.push(cmd.to_string());
+    if g.len() > MAX_GLOBAL_COMMITS {
+        let drop = g.len() - MAX_GLOBAL_COMMITS;
+        g.drain(..drop);
+    }
+    drop(g);
+    #[cfg(not(test))]
+    persist_ghost_commit(cmd);
+}
+
+fn user_home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+fn ghost_history_file_path() -> Option<std::path::PathBuf> {
+    let home = user_home_dir()?;
+    Some(home.join(".unterm").join("ghost_history"))
+}
+
+#[cfg(not(test))]
+fn persist_ghost_commit(cmd: &str) {
+    use std::io::Write;
+    let Some(path) = ghost_history_file_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(file, "{cmd}");
+    }
+}
+
+/// Unmetafy zsh history bytes (`0x83` followed by `byte ^ 0x20`).
+fn unmetafy_zsh_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x83 && i + 1 < bytes.len() {
+            out.push(bytes[i + 1] ^ 0x20);
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
         }
     }
+    out
+}
+
+fn is_synthetic_test_command(cmd: &str) -> bool {
+    cmd.contains("__UNTERM_DONE_")
+        || cmd.contains("next-core-")
+        || cmd.contains("CALLER_PANE_MARK")
+        || cmd.contains("WATCHED_PANE_MARK")
+        || cmd.contains("stale-pane-fallback-ok")
+        || cmd.contains("pane-resolution-ok")
+        || cmd.contains("nc-key-path")
+}
+
+fn clean_history_command(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('\\').trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_INPUT_LEN {
+        return None;
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    if is_synthetic_test_command(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn parse_zsh_or_plain_history(bytes: &[u8]) -> Vec<String> {
+    let decoded = unmetafy_zsh_bytes(bytes);
+    let text = String::from_utf8_lossy(&decoded);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let cmd_part = if let Some(rest) = trimmed.strip_prefix(": ") {
+            rest.split_once(';').map(|(_, cmd)| cmd).unwrap_or(trimmed)
+        } else {
+            trimmed
+        };
+        if let Some(clean) = clean_history_command(cmd_part) {
+            out.push(clean);
+        }
+    }
+    out
+}
+
+fn parse_fish_history(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some(cmd) = line.trim_start().strip_prefix("- cmd: ") {
+            if let Some(clean) = clean_history_command(cmd) {
+                out.push(clean);
+            }
+        }
+    }
+    out
+}
+
+/// Seed the cross-pane command history from the user's shell history files and
+/// Unterm's persisted ghost history once per process, off the key-event path.
+pub fn ensure_history_loaded() {
+    static LOADED: OnceLock<()> = OnceLock::new();
+    LOADED.get_or_init(|| {
+        let Some(home) = user_home_dir() else {
+            return;
+        };
+        let mut seeded: Vec<String> = Vec::new();
+        let mut push_dedup = |cmd: String| {
+            seeded.retain(|existing| existing != &cmd);
+            seeded.push(cmd);
+        };
+
+        // 1. Shell history files (bash, zsh, fish, PowerShell PSReadLine)
+        let bash_path = home.join(".bash_history");
+        if let Ok(bytes) = std::fs::read(&bash_path) {
+            for cmd in parse_zsh_or_plain_history(&bytes) {
+                push_dedup(cmd);
+            }
+        }
+
+        let fish_path = home.join(".local/share/fish/fish_history");
+        if let Ok(text) = std::fs::read_to_string(&fish_path) {
+            for cmd in parse_fish_history(&text) {
+                push_dedup(cmd);
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        if let Some(appdata) = std::env::var_os("APPDATA").map(std::path::PathBuf::from) {
+            let ps_path = appdata
+                .join("Microsoft")
+                .join("Windows")
+                .join("PowerShell")
+                .join("PSReadLine")
+                .join("ConsoleHost_history.txt");
+            if let Ok(bytes) = std::fs::read(&ps_path) {
+                for cmd in parse_zsh_or_plain_history(&bytes) {
+                    push_dedup(cmd);
+                }
+            }
+        }
+
+        let zsh_path = home.join(".zsh_history");
+        if let Ok(bytes) = std::fs::read(&zsh_path) {
+            for cmd in parse_zsh_or_plain_history(&bytes) {
+                push_dedup(cmd);
+            }
+        }
+
+        // 2. Unterm's own persisted ghost history (most recent authority)
+        if let Some(unterm_hist) = ghost_history_file_path() {
+            if let Ok(bytes) = std::fs::read(&unterm_hist) {
+                let parsed = parse_zsh_or_plain_history(&bytes);
+                for cmd in &parsed {
+                    push_dedup(cmd.clone());
+                }
+                // Compact the on-disk file if it grew large
+                if parsed.len() > MAX_GLOBAL_COMMITS {
+                    let keep_start = parsed.len().saturating_sub(MAX_GLOBAL_COMMITS);
+                    let body = parsed[keep_start..].join("\n") + "\n";
+                    let _ = std::fs::write(&unterm_hist, body);
+                }
+            }
+        }
+
+        if seeded.is_empty() {
+            return;
+        }
+        if seeded.len() > MAX_GLOBAL_COMMITS {
+            let drop = seeded.len() - MAX_GLOBAL_COMMITS;
+            seeded.drain(..drop);
+        }
+
+        let mut g = global_commits().lock();
+        let in_session = std::mem::take(&mut *g);
+        for cmd in in_session {
+            seeded.retain(|existing| existing != &cmd);
+            seeded.push(cmd);
+        }
+        if seeded.len() > MAX_GLOBAL_COMMITS {
+            let drop = seeded.len() - MAX_GLOBAL_COMMITS;
+            seeded.drain(..drop);
+        }
+        *g = seeded;
+    });
 }
 
 /// Record a keyboard event on `pane_id`. `external_candidates` is
@@ -405,6 +599,38 @@ const BUILTIN_AGENT_FLAGS: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "agy",
+        &[
+            "--dangerously-skip-permissions",
+            "--continue",
+            "-c",
+            "--conversation {value}",
+            "--model {value}",
+            "--mode {value}",
+            "--effort {value}",
+            "--print",
+            "-p {value}",
+            "--prompt {value}",
+            "--prompt-interactive {value}",
+            "-i {value}",
+            "--add-dir {value}",
+            "--agent {value}",
+            "--sandbox",
+            "--remote-agent",
+            "--remote-control",
+            "--project {value}",
+            "--new-project",
+            "--output-format {value}",
+            "--input-format {value}",
+            "--json-schema {value}",
+            "--disable-slash-commands",
+            "--settings {value}",
+            "--log-file {value}",
+            "--help",
+            "--version",
+        ],
+    ),
+    (
         "codex",
         &[
             "--model {value}",
@@ -508,13 +734,17 @@ fn flag_completion_token(arg: &str) -> String {
 
 /// Ghost continuation that completes a known AI agent's exec name from the
 /// manifest set, while the user is still typing the first token (no space yet).
-/// `cla` → `ude` (claude), `cod` → `ex` (codex), `gem` → `ini` (gemini). Picks
-/// the alphabetically-first match for determinism when several agents share a
-/// prefix. This is what makes "type an AI command, it completes" work even
-/// before that command is in history.
+/// `cla` → `ude` (claude), `ag` → `y` (agy), `cod` → `ex` (codex), `gem` → `ini` (gemini).
+/// Built-in agents are checked in their priority order first, then any extra
+/// runtime manifest agents alphabetically.
 fn agent_exec_ghost(input: &str) -> Option<String> {
     if input.is_empty() || input.contains(' ') {
         return None;
+    }
+    for (exec, _) in BUILTIN_AGENT_FLAGS {
+        if exec.len() > input.len() && exec.starts_with(input) {
+            return Some(exec[input.len()..].to_string());
+        }
     }
     let map = agent_flag_tokens().read();
     let mut best: Option<&str> = None;
@@ -613,6 +843,8 @@ mod tests {
     fn agent_exec_ghost_completes_agent_names() {
         // Known terminal agent commands, including baked manifests and runtime-only CLIs.
         assert_eq!(agent_exec_ghost("cla").as_deref(), Some("ude"));
+        assert_eq!(agent_exec_ghost("ag").as_deref(), Some("y"));
+        assert_eq!(agent_exec_ghost("ai").as_deref(), Some("der"));
         assert_eq!(agent_exec_ghost("gem").as_deref(), Some("ini"));
         assert_eq!(agent_exec_ghost("kim").as_deref(), Some("i"));
         assert_eq!(agent_exec_ghost("tra").as_deref(), Some("e-cli"));
@@ -627,6 +859,11 @@ mod tests {
     fn agent_flag_ghost_completes_full_flag_set() {
         // Built-in catalog: claude --mod → "el " (--model ).
         assert_eq!(agent_flag_ghost("claude --mod").as_deref(), Some("el "));
+        // agy --d → "angerously-skip-permissions".
+        assert_eq!(
+            agent_flag_ghost("agy --d").as_deref(),
+            Some("angerously-skip-permissions")
+        );
         // codex --sand → "box " (--sandbox ).
         assert_eq!(agent_flag_ghost("codex --sand").as_deref(), Some("box "));
         // gemini --yo → "lo" (--yolo, no value).
@@ -636,6 +873,20 @@ mod tests {
         assert_eq!(agent_flag_ghost("zcode --ver").as_deref(), Some("sion"));
         // Only fires for a known agent exec.
         assert_eq!(agent_flag_ghost("ls --mod"), None);
+    }
+
+    #[test]
+    fn parse_zsh_history_strips_extended_timestamps_and_trailing_backslashes() {
+        let raw = b": 1731148000:0;git status\nagy --dangerously-skip-permissions\\\n\necho next-core-fleet\ncargo test --workspace\n";
+        let parsed = parse_zsh_or_plain_history(raw);
+        assert_eq!(
+            parsed,
+            vec![
+                "git status".to_string(),
+                "agy --dangerously-skip-permissions".to_string(),
+                "cargo test --workspace".to_string(),
+            ]
+        );
     }
 
     #[test]

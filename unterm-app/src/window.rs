@@ -7525,7 +7525,15 @@ impl App {
                     Ok(text) if !text.is_empty() => {
                         let _ = self.engine.scroll_viewport_to(pane_id, isize::MAX);
                         match self.engine.paste_input(pane_id, &text) {
-                            Ok(_) => self.show_notice(unterm_services::i18n::t("interaction.pasted")),
+                            Ok(_) => {
+                                if crate::ghost::observe_paste(pane_id as u64, &text) {
+                                    self.window.drawn_revision = None;
+                                    if let Some(live) = self.window.state.as_ref() {
+                                        live.window.request_redraw();
+                                    }
+                                }
+                                self.show_notice(unterm_services::i18n::t("interaction.pasted"));
+                            }
                             Err(err) => {
                                 log::warn!("could not paste: {err:#}");
                                 self.show_notice(unterm_services::i18n::t("interaction.paste_failed"));

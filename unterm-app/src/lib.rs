@@ -392,6 +392,9 @@ fn stallwatch_and_watchers() {
     // window must leave a trace, not an argument about whether it happened.
     stallwatch::start();
     startup_trace::mark("stallwatch.started");
+    // Preload shell history and agent manifest flags on a worker thread so
+    // Ghost Text command completion is ready before the first keystroke.
+    ghost::warm_up();
     // And the input-source watcher, so a composition stranded by a source
     // switch is cleared before it can swallow anyone's Backspace.
     #[cfg(target_os = "macos")]

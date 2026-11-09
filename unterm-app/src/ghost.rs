@@ -7,9 +7,17 @@ use termwiz::cell::unicode_column_width;
 use unterm_services::ghost_text::InputEvent;
 use winit::keyboard::{Key, NamedKey};
 
-/// Merge the signed on-disk manifest flag catalog once, off the key-event
-/// path. Built-in completions remain immediately available while this worker
-/// is running; manifest-only agents gain completions when it finishes.
+/// Warm up the predictor on a background thread: load shell/persisted command
+/// history first so fresh panes immediately complete recent commands, then
+/// merge the signed on-disk manifest flag catalog.
+pub fn warm_up() {
+    ensure_manifest_flags_loading();
+}
+
+/// Merge shell command history and the signed on-disk manifest flag catalog
+/// once, off the key-event path. Built-in completions remain immediately
+/// available while this worker is running; shell history and manifest-only
+/// agents become available as soon as it finishes.
 fn ensure_manifest_flags_loading() {
     use std::sync::OnceLock;
     static STARTED: OnceLock<()> = OnceLock::new();
@@ -17,6 +25,7 @@ fn ensure_manifest_flags_loading() {
         std::thread::Builder::new()
             .name("ghost-manifest-flags".to_string())
             .spawn(|| {
+                unterm_services::ghost_text::ensure_history_loaded();
                 let Ok(set) = unterm_agents::fetch_manifests_offline() else {
                     return;
                 };
@@ -95,12 +104,29 @@ pub fn observe_text(pane_id: u64, text: &str) -> bool {
         unterm_services::ghost_text::cancel_input(pane_id);
         return false;
     }
+    ensure_manifest_flags_loading();
     let mut changed = false;
     for ch in text.chars().filter(|ch| !ch.is_control()) {
         unterm_services::ghost_text::observe(pane_id, InputEvent::Char(ch), &[]);
         changed = true;
     }
     changed
+}
+
+/// Feed pasted text to the predictor so single-line pastes (such as pasting a
+/// flag or path after a command name) keep the current input buffer in sync
+/// and commit the complete command on Enter.
+pub fn observe_paste(pane_id: u64, text: &str) -> bool {
+    if !pane_takes_predictions(pane_id) {
+        unterm_services::ghost_text::cancel_input(pane_id);
+        return false;
+    }
+    ensure_manifest_flags_loading();
+    if text.contains('\n') || text.contains('\r') {
+        unterm_services::ghost_text::cancel_input(pane_id);
+        return true;
+    }
+    observe_text(pane_id, text)
 }
 
 /// Right Arrow and End accept a visible prediction, as in the previous GUI.
