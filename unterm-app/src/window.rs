@@ -935,6 +935,10 @@ pub struct App {
     /// event means. A swap moves a struct of fields, not a frame or a
     /// surface, and it happens once per event rather than once per frame.
     parked: Vec<ParkedWindow>,
+    /// When an interactive region screenshot started, so double-clicks do not
+    /// spawn overlapping snipping sessions and early `Focused(true)` events
+    /// while `ms-screenclip:` is launching do not prematurely uncloak the window.
+    capture_started_at: Option<std::time::Instant>,
 }
 
 impl WindowState {
@@ -1647,6 +1651,7 @@ impl App {
             config: config.clone(),
             configured_pixel_size: pixel_size,
             parked: Vec::new(),
+            capture_started_at: None,
             window: WindowState::fresh(
                 unterm_engine::reserve_window_id(),
                 config,
@@ -7563,10 +7568,11 @@ impl App {
                     }
                 },
                 ClipboardResult::ScreenshotFinished { mode, result } => {
+                    self.capture_started_at = None;
                     self.window.occluded = false;
+                    self.set_all_windows_capture_cloak(false);
                     #[cfg(windows)]
                     if let Some(live) = self.window.state.as_ref() {
-                        crate::win_chrome::set_capture_cloak(&live.window, false);
                         crate::win_chrome::bring_to_front(&live.window);
                         live.window.focus_window();
                     }
@@ -8373,6 +8379,55 @@ impl App {
         None
     }
 
+    /// A press on the confirmation banner strip when a prompt is waiting.
+    /// Returns true whenever the press landed on the strip so it never leaks
+    /// into the terminal underneath; clicking one of the three action labels
+    /// resolves the confirmation immediately.
+    fn click_confirmation_banner(&mut self) -> bool {
+        let Some(view) = unterm_mcp::handler::pending_confirmation_view() else {
+            return false;
+        };
+        let Some(live) = self.window.state.as_ref() else {
+            return false;
+        };
+        let window_width = live.width as f32;
+        let height = live.height as f32;
+        let metrics = self.window.font.metrics();
+        let pt = self.chrome_pt();
+        let pad = (crate::ui_tokens::STATUS_BAR_VERTICAL_PADDING * pt)
+            .round()
+            .max(2.0);
+        let bar_height = (metrics.height + pad * 2.0).round().max(1.0);
+        let top = height - bar_height - self.status_bar_height();
+        let left = self.dock_width(metrics);
+        if self.window.pointer.0 < left
+            || self.window.pointer.1 < top
+            || self.window.pointer.1 >= top + bar_height
+        {
+            return false;
+        }
+        let strip_width = (window_width - left).max(0.0);
+        let columns = (strip_width / metrics.width.max(1.0)).floor().max(0.0) as usize;
+        let line = crate::confirm::status_line(
+            &view.agent,
+            &view.method,
+            &view.input_preview,
+            columns.saturating_sub(3),
+        );
+        let pen = left + (crate::ui_tokens::CHROME_PANEL_INSET * pt).round();
+        let col = ((self.window.pointer.0 - pen) / metrics.width.max(1.0))
+            .floor()
+            .max(0.0) as usize;
+        if let Some(decision) = crate::confirm::decision_at_column(&line, col) {
+            unterm_mcp::handler::resolve_confirmation(view.id, decision);
+            if let Some(live) = self.window.state.as_ref() {
+                live.window.request_redraw();
+            }
+        }
+        self.window.drawn_revision = None;
+        true
+    }
+
     /// A press on the bottom bar. True whenever it landed in the bar, so a
     /// missed chip is swallowed rather than falling through to the terminal
     /// as a stray selection; each chip does what 0.57.4's did.
@@ -8573,14 +8628,17 @@ impl App {
         let tx = self.clipboard_tx.clone();
         crate::clipboard::run(tx, move || {
             let result = crate::mcp_host::scrollback_png(pane, &path)
-                .map(|_| path)
-                .map_err(|err| format!("{err:#}"))
-                .and_then(|path| {
-                    arboard::Clipboard::new()
-                        .and_then(|mut board| board.set_text(path.display().to_string()))
-                        .map_err(|err| err.to_string())?;
-                    Ok(path)
-                });
+                .map(|image| {
+                    if let Ok(mut board) = arboard::Clipboard::new() {
+                        let _ = board.set_image(arboard::ImageData {
+                            width: image.width() as usize,
+                            height: image.height() as usize,
+                            bytes: std::borrow::Cow::Owned(image.into_raw()),
+                        });
+                    }
+                    path
+                })
+                .map_err(|err| format!("{err:#}"));
             ClipboardResult::ScrollbackCaptured(result)
         });
         self.show_notice(unterm_services::i18n::t("scrollshot.started"));
@@ -9781,8 +9839,31 @@ impl App {
         self.window.drawn_revision = None;
     }
 
+    fn set_all_windows_capture_cloak(&mut self, cloaked: bool) {
+        #[cfg(windows)]
+        {
+            if let Some(live) = self.window.state.as_ref() {
+                crate::win_chrome::set_capture_cloak(&live.window, cloaked);
+            }
+            for parked in &self.parked {
+                if let Some(live) = parked.state.state.as_ref() {
+                    crate::win_chrome::set_capture_cloak(&live.window, cloaked);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = cloaked;
+    }
+
     /// Start the same native interactive screenshot flow 0.57.4 used.
     fn start_system_capture(&mut self, hide_window: bool) {
+        if self
+            .capture_started_at
+            .map_or(false, |t| t.elapsed() < std::time::Duration::from_secs(32))
+        {
+            return;
+        }
+        self.capture_started_at = Some(std::time::Instant::now());
         let mode = if hide_window {
             unterm_services::i18n::t("screenshot.mode.hidden")
         } else {
@@ -9792,11 +9873,8 @@ impl App {
             "screenshot.started",
             &[("mode", &mode)],
         ));
-        #[cfg(windows)]
         if hide_window {
-            if let Some(live) = self.window.state.as_ref() {
-                crate::win_chrome::set_capture_cloak(&live.window, true);
-            }
+            self.set_all_windows_capture_cloak(true);
         }
         let tx = self.clipboard_tx.clone();
         crate::clipboard::run(tx, move || ClipboardResult::ScreenshotFinished {
@@ -11583,6 +11661,31 @@ impl App {
         if self.window.composer.is_some() {
             self.drain_composer();
         }
+        if let Some(pane_id) = crate::mcp_host::take_focus_pane_request() {
+            self.sync_tabs();
+            if let Some(tab_id) = self.window.tabs.tab_of_pane(pane_id) {
+                self.window.tabs.set_active_tab(tab_id);
+                self.window.tab_id = Some(tab_id);
+                let _ = self.window.tabs.set_active_pane(pane_id);
+                if let Some(live) = self.window.state.as_mut() {
+                    live.session_id = pane_id;
+                    live.window.set_minimized(false);
+                    crate::win_chrome::bring_to_front(&live.window);
+                    live.window.focus_window();
+                    live.window.request_redraw();
+                }
+                self.window.occluded = false;
+                self.window.quiet_since = None;
+                self.window.drawn_revision = None;
+            }
+        }
+        if self.window.occluded
+            && self.window.drawn_confirmation
+                != unterm_mcp::handler::pending_confirmation_view().map(|v| v.id)
+        {
+            self.window.occluded = false;
+            self.window.quiet_since = None;
+        }
         if self.window.occluded {
             // Nothing is shown, so nothing is drawn: `draw` returns at once
             // for an occluded window and never records what it was asked to
@@ -11893,11 +11996,12 @@ impl ApplicationHandler for App {
 
             WindowEvent::Focused(focused) => {
                 self.window.focused = focused;
-                #[cfg(windows)]
-                if focused {
-                    if let Some(live) = self.window.state.as_ref() {
-                        crate::win_chrome::set_capture_cloak(&live.window, false);
-                    }
+                if focused
+                    && self.capture_started_at.map_or(true, |started| {
+                        started.elapsed() > std::time::Duration::from_millis(1200)
+                    })
+                {
+                    self.set_all_windows_capture_cloak(false);
                 }
                 self.sync_frame();
                 // What `instance.windows` calls focused, and the window a
@@ -12621,6 +12725,13 @@ impl ApplicationHandler for App {
                     && self.window.drag.is_none()
                     && !self.window.dragging_scrollbar
                     && self.click_git_panel()
+                {
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && !secondary
+                    && self.click_confirmation_banner()
                 {
                     return;
                 }

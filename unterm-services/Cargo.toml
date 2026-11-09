@@ -49,7 +49,7 @@ core-graphics.workspace = true
 png.workspace = true
 
 [target."cfg(windows)".dependencies]
-winapi = { workspace = true, features = ["handleapi", "jobapi2", "processthreadsapi", "winnt", "synchapi", "errhandlingapi", "consoleapi", "wincon", "winuser", "wingdi", "psapi", "sysinfoapi", "winbase", "minwindef", "shellapi", "libloaderapi", "tlhelp32", "jobapi", "sddl", "securitybaseapi", "minwinbase"] }
+winapi = { workspace = true, features = ["handleapi", "jobapi2", "processthreadsapi", "winnt", "synchapi", "errhandlingapi", "consoleapi", "wincon", "winuser", "wingdi", "dwmapi", "psapi", "sysinfoapi", "winbase", "minwindef", "shellapi", "libloaderapi", "tlhelp32", "jobapi", "sddl", "securitybaseapi", "minwinbase"] }
 winreg.workspace = true
 
 [dev-dependencies]

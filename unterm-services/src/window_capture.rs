@@ -506,21 +506,34 @@ fn find_window(
     title: Option<&str>,
     pid: Option<u32>,
 ) -> anyhow::Result<winapi::shared::windef::HWND> {
-    use winapi::shared::minwindef::{BOOL, LPARAM, TRUE};
-    use winapi::shared::windef::HWND;
+    use winapi::shared::minwindef::{BOOL, DWORD, LPARAM, TRUE};
+    use winapi::shared::windef::{HWND, RECT};
+    use winapi::um::dwmapi::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use winapi::um::winuser::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible,
     };
 
     struct Search {
         title: Option<String>,
         pid: Option<u32>,
         found: Option<HWND>,
+        fallback: Option<HWND>,
     }
 
     unsafe extern "system" fn visit(window: HWND, param: LPARAM) -> BOOL {
         let search = &mut *(param as *mut Search);
         if IsWindowVisible(window) == 0 {
+            return TRUE;
+        }
+        let mut cloaked: DWORD = 0;
+        let _ = DwmGetWindowAttribute(
+            window,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut DWORD as *mut _,
+            std::mem::size_of::<DWORD>() as DWORD,
+        );
+        if cloaked != 0 {
             return TRUE;
         }
         if let Some(wanted) = search.pid {
@@ -538,6 +551,21 @@ fn find_window(
                 return TRUE;
             }
         }
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let has_area = GetWindowRect(window, &mut rect) != 0
+            && (rect.right - rect.left) >= MIN_REGION as i32
+            && (rect.bottom - rect.top) >= MIN_REGION as i32;
+        if !has_area || IsIconic(window) != 0 {
+            if search.fallback.is_none() && has_area {
+                search.fallback = Some(window);
+            }
+            return TRUE;
+        }
         search.found = Some(window);
         0 // FALSE: stop, we have one.
     }
@@ -546,6 +574,7 @@ fn find_window(
         title: title.map(str::to_string),
         pid,
         found: None,
+        fallback: None,
     };
     // SAFETY: the callback only touches `search`, which outlives the call.
     unsafe {
@@ -553,6 +582,7 @@ fn find_window(
     }
     search
         .found
+        .or(search.fallback)
         .ok_or_else(|| anyhow::anyhow!("no visible window matched"))
 }
 
@@ -591,7 +621,7 @@ fn screen_under(
     height: usize,
 ) -> anyhow::Result<Vec<u8>> {
     use winapi::shared::windef::RECT;
-    use winapi::um::wingdi::{BitBlt, SRCCOPY};
+    use winapi::um::wingdi::{BitBlt, CAPTUREBLT, SRCCOPY};
     use winapi::um::winuser::{GetDC, GetWindowRect, ReleaseDC};
 
     let mut rect = RECT {
@@ -619,7 +649,7 @@ fn screen_under(
                 screen_dc,
                 rect.left,
                 rect.top,
-                SRCCOPY,
+                SRCCOPY | CAPTUREBLT,
             ) != 0
         });
         ReleaseDC(std::ptr::null_mut(), screen_dc);

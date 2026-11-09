@@ -124,6 +124,33 @@ pub fn decision_for(text: &str) -> Option<unterm_mcp::handler::ConfirmationDecis
     }
 }
 
+/// Which decision a mouse click at `column` (0-based monospace column from the
+/// start of `line`) hits on the confirmation banner, if any.
+pub fn decision_at_column(
+    line: &str,
+    column: usize,
+) -> Option<unterm_mcp::handler::ConfirmationDecision> {
+    use unterm_mcp::handler::ConfirmationDecision;
+    let enter_byte = line.rfind("[Enter]")?;
+    let a_byte = line[enter_byte..].find("[A]").map(|off| enter_byte + off)?;
+    let esc_byte = line[a_byte..].find("[Esc]").map(|off| a_byte + off)?;
+
+    let enter_col = columns_of(&line[..enter_byte]);
+    let a_col = columns_of(&line[..a_byte]);
+    let esc_col = columns_of(&line[..esc_byte]);
+    let end_col = columns_of(line);
+
+    if column >= esc_col && column <= end_col {
+        Some(ConfirmationDecision::Block)
+    } else if column >= a_col && column < esc_col {
+        Some(ConfirmationDecision::AlwaysAllow)
+    } else if column >= enter_col && column < a_col {
+        Some(ConfirmationDecision::Allow)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +212,28 @@ mod tests {
         assert!(line.contains("[Enter]"));
         assert!(line.contains("[A]"));
         assert!(line.contains("[Esc]"));
+    }
+
+    #[test]
+    fn clicking_banner_buttons_resolves_to_matching_decisions() {
+        use unterm_mcp::handler::ConfirmationDecision;
+        let line = status_line("claude", "exec.run_wait", "rg --files", 120);
+        let enter_col = columns_of(&line[..line.rfind("[Enter]").unwrap()]);
+        let a_col = columns_of(&line[..line.rfind("[A]").unwrap()]);
+        let esc_col = columns_of(&line[..line.rfind("[Esc]").unwrap()]);
+        assert!(matches!(
+            decision_at_column(&line, enter_col + 1),
+            Some(ConfirmationDecision::Allow)
+        ));
+        assert!(matches!(
+            decision_at_column(&line, a_col + 1),
+            Some(ConfirmationDecision::AlwaysAllow)
+        ));
+        assert!(matches!(
+            decision_at_column(&line, esc_col + 1),
+            Some(ConfirmationDecision::Block)
+        ));
+        assert!(decision_at_column(&line, 0).is_none());
     }
 
     #[test]

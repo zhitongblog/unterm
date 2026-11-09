@@ -218,7 +218,7 @@ impl FontStack {
     /// scrollback capture, say. Returns None when the machine has no
     /// monospace font at all, which is a thing to report rather than panic on.
     pub fn system(pixel_size: u32) -> Option<Self> {
-        let index = FontIndex::scan();
+        let index = FontIndex::cached();
         let entry = index.default_monospace()?;
         let primary = FontFace::open(&entry.path, pixel_size).ok()?;
         Some(FontStack::new(primary, &[], pixel_size))

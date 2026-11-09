@@ -2169,7 +2169,9 @@ impl HostChannelClient {
         stream
             .set_read_timeout(Some(Duration::from_millis(200)))
             .ok();
-        let mut writer = stream.try_clone().context("clone host channel stream")?;
+        let writer = Arc::new(std::sync::Mutex::new(
+            stream.try_clone().context("clone host channel stream")?,
+        ));
         let stopping = Arc::new(AtomicBool::new(false));
         let worker_stopping = stopping.clone();
         let worker = std::thread::Builder::new()
@@ -2186,21 +2188,33 @@ impl HostChannelClient {
                                 continue;
                             };
                             let call = frame.host_call;
-                            // Every call is answered, including the ones
-                            // that fail: a Core left waiting on a silent
-                            // window is the failure mode this whole
-                            // channel exists to avoid.
-                            let reply = match responder.respond(&call.method, &call.params) {
-                                Ok(result) => serde_json::json!({"host_reply": {
-                                    "id": call.id, "ok": true, "result": result,
-                                }}),
-                                Err(err) => serde_json::json!({"host_reply": {
-                                    "id": call.id, "ok": false, "error": format!("{err:#}"),
-                                }}),
-                            };
-                            if writeln!(writer, "{reply}").is_err() || writer.flush().is_err() {
-                                break;
-                            }
+                            // Dispatch each call off the reader thread so a
+                            // long-running prompt (`ask_confirmation`) never
+                            // head-of-line blocks `request_repaint`,
+                            // `list_windows`, `focus_window`, or another prompt.
+                            let responder = responder.clone();
+                            let writer = writer.clone();
+                            let worker_stopping = worker_stopping.clone();
+                            std::thread::Builder::new()
+                                .name("core-host-call".into())
+                                .spawn(move || {
+                                    let reply = match responder.respond(&call.method, &call.params) {
+                                        Ok(result) => serde_json::json!({"host_reply": {
+                                            "id": call.id, "ok": true, "result": result,
+                                        }}),
+                                        Err(err) => serde_json::json!({"host_reply": {
+                                            "id": call.id, "ok": false, "error": format!("{err:#}"),
+                                        }}),
+                                    };
+                                    let Ok(mut guard) = writer.lock() else {
+                                        worker_stopping.store(true, Ordering::Release);
+                                        return;
+                                    };
+                                    if writeln!(guard, "{reply}").is_err() || guard.flush().is_err() {
+                                        worker_stopping.store(true, Ordering::Release);
+                                    }
+                                })
+                                .ok();
                         }
                         Err(err)
                             if matches!(

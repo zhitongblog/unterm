@@ -85,6 +85,26 @@ fn window_with_id() -> Option<(u64, std::sync::Arc<winit::window::Window>)> {
         .map(|known| (known.id, known.handle.clone()))
 }
 
+fn window_for_pane(pane_id: usize) -> Option<(u64, std::sync::Arc<winit::window::Window>)> {
+    if pane_id == 0 {
+        return None;
+    }
+    let held = WINDOWS.read().ok()?;
+    held.iter()
+        .find(|known| known.panes.contains(&pane_id))
+        .map(|known| (known.id, known.handle.clone()))
+}
+
+static FOCUS_PANE_REQUEST: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Take a pending request from `ask_confirmation` to switch to the tab/window
+/// containing `pane_id`.
+pub fn take_focus_pane_request() -> Option<usize> {
+    let pane = FOCUS_PANE_REQUEST.swap(0, std::sync::atomic::Ordering::AcqRel);
+    (pane != 0).then_some(pane)
+}
+
 /// The window with this id, if it is still open.
 fn window_by_id(id: u64) -> Option<std::sync::Arc<winit::window::Window>> {
     let held = WINDOWS.read().ok()?;
@@ -340,22 +360,12 @@ impl McpHost for AppMcpHost {
             // the user has left Unterm in the background, which is precisely
             // when an agent has something to show them.
             crate::tray::request_wake();
+            wake_loop();
             return Ok(0);
         };
         window.set_minimized(false);
-        // A request, not a guarantee: Windows refuses the foreground to a
-        // process that does not already hold it. Between this front end's own
-        // windows -- which is what an id names -- the user is normally
-        // already in Unterm and it goes through. `ok` therefore means the
-        // window was found and asked for, and `instance.windows` is where to
-        // read what actually happened.
+        crate::win_chrome::bring_to_front(&window);
         window.focus_window();
-        // And when the platform does refuse, the request must still land
-        // somewhere the user can see. This is what puts Unterm in the
-        // taskbar's attention state -- the same thing any application does
-        // when it wants the foreground and cannot have it. Without it an
-        // agent saying "look at this" while the user was in their editor
-        // produced nothing at all: no window, no hint that anything asked.
         window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
         Ok(id)
     }
@@ -392,25 +402,48 @@ impl McpHost for AppMcpHost {
     /// it or it times out -- which is what an unanswered question must
     /// do, or an agent would write before anyone had said yes.
     fn ask_confirmation(&self, request: &Value) -> Result<Value> {
-        // A window parked in the tray is the same failure carried further:
-        // no frames because there is no window, so the question would spend
-        // its whole timeout somewhere nobody can see. An agent asking for
-        // permission is the strongest reason there is to put the terminal
-        // back on screen, so ask for that first.
+        let pane_id = request
+            .get("pane_id")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_default() as usize;
+        if pane_id != 0 {
+            FOCUS_PANE_REQUEST.store(pane_id, std::sync::atomic::Ordering::Release);
+        }
         if window().is_none() {
             crate::tray::request_wake();
+            wake_loop();
+            for _ in 0..40 {
+                if window().is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
         }
-        // The banner is painted by the frame loop, and a resting window
-        // schedules no frames: the question sat registered but invisible
-        // for its whole timeout, and every agent write died "unanswered"
-        // with nothing on screen to answer. Ask for the frame that shows
-        // it, and for the one that clears it.
-        request_repaint();
-        let outcome = unterm_mcp::handler::prompt_locally(request);
+        let target = window_for_pane(pane_id).or_else(window_with_id);
+        let target_window_id = target.as_ref().map(|(id, _)| *id);
+        if let Some((_id, ref win)) = target {
+            win.set_minimized(false);
+            crate::win_chrome::bring_to_front(win);
+            win.focus_window();
+            win.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+        }
+        let mut enriched = request.clone();
+        if let (Some(win_id), Some(map)) = (target_window_id, enriched.as_object_mut()) {
+            map.entry("window_id".to_string()).or_insert_with(|| json!(win_id));
+        }
+        let outcome = unterm_mcp::handler::prompt_locally(&enriched);
+        if let Some((_id, ref win)) = target {
+            win.request_user_attention(None);
+        }
         request_repaint();
         match outcome {
-            Some(decision) => Ok(json!(decision.to_wire())),
-            None => anyhow::bail!("the confirmation went unanswered"),
+            Some(decision) => Ok(json!({
+                "decision": decision.to_wire(),
+                "window_id": target_window_id,
+            })),
+            None => anyhow::bail!(
+                "the confirmation went unanswered (window_id={target_window_id:?}, pane_id={pane_id})"
+            ),
         }
     }
 
@@ -542,7 +575,7 @@ impl McpHost for AppMcpHost {
 /// The same standalone scrollback render the MCP method performs, reachable
 /// from the quick menu: the pane's history to one tall PNG, independent of
 /// what the window shows or covers.
-pub fn scrollback_png(pane_id: usize, path: &std::path::Path) -> Result<(u32, u32)> {
+pub fn scrollback_png(pane_id: usize, path: &std::path::Path) -> Result<image::RgbaImage> {
     let engine = unterm_engine::host_engine();
     let scrollback = engine.read_styled_scrollback(
         pane_id,
@@ -564,7 +597,7 @@ pub fn scrollback_png(pane_id: usize, path: &std::path::Path) -> Result<(u32, u3
     image
         .save_with_format(path, image::ImageFormat::Png)
         .with_context(|| format!("write the capture to {}", path.display()))?;
-    Ok((image.width(), image.height()))
+    Ok(image)
 }
 
 fn draw(
@@ -621,6 +654,43 @@ fn draw(
                         fg,
                     );
                 }
+                if let Some(ref comb) = cell.combining {
+                    for mark in comb.chars() {
+                        if let Some((_, glyph)) = fonts.rasterize(mark) {
+                            blend_glyph(
+                                &mut image,
+                                &glyph,
+                                (column * cell_width) as i32,
+                                (row as u32 * cell_height) as i32 + baseline,
+                                fg,
+                            );
+                        }
+                    }
+                }
+            }
+            if cell.style.underline {
+                let underline_y =
+                    (row as u32 * cell_height + (baseline as u32).saturating_add(2))
+                        .min((row as u32 + 1) * cell_height - 1);
+                fill(
+                    &mut image,
+                    column * cell_width,
+                    underline_y,
+                    width * cell_width,
+                    1,
+                    fg,
+                );
+            }
+            if cell.style.strikethrough {
+                let strike_y = row as u32 * cell_height + cell_height / 2;
+                fill(
+                    &mut image,
+                    column * cell_width,
+                    strike_y,
+                    width * cell_width,
+                    1,
+                    fg,
+                );
             }
             column += width;
         }
@@ -767,6 +837,32 @@ mod tests {
         });
         assert_eq!(plain.0, inverted.1);
         assert_eq!(plain.1, inverted.0);
+    }
+
+    #[test]
+    fn underline_and_strikethrough_are_drawn_on_scrollback_cells() {
+        let mut fonts = match crate::fonts::FontStack::system(16) {
+            Some(fonts) => fonts,
+            None => return,
+        };
+        let plain = draw(&mut fonts, &[line("    ", CellStyle::default())], 4, 16);
+        let mut underlined_style = CellStyle::default();
+        underlined_style.underline = true;
+        let underlined = draw(&mut fonts, &[line("    ", underlined_style)], 4, 16);
+        assert_ne!(
+            plain.as_raw(),
+            underlined.as_raw(),
+            "underline must draw pixels even on space cells"
+        );
+
+        let mut struck_style = CellStyle::default();
+        struck_style.strikethrough = true;
+        let struck = draw(&mut fonts, &[line("    ", struck_style)], 4, 16);
+        assert_ne!(
+            plain.as_raw(),
+            struck.as_raw(),
+            "strikethrough must draw pixels even on space cells"
+        );
     }
 
     #[test]

@@ -45,7 +45,13 @@ pub fn dispatch(
             // entitled to know its question is still pending, and being able
             // to see a queue is not being able to empty it.
             let pending = unterm_services::gateway::pending();
-            Ok(json!({"approvals": pending}))
+            let pending_input = crate::handler::pending_confirmations_list();
+            let recent_input = crate::handler::recent_confirmations_list();
+            Ok(json!({
+                "approvals": pending,
+                "pending_input_confirmations": pending_input,
+                "recent_input_confirmations": recent_input,
+            }))
         }
 
         "approval.decide" => {
@@ -64,6 +70,30 @@ pub fn dispatch(
                 .get("allowed")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| anyhow!("Missing 'allowed'"))?;
+            if let Some(num) = id
+                .strip_prefix("cfm_")
+                .or(Some(id))
+                .and_then(|raw| raw.parse::<u64>().ok())
+            {
+                let decision = if allowed {
+                    if params.get("remember").and_then(Value::as_str).is_some() {
+                        crate::handler::ConfirmationDecision::AlwaysAllow
+                    } else {
+                        crate::handler::ConfirmationDecision::Allow
+                    }
+                } else {
+                    crate::handler::ConfirmationDecision::Block
+                };
+                if crate::handler::resolve_confirmation(num, decision) {
+                    return Ok(json!({
+                        "approval": {
+                            "id": format!("cfm_{num}"),
+                            "allowed": allowed,
+                            "resolved": true,
+                        }
+                    }));
+                }
+            }
             // "Remember this" is opt-in and narrow. The default is that an
             // answer covers the question it was asked about and nothing else.
             let remember = params

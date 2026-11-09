@@ -64,7 +64,9 @@ fn is_snipping_overlay_active() -> bool {
                     host_running = true;
                     break;
                 }
-                if name.eq_ignore_ascii_case("SnippingTool.exe") {
+                if name.eq_ignore_ascii_case("SnippingTool.exe")
+                    || name.eq_ignore_ascii_case("ScreenSketch.exe")
+                {
                     snipping_pids.push(entry.th32ProcessID);
                 }
                 if Process32NextW(snapshot, &mut entry) == 0 {
@@ -82,14 +84,18 @@ fn is_snipping_overlay_active() -> bool {
         }
 
         // On Windows 11, SnippingTool.exe stays resident in the background with no
-        // visible windows when idle, and displays a foreground/topmost overlay window
-        // while `ms-screenclip:` is active.
+        // visible windows when idle, and displays a topmost overlay window while
+        // `ms-screenclip:` is active. Require WS_EX_TOPMOST so a normal Snipping
+        // Tool editor window does not look like an active capture overlay.
         let fg_hwnd = GetForegroundWindow();
         if !fg_hwnd.is_null() {
             let mut fg_pid: DWORD = 0;
             GetWindowThreadProcessId(fg_hwnd, &mut fg_pid);
             if snipping_pids.contains(&fg_pid) && IsWindowVisible(fg_hwnd) != 0 {
-                return true;
+                let ex_style = GetWindowLongW(fg_hwnd, GWL_EXSTYLE) as u32;
+                if (ex_style & WS_EX_TOPMOST) != 0 {
+                    return true;
+                }
             }
         }
 
@@ -123,9 +129,61 @@ fn is_snipping_overlay_active() -> bool {
 }
 
 #[cfg(windows)]
-pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::PathBuf> {
+fn read_clipboard_image_with_retries(attempts: usize) -> Option<arboard::ImageData<'static>> {
+    for attempt in 0..attempts {
+        if let Ok(mut board) = arboard::Clipboard::new() {
+            if let Ok(image) = board.get_image() {
+                if image.width > 0 && image.height > 0 {
+                    return Some(image);
+                }
+            }
+        }
+        if attempt + 1 < attempts {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn launch_ms_screenclip() -> anyhow::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::process::CommandExt;
 
+    let verb: Vec<u16> = std::ffi::OsStr::new("open")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let uri: Vec<u16> = std::ffi::OsStr::new("ms-screenclip:")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let res = unsafe {
+        winapi::um::shellapi::ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            uri.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            winapi::um::winuser::SW_SHOWNORMAL,
+        )
+    };
+    if (res as usize) > 32 {
+        return Ok(());
+    }
+
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/c", "start", "", "ms-screenclip:"]);
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("failed to launch ms-screenclip: {status}");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::PathBuf> {
     let output_path = output_dir()?.join(capture_file_name(hide_window));
 
     // Brief pause if we cloaked the window so DWM composites the frame behind us
@@ -142,13 +200,7 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
     let mut last_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
 
     // Launch native Windows snipping overlay (Win+Shift+S experience)
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.args(["/c", "start", "", "ms-screenclip:"]);
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let status = cmd.status()?;
-    if !status.success() {
-        anyhow::bail!("failed to launch ms-screenclip: {status}");
-    }
+    launch_ms_screenclip()?;
 
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_secs(30);
@@ -160,13 +212,11 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
 
         let current_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
         if current_seq != last_seq {
-            last_seq = current_seq;
-            if let Ok(mut board) = arboard::Clipboard::new() {
-                if let Ok(image) = board.get_image() {
-                    captured_image = Some(image);
-                    break;
-                }
+            if let Some(image) = read_clipboard_image_with_retries(8) {
+                captured_image = Some(image);
+                break;
             }
+            last_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
         }
 
         let esc_pressed = (unsafe {
@@ -184,18 +234,16 @@ pub fn capture_selected_region(hide_window: bool) -> anyhow::Result<std::path::P
             overlay_seen = true;
         } else if overlay_seen {
             // Overlay closed (either selection completed, Esc pressed, or toolbar X clicked).
-            // Poll briefly (up to 350ms) in case SnippingTool is still writing the bitmap to the clipboard.
-            for _ in 0..7 {
+            // Poll briefly (up to 400ms) in case SnippingTool is still writing the bitmap to the clipboard.
+            for _ in 0..8 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 let final_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
                 if final_seq != last_seq {
-                    last_seq = final_seq;
-                    if let Ok(mut board) = arboard::Clipboard::new() {
-                        if let Ok(image) = board.get_image() {
-                            captured_image = Some(image);
-                            break;
-                        }
+                    if let Some(image) = read_clipboard_image_with_retries(6) {
+                        captured_image = Some(image);
+                        break;
                     }
+                    last_seq = unsafe { winapi::um::winuser::GetClipboardSequenceNumber() };
                 }
             }
             break;

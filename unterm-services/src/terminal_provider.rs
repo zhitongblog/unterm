@@ -50,11 +50,80 @@ fn families() -> Vec<(&'static str, &'static [&'static str])> {
     ]
 }
 
+fn risk_fields(risk: unterm_gateway::Risk) -> (bool, &'static str, &'static [&'static str], bool, &'static str, &'static str) {
+    let reversible = risk == unterm_gateway::Risk::Read;
+    let side_effect = if risk == unterm_gateway::Risk::Read {
+        "none"
+    } else if risk >= unterm_gateway::Risk::ExternalSideEffect {
+        "external"
+    } else {
+        "local"
+    };
+    let resource_scopes: &'static [&'static str] = &["path"];
+    let sensitive_inputs = risk != unterm_gateway::Risk::Read;
+    let approval_mode = if risk == unterm_gateway::Risk::Read {
+        "none"
+    } else if risk >= unterm_gateway::Risk::CredentialAccess {
+        "per_call"
+    } else {
+        "grant"
+    };
+    let evidence_policy = if risk == unterm_gateway::Risk::Read {
+        "on_request"
+    } else {
+        "always"
+    };
+    (
+        reversible,
+        side_effect,
+        resource_scopes,
+        sensitive_inputs,
+        approval_mode,
+        evidence_policy,
+    )
+}
+
+/// Look up a single method's family and seven-field risk declaration.
+pub fn method_declaration(method: &str) -> Option<Value> {
+    let (family, _) = families()
+        .into_iter()
+        .find(|(_, methods)| methods.contains(&method))?;
+    let risk = unterm_gateway::risk_of(method).unwrap_or(unterm_gateway::Risk::Destructive);
+    let (
+        reversible,
+        side_effect,
+        resource_scopes,
+        sensitive_inputs,
+        approval_mode,
+        evidence_policy,
+    ) = risk_fields(risk);
+    Some(json!({
+        "name": method,
+        "capability": family,
+        "risk": risk.as_str(),
+        "reversible": reversible,
+        "side_effect": side_effect,
+        "resource_scopes": resource_scopes,
+        "sensitive_inputs": sensitive_inputs,
+        "approval_mode": approval_mode,
+        "evidence_policy": evidence_policy,
+    }))
+}
+
 /// The manifest: who this is, what it speaks, what it can do.
 pub fn manifest() -> Value {
+    let mut tools: Vec<Value> = Vec::new();
+    let mut method_map = serde_json::Map::new();
+
     let capabilities: Vec<Value> = families()
         .into_iter()
         .map(|(name, methods)| {
+            for &method in methods {
+                if let Some(decl) = method_declaration(method) {
+                    method_map.insert(method.to_string(), decl.clone());
+                    tools.push(decl);
+                }
+            }
             // The most dangerous method in the family decides the family's
             // risk. Publishing the average would let a caller lease "reading"
             // and get a `session.destroy`.
@@ -63,60 +132,26 @@ pub fn manifest() -> Value {
                 .filter_map(|method| unterm_gateway::risk_of(method))
                 .max()
                 .unwrap_or(unterm_gateway::Risk::Destructive);
+            let (
+                reversible,
+                side_effect,
+                resource_scopes,
+                sensitive_inputs,
+                approval_mode,
+                evidence_policy,
+            ) = risk_fields(risk);
             json!({
                 "name": name,
                 "risk": risk.as_str(),
                 "methods": methods,
                 "scopes": ["path"],
-                // Whether the layer above can undo this by itself. It cannot
-                // undo a killed process or a sent keystroke, and saying
-                // otherwise is how an orchestrator plans a rollback that
-                // silently does nothing.
-                "reversible": risk == unterm_gateway::Risk::Read,
+                "reversible": reversible,
                 "evidence": ["command", "exit_code", "output_ref", "resolved_path"],
-                // The remaining five of the contract's seven. Each is derived
-                // from something already known here rather than asserted
-                // separately: a declaration that can drift from the gateway
-                // it describes is worse than none, because it is believed.
-                //
-                // Does anything outside this machine change? Reading a screen
-                // does not. Running a command can do anything the shell can,
-                // which includes reaching the network -- so the honest answer
-                // for the higher tiers is "yes, possibly", not "no".
-                "side_effect": if risk == unterm_gateway::Risk::Read {
-                    "none"
-                } else if risk >= unterm_gateway::Risk::ExternalSideEffect {
-                    "external"
-                } else {
-                    "local"
-                },
-                // What a grant has to name. Every family here is bounded by a
-                // path; nothing in this provider is scoped by anything else,
-                // and saying so is what lets an orchestrator refuse a grant
-                // that names the wrong kind of thing.
-                "resource_scopes": ["path"],
-                // Whether an argument may carry a secret. A command line can:
-                // people type tokens into them, and the audit trail has to
-                // know to redact before it stores. A screen read cannot.
-                "sensitive_inputs": risk != unterm_gateway::Risk::Read,
-                // Who says yes. The gateway already decides this per method,
-                // and the top three tiers there refuse a standing grant --
-                // they want the user, once, for this exact call.
-                "approval_mode": if risk == unterm_gateway::Risk::Read {
-                    "none"
-                } else if risk >= unterm_gateway::Risk::CredentialAccess {
-                    "per_call"
-                } else {
-                    "grant"
-                },
-                // What must survive the call. A read leaves the evidence it
-                // returned; anything that changes the machine has to leave a
-                // record whether or not anybody asks for it.
-                "evidence_policy": if risk == unterm_gateway::Risk::Read {
-                    "on_request"
-                } else {
-                    "always"
-                },
+                "side_effect": side_effect,
+                "resource_scopes": resource_scopes,
+                "sensitive_inputs": sensitive_inputs,
+                "approval_mode": approval_mode,
+                "evidence_policy": evidence_policy,
             })
         })
         .collect();
@@ -134,6 +169,8 @@ pub fn manifest() -> Value {
         "endpoint": health["endpoint"].clone(),
         "health": health["state"].clone(),
         "capabilities": capabilities,
+        "tools": tools,
+        "method_map": Value::Object(method_map),
     })
 }
 
@@ -445,6 +482,25 @@ mod tests {
             .iter()
             .any(|method| method == "session.resize"));
         assert_eq!(session["risk"], "destructive");
+        // While the family carries its worst method's risk, `method_map` and
+        // `tools` publish each method's own risk and family so an orchestrator
+        // binding a per-method grant never has to guess.
+        assert_eq!(
+            capabilities["method_map"]["session.resize"]["capability"],
+            "terminal.session"
+        );
+        assert_eq!(
+            capabilities["method_map"]["session.resize"]["risk"],
+            "local_mutation"
+        );
+        assert_eq!(
+            capabilities["method_map"]["session.destroy"]["capability"],
+            "terminal.session"
+        );
+        assert_eq!(
+            capabilities["method_map"]["session.destroy"]["risk"],
+            "destructive"
+        );
     }
 
     #[test]

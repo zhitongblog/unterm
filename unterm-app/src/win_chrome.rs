@@ -147,6 +147,7 @@ mod imp {
     }
 
     pub fn set_capture_cloak(window: &Window, cloaked: bool) {
+        let _ = window.set_cursor_hittest(!cloaked);
         if let Some(hwnd) = hwnd(window) {
             unsafe {
                 let ex_style = winuser::GetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE);
@@ -154,9 +155,13 @@ mod imp {
                 if cloaked {
                     winuser::SetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE, ex_style | flags);
                     winuser::SetLayeredWindowAttributes(hwnd, 0, 0, winuser::LWA_ALPHA);
+                    set_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1);
+                    set_u32(hwnd, DWMWA_CLOAK, 1);
                 } else {
                     winuser::SetLayeredWindowAttributes(hwnd, 0, 255, winuser::LWA_ALPHA);
                     winuser::SetWindowLongPtrW(hwnd, winuser::GWL_EXSTYLE, ex_style & !flags);
+                    set_u32(hwnd, DWMWA_CLOAK, 0);
+                    set_u32(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 0);
                     winuser::RedrawWindow(
                         hwnd,
                         std::ptr::null(),

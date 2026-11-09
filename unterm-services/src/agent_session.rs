@@ -296,10 +296,10 @@ fn describe(event: &BrainEvent) -> Value {
     match event {
         BrainEvent::TurnStarted { model } => json!({"event": "turn.started", "model": model}),
         BrainEvent::Text { text } => {
-            json!({"event": "output.delta", "stream": "assistant", "text": text})
+            json!({"event": "output.delta", "stream": "assistant", "text": text, "message": text})
         }
         BrainEvent::Reasoning { text } => {
-            json!({"event": "output.delta", "stream": "reasoning", "text": text})
+            json!({"event": "output.delta", "stream": "reasoning", "text": text, "message": text})
         }
         BrainEvent::ToolRequested {
             call_id,

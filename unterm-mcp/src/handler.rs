@@ -4449,37 +4449,66 @@ pub fn prompt_locally(request: &Value) -> Option<ConfirmationDecision> {
         .and_then(|value| value.as_u64())
         .unwrap_or(30_000)
         .max(1_000);
+    let pane_id = request
+        .get("pane_id")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+    let window_id = request.get("window_id").and_then(|value| value.as_u64());
+    let agent = text("agent");
+    let input_preview = text("input_preview");
+    let method = text("method");
+    let risk = {
+        let named = text("risk");
+        if named.is_empty() {
+            "local_mutation".to_string()
+        } else {
+            named
+        }
+    };
+    let requested_id = request.get("id").and_then(|value| value.as_u64());
 
     // Capacity of one: the asking thread blocks until this is resolved.
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let id = {
         let mut state = mcp_state().lock();
-        state.confirmation_seq = state.confirmation_seq.saturating_add(1);
-        let id = state.confirmation_seq;
+        let id = match requested_id {
+            Some(explicit) => {
+                state.confirmation_seq = state.confirmation_seq.max(explicit);
+                explicit
+            }
+            None => {
+                state.confirmation_seq = state.confirmation_seq.saturating_add(1);
+                state.confirmation_seq
+            }
+        };
+        let requested_at = chrono::Local::now().to_rfc3339();
         state.pending_confirmations.push(PendingConfirmation {
             id,
-            agent: text("agent"),
-            input_preview: text("input_preview"),
-            pane_id: request
-                .get("pane_id")
-                .and_then(|value| value.as_u64())
-                .unwrap_or_default(),
-            method: text("method"),
-            risk: {
-                let named = text("risk");
-                if named.is_empty() {
-                    // A question from an older Core says nothing about risk.
-                    // Reading that as "harmless" would let an "always allow"
-                    // answered on it cover anything, so the conservative
-                    // reading is the write it almost certainly was.
-                    "local_mutation".to_string()
-                } else {
-                    named
-                }
-            },
-            requested_at: chrono::Local::now().to_rfc3339(),
+            agent: agent.clone(),
+            input_preview: input_preview.clone(),
+            pane_id,
+            method: method.clone(),
+            risk: risk.clone(),
+            requested_at: requested_at.clone(),
             responder: tx,
         });
+        upsert_confirmation_record(
+            &mut state,
+            ConfirmationRecord {
+                id,
+                request_id: format!("cfm_{id}"),
+                agent,
+                method,
+                pane_id,
+                window_id,
+                input_preview,
+                risk,
+                timeout_ms,
+                state: "pending".to_string(),
+                requested_at,
+                resolved_at: None,
+            },
+        );
         id
     };
 
@@ -4493,14 +4522,26 @@ pub fn prompt_locally(request: &Value) -> Option<ConfirmationDecision> {
     let answer = rx
         .recv_timeout(std::time::Duration::from_millis(timeout_ms))
         .ok();
-    if answer.is_none() {
-        // Clean up the still-queued banner: the window may not have
-        // painted it yet, and a question nobody is waiting on must not
-        // stay on screen.
-        mcp_state()
-            .lock()
-            .pending_confirmations
-            .retain(|pending| pending.id != id);
+    match answer {
+        Some(decision) => {
+            let status = match decision {
+                ConfirmationDecision::Allow => "allowed",
+                ConfirmationDecision::AlwaysAllow => "always_allowed",
+                ConfirmationDecision::Block => "refused",
+            };
+            let mut state = mcp_state().lock();
+            finish_confirmation_record(&mut state, id, status, window_id);
+        }
+        None => {
+            // Clean up the still-queued banner: the window may not have
+            // painted it yet, and a question nobody is waiting on must not
+            // stay on screen.
+            let mut state = mcp_state().lock();
+            state
+                .pending_confirmations
+                .retain(|pending| pending.id != id);
+            finish_confirmation_record(&mut state, id, "unanswered", window_id);
+        }
     }
     // Whatever happened, paint again: a banner the keys did not clear
     // has to leave the screen.
@@ -4610,6 +4651,22 @@ pub struct ConfirmationView {
     pub requested_at: String,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ConfirmationRecord {
+    pub id: u64,
+    pub request_id: String,
+    pub agent: String,
+    pub method: String,
+    pub pane_id: u64,
+    pub window_id: Option<u64>,
+    pub input_preview: String,
+    pub risk: String,
+    pub timeout_ms: u64,
+    pub state: String,
+    pub requested_at: String,
+    pub resolved_at: Option<String>,
+}
+
 /// Lifecycle state for a single `session.suggest` suggestion. Stored
 /// alongside the suggestion so `session.suggest_status` can report what
 /// happened to a previously-posted suggestion (and so the suggest UI
@@ -4709,6 +4766,9 @@ struct McpState {
     /// element carries a `SyncSender` the MCP worker is blocked on;
     /// the GUI thread fulfils it by sending a `ConfirmationDecision`.
     pending_confirmations: Vec<PendingConfirmation>,
+    /// Bounded lifecycle history of recent confirmations (pending, allowed,
+    /// always_allowed, refused, unanswered) for `approval.list` diagnostics.
+    confirmation_history: Vec<ConfirmationRecord>,
     /// Monotonic id allocator for pending confirmations.
     confirmation_seq: u64,
     /// All suggestions posted via `session.suggest`, indexed by id.
@@ -4743,6 +4803,42 @@ pub fn recent_mcp_input_activity() -> McpInputActivity {
     }
 }
 
+const CONFIRMATION_HISTORY_MAX: usize = 64;
+
+fn upsert_confirmation_record(state: &mut McpState, record: ConfirmationRecord) {
+    if let Some(existing) = state
+        .confirmation_history
+        .iter_mut()
+        .find(|item| item.id == record.id)
+    {
+        *existing = record;
+        return;
+    }
+    if state.confirmation_history.len() >= CONFIRMATION_HISTORY_MAX {
+        state.confirmation_history.remove(0);
+    }
+    state.confirmation_history.push(record);
+}
+
+fn finish_confirmation_record(
+    state: &mut McpState,
+    id: u64,
+    status: &str,
+    window_id: Option<u64>,
+) {
+    if let Some(existing) = state
+        .confirmation_history
+        .iter_mut()
+        .find(|item| item.id == id)
+    {
+        existing.state = status.to_string();
+        if window_id.is_some() {
+            existing.window_id = window_id;
+        }
+        existing.resolved_at = Some(chrono::Local::now().to_rfc3339());
+    }
+}
+
 /// Oldest pending confirmation as a UI-friendly view. Returns `None`
 /// when nothing is waiting. The GUI paints a banner whenever this is
 /// `Some` and routes Enter/Esc/Ctrl-A to `resolve_confirmation`.
@@ -4761,6 +4857,23 @@ pub fn pending_confirmation_view() -> Option<ConfirmationView> {
         })
 }
 
+/// All currently waiting confirmations (both in-process banners and
+/// remote-window confirmations tracked in `confirmation_history`).
+pub fn pending_confirmations_list() -> Vec<ConfirmationRecord> {
+    let state = mcp_state().lock();
+    state
+        .confirmation_history
+        .iter()
+        .filter(|record| record.state == "pending")
+        .cloned()
+        .collect()
+}
+
+/// Recent confirmation lifecycle records (pending, allowed, refused, unanswered).
+pub fn recent_confirmations_list() -> Vec<ConfirmationRecord> {
+    mcp_state().lock().confirmation_history.clone()
+}
+
 /// Number of pending confirmations. Cheaper than `pending_confirmation_view`
 /// when the caller only needs to know "is the banner needed?".
 pub fn pending_confirmation_count() -> usize {
@@ -4777,6 +4890,12 @@ pub fn resolve_confirmation(id: u64, decision: ConfirmationDecision) -> bool {
         return false;
     };
     let pending = state.pending_confirmations.remove(idx);
+    let status = match decision {
+        ConfirmationDecision::Allow => "allowed",
+        ConfirmationDecision::AlwaysAllow => "always_allowed",
+        ConfirmationDecision::Block => "refused",
+    };
+    finish_confirmation_record(&mut state, id, status, None);
     if matches!(decision, ConfirmationDecision::AlwaysAllow) {
         // "Always allow" is a grant, and it is written as one: same durable
         // store, same revocation, same place to look when the question is
@@ -5638,6 +5757,7 @@ fn mcp_state() -> &'static Mutex<McpState> {
             agents_with_input_history: std::collections::HashSet::new(),
             confirmed_agents,
             pending_confirmations: Vec::new(),
+            confirmation_history: Vec::new(),
             confirmation_seq: 0,
             suggestions: HashMap::new(),
             suggestion_order: Vec::new(),
@@ -6958,10 +7078,34 @@ impl McpHandler {
         }
 
         let timeout_ms = cfg.mcp_confirmation_timeout_ms.max(1000);
-        let decision = unterm_engine::mcp_host()
+        let confirm_id = {
+            let mut state = mcp_state().lock();
+            state.confirmation_seq = state.confirmation_seq.saturating_add(1);
+            let id = state.confirmation_seq;
+            upsert_confirmation_record(
+                &mut state,
+                ConfirmationRecord {
+                    id,
+                    request_id: format!("cfm_{id}"),
+                    agent: agent.clone(),
+                    method: method.to_string(),
+                    pane_id: 0,
+                    window_id: None,
+                    input_preview: format!("{method} (cannot be undone)"),
+                    risk: "destructive".to_string(),
+                    timeout_ms,
+                    state: "pending".to_string(),
+                    requested_at: chrono::Local::now().to_rfc3339(),
+                    resolved_at: None,
+                },
+            );
+            id
+        };
+        let reply = unterm_engine::mcp_host()
             .context("no front end to ask")
             .and_then(|host| {
                 host.ask_confirmation(&json!({
+                    "id": confirm_id,
                     "agent": agent,
                     "method": method,
                     "pane_id": 0,
@@ -6970,27 +7114,48 @@ impl McpHandler {
                     "risk": "destructive",
                 }))
             })
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("decision")
-                    .and_then(|d| d.as_str())
-                    .map(str::to_string)
-            });
+            .ok();
+        let window_id = reply
+            .as_ref()
+            .and_then(|value| value.get("window_id"))
+            .and_then(|value| value.as_u64());
+        let decision = reply.and_then(|value| {
+            value
+                .as_str()
+                .or_else(|| value.get("decision").and_then(|d| d.as_str()))
+                .map(str::to_string)
+        });
 
         match decision.as_deref() {
             Some("allow") | Some("always_allow") => {
-                self.audit("mcp.confirm.allow", None, &format!("agent={agent} method={method}"));
+                {
+                    let mut state = mcp_state().lock();
+                    finish_confirmation_record(
+                        &mut state,
+                        confirm_id,
+                        decision.as_deref().unwrap_or("allowed"),
+                        window_id,
+                    );
+                }
+                self.audit("mcp.confirm.allow", None, &format!("agent={agent} method={method} id=cfm_{confirm_id}"));
                 Ok(())
             }
             Some("block") => {
-                self.audit("mcp.confirm.block", None, &format!("agent={agent} method={method}"));
-                Err(anyhow!("refused: the user declined {method}"))
+                {
+                    let mut state = mcp_state().lock();
+                    finish_confirmation_record(&mut state, confirm_id, "refused", window_id);
+                }
+                self.audit("mcp.confirm.block", None, &format!("agent={agent} method={method} id=cfm_{confirm_id}"));
+                Err(anyhow!("refused: the user declined {method} (request_id=cfm_{confirm_id})"))
             }
             _ => {
-                self.audit("mcp.confirm.timeout", None, &format!("agent={agent} method={method}"));
+                {
+                    let mut state = mcp_state().lock();
+                    finish_confirmation_record(&mut state, confirm_id, "unanswered", window_id);
+                }
+                self.audit("mcp.confirm.timeout", None, &format!("agent={agent} method={method} id=cfm_{confirm_id}"));
                 Err(anyhow!(
-                    "unanswered: the confirmation for {method} went unanswered, so nothing was \
+                    "unanswered: the confirmation for {method} (request_id=cfm_{confirm_id}) went unanswered, so nothing was \
                      done. Nobody refused it -- try again with someone at the window."
                 ))
             }
@@ -7115,10 +7280,34 @@ impl McpHandler {
         // from *its* copy of the same queue. The window's own UI code
         // never learns the difference.
         let timeout_ms = cfg.mcp_confirmation_timeout_ms.max(1000);
-        let decision = unterm_engine::mcp_host()
+        let confirm_id = {
+            let mut state = mcp_state().lock();
+            state.confirmation_seq = state.confirmation_seq.saturating_add(1);
+            let id = state.confirmation_seq;
+            upsert_confirmation_record(
+                &mut state,
+                ConfirmationRecord {
+                    id,
+                    request_id: format!("cfm_{id}"),
+                    agent: agent.clone(),
+                    method: method.to_string(),
+                    pane_id: pane_id as u64,
+                    window_id: None,
+                    input_preview: preview.clone(),
+                    risk: gateway.risk.as_str().to_string(),
+                    timeout_ms,
+                    state: "pending".to_string(),
+                    requested_at: chrono::Local::now().to_rfc3339(),
+                    resolved_at: None,
+                },
+            );
+            id
+        };
+        let reply = unterm_engine::mcp_host()
             .context("no front end to ask")
             .and_then(|host| {
                 host.ask_confirmation(&json!({
+                    "id": confirm_id,
                     "agent": agent,
                     "method": method,
                     "pane_id": pane_id,
@@ -7127,37 +7316,60 @@ impl McpHandler {
                     // So "always allow" grants exactly what was on screen.
                     "risk": gateway.risk.as_str(),
                 }))
-            })
-            .map_err(|_| ())
-            .and_then(|answer| {
-                ConfirmationDecision::from_wire(answer.as_str().unwrap_or_default()).ok_or(())
             });
+        let window_id = reply
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("window_id"))
+            .and_then(|value| value.as_u64());
+        let decision = reply.map_err(|_| ()).and_then(|answer| {
+            let raw = answer
+                .as_str()
+                .or_else(|| answer.get("decision").and_then(|d| d.as_str()))
+                .unwrap_or_default();
+            ConfirmationDecision::from_wire(raw).ok_or(())
+        });
         let outcome = match decision {
             Ok(ConfirmationDecision::Allow) => {
+                {
+                    let mut state = mcp_state().lock();
+                    finish_confirmation_record(&mut state, confirm_id, "allowed", window_id);
+                }
                 self.audit(
                     "mcp.confirm.allow",
                     Some(&pane_id.to_string()),
-                    &format!("agent={} {}", agent, preview),
+                    &format!("agent={} id=cfm_{} {}", agent, confirm_id, preview),
                 );
                 Ok(GateOutcome::Allow)
             }
             Ok(ConfirmationDecision::AlwaysAllow) => {
+                {
+                    let mut state = mcp_state().lock();
+                    state.confirmed_agents.insert(agent.clone());
+                    finish_confirmation_record(&mut state, confirm_id, "always_allowed", window_id);
+                }
+                grant_agent_trust(&agent, gateway.risk.as_str());
                 self.audit(
                     "mcp.confirm.always_allow",
                     Some(&pane_id.to_string()),
-                    &format!("agent={} {}", agent, preview),
+                    &format!("agent={} id=cfm_{} {}", agent, confirm_id, preview),
                 );
                 Ok(GateOutcome::Allow)
             }
             Ok(ConfirmationDecision::Block) => {
+                {
+                    let mut state = mcp_state().lock();
+                    finish_confirmation_record(&mut state, confirm_id, "refused", window_id);
+                }
                 self.audit(
                     "mcp.confirm.block",
                     Some(&pane_id.to_string()),
-                    &format!("agent={} {}", agent, preview),
+                    &format!("agent={} id=cfm_{} {}", agent, confirm_id, preview),
                 );
-                Ok(GateOutcome::Block(
-                    "refused: the user declined this write in the Unterm window".to_string(),
-                ))
+                Ok(GateOutcome::Block(format!(
+                    "refused: the user declined this write in the Unterm window \
+                     (request_id=cfm_{confirm_id}, pane_id={pane_id})"
+                )))
             }
             Err(_) => {
                 // Nobody answered -- either the question timed out at
@@ -7165,13 +7377,21 @@ impl McpHandler {
                 // Cleaning up the queued banner belongs to whoever owns
                 // the queue, which is `prompt_locally`, in the process
                 // that drew it.
+                {
+                    let mut state = mcp_state().lock();
+                    finish_confirmation_record(&mut state, confirm_id, "unanswered", window_id);
+                }
                 self.audit(
                     "mcp.confirm.timeout",
                     Some(&pane_id.to_string()),
-                    &format!("agent={} {}", agent, preview),
+                    &format!("agent={} id=cfm_{} {}", agent, confirm_id, preview),
                 );
+                let win_note = window_id
+                    .map(|id| format!(", window_id={id}"))
+                    .unwrap_or_default();
                 Ok(GateOutcome::Block(format!(
-                    "unanswered: the confirmation in the Unterm window went unanswered for {}s, \
+                    "unanswered: the confirmation in the Unterm window went unanswered for {}s \
+                     (request_id=cfm_{confirm_id}, pane_id={pane_id}{win_note}), \
                      so the write was not performed. Nobody refused it -- try again with someone \
                      at the window.",
                     timeout_ms / 1000
