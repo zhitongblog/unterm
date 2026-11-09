@@ -1,6 +1,6 @@
-//! The two CLIs, read into one vocabulary.
+//! The CLIs, read into one vocabulary.
 //!
-//! Both Codex and Claude emit JSON Lines, and they disagree about almost
+//! Codex, Claude and Gemini all emit JSON Lines, and they disagree about almost
 //! everything above that: what a turn is called, where the text lives, how a
 //! tool call is spelled, whether usage arrives per turn or per message. The
 //! adapters absorb that so nothing downstream has to know which one ran.
@@ -463,6 +463,182 @@ impl BrainAdapter for ClaudeAdapter {
     }
 }
 
+/// Reads the Gemini CLI's `-p … --output-format stream-json` stream.
+///
+/// The wire format is `packages/core/src/output/types.ts` in gemini-cli
+/// (checked against v0.67.0): `init`, `message`, `tool_use`, `tool_result`,
+/// `error`, `result`, each one JSON object per line. One invocation is one
+/// turn, however many tool round-trips it makes, and the `result` line closes
+/// it -- the same shape as Claude's, which is why this reads much like that
+/// adapter.
+///
+/// Three things the format does differently and this adapter has to absorb:
+///
+/// - **Assistant text arrives as deltas** (`delta: true`), not as finished
+///   blocks. Each one becomes a `Text`; downstream already concatenates
+///   `output.delta`, which is what the event is named for.
+/// - **Errors come in two severities.** `warning` (a detected loop, say) is
+///   not a failure and is not reported as one; an `Error` event would read as
+///   "the turn failed" to everything downstream. `error` is.
+/// - **Hitting the session-turn cap is an error line plus an error result**
+///   (`MaxSessionTurnsError`). It is a limit, not a failure -- resumable,
+///   exactly like Claude's `error_max_turns` -- so neither line produces an
+///   `Error` and the turn ends as `Limit`.
+#[derive(Default)]
+pub struct GeminiAdapter {
+    turn_open: bool,
+    session: Option<String>,
+    hit_turn_limit: bool,
+}
+
+impl GeminiAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Gemini's token stats, into the shared shape.
+///
+/// `input_tokens` there is the whole prompt, of which `cached` was a cache
+/// read and `input` was fresh. `Usage` keeps the two apart, so the fresh
+/// count goes in `input_tokens` -- falling back to subtracting the cache when
+/// an older CLI leaves `input` out.
+fn gemini_usage(stats: &Value) -> Usage {
+    let prompt = u64_at(stats, &["input_tokens"]);
+    let cached = u64_at(stats, &["cached"]);
+    let fresh = match stats.get("input").and_then(Value::as_u64) {
+        Some(fresh) => fresh,
+        None => prompt.saturating_sub(cached),
+    };
+    Usage {
+        input_tokens: fresh,
+        output_tokens: u64_at(stats, &["output_tokens"]),
+        cached_input_tokens: cached,
+    }
+}
+
+impl BrainAdapter for GeminiAdapter {
+    fn id(&self) -> &'static str {
+        "gemini"
+    }
+
+    fn on_line(&mut self, line: &str) -> Vec<BrainEvent> {
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return vec![BrainEvent::Error {
+                message: format!("gemini: unparsable line: {}", truncate(line)),
+            }];
+        };
+        let mut events = Vec::new();
+
+        match value.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "init" => {
+                if let Some(session) = text_at(&value, &[&["session_id"]]) {
+                    self.session = Some(session.to_string());
+                }
+                self.turn_open = true;
+                self.hit_turn_limit = false;
+                events.push(BrainEvent::TurnStarted {
+                    model: text_at(&value, &[&["model"]]).map(str::to_string),
+                });
+            }
+            "message" => {
+                // The prompt is echoed back as a user message; it is not
+                // something the model said.
+                if value.get("role").and_then(Value::as_str) == Some("assistant") {
+                    if let Some(text) = text_at(&value, &[&["content"]]) {
+                        if !text.is_empty() {
+                            events.push(BrainEvent::Text {
+                                text: text.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            "tool_use" => {
+                events.push(BrainEvent::ToolRequested {
+                    call_id: text_at(&value, &[&["tool_id"]])
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    name: text_at(&value, &[&["tool_name"]])
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    arguments: value.get("parameters").cloned().unwrap_or(Value::Null),
+                });
+            }
+            "tool_result" => {
+                let ok = value.get("status").and_then(Value::as_str) == Some("success");
+                events.push(BrainEvent::ToolResult {
+                    call_id: text_at(&value, &[&["tool_id"]])
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    ok,
+                    // A failed tool carries its reason in `error`, not
+                    // `output`; dropping it would leave "failed" with no why.
+                    output: text_at(&value, &[&["output"], &["error", "message"]])
+                        .map(str::to_string),
+                });
+            }
+            "error" => {
+                let message = text_at(&value, &[&["message"]]).unwrap_or("gemini reported an error");
+                if message.contains("Maximum session turns") {
+                    self.hit_turn_limit = true;
+                } else if value.get("severity").and_then(Value::as_str) != Some("warning") {
+                    events.push(BrainEvent::Error {
+                        message: message.to_string(),
+                    });
+                }
+            }
+            "result" => {
+                self.turn_open = false;
+                if let Some(stats) = value.get("stats") {
+                    events.push(BrainEvent::Usage(gemini_usage(stats)));
+                }
+                let errored = value.get("status").and_then(Value::as_str) == Some("error");
+                let limited = self.hit_turn_limit
+                    || text_at(&value, &[&["error", "type"]])
+                        .is_some_and(|kind| kind.contains("MaxSessionTurns"));
+                self.hit_turn_limit = false;
+                if errored && !limited {
+                    events.push(BrainEvent::Error {
+                        message: text_at(&value, &[&["error", "message"]])
+                            .unwrap_or("gemini reported an error")
+                            .to_string(),
+                    });
+                }
+                events.push(BrainEvent::TurnEnded {
+                    reason: if limited {
+                        StopReason::Limit
+                    } else if errored {
+                        StopReason::Error
+                    } else {
+                        StopReason::Completed
+                    },
+                });
+            }
+            _ => {}
+        }
+        events
+    }
+
+    fn external_id(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    fn on_eof(&mut self) -> Vec<BrainEvent> {
+        if self.turn_open {
+            self.turn_open = false;
+            return vec![BrainEvent::TurnEnded {
+                reason: StopReason::Interrupted,
+            }];
+        }
+        Vec::new()
+    }
+}
+
 /// Reads a CLI no adapter knows: each line of output is output, nothing
 /// more is claimed about it.
 ///
@@ -545,6 +721,22 @@ mod tests {
 {"type":"result","subtype":"success","usage":{"input_tokens":120,"output_tokens":30,"cache_read_input_tokens":100}}
 "#;
 
+    /// The same turn as Gemini prints it. No thought line: Gemini's
+    /// stream-json does not carry reasoning. Its `input_tokens` is the whole
+    /// prompt (fresh 120 + cached 100); `input` is the fresh part.
+    const GEMINI_STREAM: &str = r#"
+{"type":"init","timestamp":"2026-11-09T02:10:01.000Z","session_id":"g1","model":"gpt-5"}
+{"type":"message","timestamp":"2026-11-09T02:10:01.000Z","role":"user","content":"what is here?"}
+{"type":"tool_use","timestamp":"2026-11-09T02:10:02.000Z","tool_name":"shell","tool_id":"call_1","parameters":{"command":"ls"}}
+{"type":"tool_result","timestamp":"2026-11-09T02:10:02.000Z","tool_id":"call_1","status":"success","output":"a\nb"}
+{"type":"message","timestamp":"2026-11-09T02:10:03.000Z","role":"assistant","content":"There are two files.","delta":true}
+{"type":"result","timestamp":"2026-11-09T02:10:03.000Z","status":"success","stats":{"total_tokens":250,"input_tokens":220,"output_tokens":30,"cached":100,"input":120,"duration_ms":2000,"tool_calls":1,"models":{}}}
+"#;
+
+    fn gemini() -> Vec<BrainEvent> {
+        replay(&mut GeminiAdapter::new(), GEMINI_STREAM)
+    }
+
     #[test]
     fn the_two_adapters_describe_the_same_turn_the_same_way() {
         // M4's gate. Two wire formats that agree about almost nothing above
@@ -569,6 +761,113 @@ mod tests {
             sorted(&claude),
             "\ncodex:  {codex:#?}\nclaude: {claude:#?}"
         );
+    }
+
+    #[test]
+    fn gemini_describes_the_same_turn_except_the_reasoning_it_never_prints() {
+        // The third wire format, held to the same gate. Gemini's stream has
+        // no thinking in it, so the comparison drops reasoning from Claude's
+        // side rather than pretending Gemini said something it did not.
+        let without_reasoning = |events: Vec<BrainEvent>| {
+            let mut described: Vec<String> = events
+                .into_iter()
+                .filter(|event| !matches!(event, BrainEvent::Reasoning { .. }))
+                .map(|event| serde_json::to_string(&event).unwrap())
+                .collect();
+            described.sort();
+            described
+        };
+        let claude = without_reasoning(replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM));
+        let gemini = without_reasoning(gemini());
+        assert_eq!(gemini, claude);
+    }
+
+    #[test]
+    fn gemini_echoed_prompt_is_not_model_output() {
+        let texts: Vec<String> = gemini()
+            .into_iter()
+            .filter_map(|event| match event {
+                BrainEvent::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["There are two files."]);
+    }
+
+    #[test]
+    fn gemini_learns_the_session_it_would_resume_by() {
+        let mut adapter = GeminiAdapter::new();
+        replay(&mut adapter, GEMINI_STREAM);
+        assert_eq!(adapter.external_id(), Some("g1"));
+    }
+
+    #[test]
+    fn gemini_warning_is_not_a_failure() {
+        // A detected loop is reported as a warning and the run goes on; an
+        // Error here would make downstream mark a working turn as failed.
+        let events = replay(
+            &mut GeminiAdapter::new(),
+            r#"{"type":"init","session_id":"g","model":"m"}
+{"type":"error","severity":"warning","message":"Loop detected, stopping execution"}
+{"type":"result","status":"success"}"#,
+        );
+        assert!(!events.iter().any(|e| matches!(e, BrainEvent::Error { .. })), "{events:?}");
+        assert_eq!(
+            events.last(),
+            Some(&BrainEvent::TurnEnded { reason: StopReason::Completed })
+        );
+    }
+
+    #[test]
+    fn gemini_error_result_ends_the_turn_as_an_error() {
+        let events = replay(
+            &mut GeminiAdapter::new(),
+            r#"{"type":"init","session_id":"g","model":"m"}
+{"type":"error","severity":"error","message":"quota exhausted"}
+{"type":"result","status":"error","error":{"type":"FatalAuthenticationError","message":"quota exhausted"}}"#,
+        );
+        assert!(events.iter().any(|e| matches!(e, BrainEvent::Error { .. })));
+        assert_eq!(
+            events.last(),
+            Some(&BrainEvent::TurnEnded { reason: StopReason::Error })
+        );
+    }
+
+    #[test]
+    fn gemini_hitting_the_turn_cap_is_a_limit_not_a_failure() {
+        let events = replay(
+            &mut GeminiAdapter::new(),
+            r#"{"type":"init","session_id":"g","model":"m"}
+{"type":"error","severity":"error","message":"Maximum session turns exceeded"}
+{"type":"result","status":"error","error":{"type":"MaxSessionTurnsError","message":"Maximum session turns exceeded"}}"#,
+        );
+        assert!(!events.iter().any(|e| matches!(e, BrainEvent::Error { .. })), "{events:?}");
+        assert_eq!(
+            events.last(),
+            Some(&BrainEvent::TurnEnded { reason: StopReason::Limit })
+        );
+    }
+
+    #[test]
+    fn gemini_failed_tool_keeps_its_reason() {
+        let events = replay(
+            &mut GeminiAdapter::new(),
+            r#"{"type":"tool_result","tool_id":"c1","status":"error","error":{"type":"FILE_NOT_FOUND","message":"nope"}}"#,
+        );
+        assert_eq!(
+            events,
+            vec![BrainEvent::ToolResult {
+                call_id: "c1".into(),
+                ok: false,
+                output: Some("nope".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn gemini_usage_falls_back_when_the_fresh_count_is_missing() {
+        let usage = gemini_usage(&serde_json::json!({"input_tokens": 220, "cached": 100, "output_tokens": 30}));
+        assert_eq!((usage.input_tokens, usage.cached_input_tokens, usage.output_tokens), (120, 100, 30));
     }
 
     #[test]
@@ -693,6 +992,7 @@ mod tests {
         for (name, events) in [
             ("codex", replay(&mut CodexAdapter::new(), CODEX_STREAM)),
             ("claude", replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM)),
+            ("gemini", gemini()),
         ] {
             let requested = events.iter().find_map(|event| match event {
                 BrainEvent::ToolRequested { call_id, name, .. } => {
@@ -727,6 +1027,11 @@ mod tests {
                 Box::new(ClaudeAdapter::new()),
                 "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"m\"}",
             ),
+            (
+                "gemini",
+                Box::new(GeminiAdapter::new()),
+                "{\"type\":\"init\",\"session_id\":\"g\",\"model\":\"m\"}",
+            ),
         ] {
             let mut adapter = adapter;
             let events = replay(adapter.as_mut(), stream);
@@ -745,6 +1050,7 @@ mod tests {
         for (name, events) in [
             ("codex", replay(&mut CodexAdapter::new(), CODEX_STREAM)),
             ("claude", replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM)),
+            ("gemini", gemini()),
         ] {
             let interruptions = events
                 .iter()
@@ -770,6 +1076,10 @@ mod tests {
             (
                 "claude",
                 replay(&mut ClaudeAdapter::new(), "warning: rate limited"),
+            ),
+            (
+                "gemini",
+                replay(&mut GeminiAdapter::new(), "warning: rate limited"),
             ),
         ] {
             assert!(
