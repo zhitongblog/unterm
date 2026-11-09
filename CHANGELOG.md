@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.71.23 — 2026-11-09
+
+### Fixed
+
+- **Windows borderless maximize & taskbar visibility.**
+  - Handles `WM_GETMINMAXINFO` on borderless custom-caption windows (`win_chrome.rs`)
+    to constrain OS maximize (`Win+Up`, Snap Layouts) to the monitor's `rcWork` area,
+    leaving 1px at the bottom when `rcWork == rcMonitor` so auto-hide taskbars can
+    still be triggered by moving the cursor to the bottom edge.
+  - Routes custom title-bar double-click through `toggle_maximize()` and preserves
+    unmaximized geometry across session restore.
+- **MCP write confirmation visibility & interaction (#45).**
+  - Dispatches each incoming `HostCall` on its own worker thread in
+    `HostChannelClient::attach` so blocking `ask_confirmation` requests never
+    head-of-line block `request_repaint`, `list_windows`, or `focus_window`.
+  - Wakes parked tray instances, unminimizes and raises the target window owning
+    `pane_id`, switches to the target tab/pane, and requests critical taskbar
+    attention when a confirmation banner arrives.
+  - Adds mouse hit-testing (`decision_at_column` / `click_confirmation_banner`) so
+    `[Enter] Allow`, `[A] Always allow`, and `[Esc] Block` can be clicked directly.
+  - Syncs `AlwaysAllow` decisions back to `unterm-core`'s `confirmed_agents` and
+    `grant_agent_trust`, and surfaces `pending_input_confirmations` /
+    `recent_input_confirmations` (`cfm_<id>`) in `approval.list` and `approval.decide`.
+- **`contracts/v0` provider manifest & agent session stream alignment (#30).**
+  - Publishes per-method risk and capability declarations (`tools` list and
+    `method_map` lookup with all 7 risk fields) in `terminal_provider::manifest()`.
+  - Emits both `text` and `message` on `output.delta` stream events in
+    `agent_session.rs`.
+- **Screenshots & scrollback capture.**
+  - Sets `DWMWA_CLOAK` and `DWMWA_TRANSITIONS_FORCEDISABLED` alongside `LWA_ALPHA=0`
+    in `set_capture_cloak` across all open Unterm windows so hidden region captures
+    leave no DWM shadow or Mica backdrop behind, and guards against premature
+    uncloaking while `ms-screenclip:` is starting.
+  - Launches `ms-screenclip:` via `ShellExecuteW` and retries clipboard image reads
+    across transient `OpenClipboard` lock contention with `SnippingTool.exe`.
+  - Skips DWM-cloaked, minimized, and zero-area helper windows in
+    `window_capture::find_window`, and includes `CAPTUREBLT` in `screen_under`.
+  - Uses `FontIndex::cached()` in `FontStack::system`, renders combining marks,
+    underlines, and strikethroughs in scrollback PNGs, and copies quick-menu
+    scrollback screenshots to the clipboard as images.
+
 ## v0.71.22 — 2026-11-05
 
 ### Added
