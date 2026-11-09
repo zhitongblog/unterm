@@ -245,6 +245,7 @@ fn method_is_mutating(method: &str) -> bool {
             | "agent_session.submit_input"
             | "agent_session.interrupt"
             | "agent_session.close"
+            | "agent_session.decide"
             | "terminal.invoke"
             | "terminal.accept_lease"
             | "terminal.cancel"

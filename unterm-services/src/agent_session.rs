@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use unterm_brain::runtime::{self, Running, Spec};
+use unterm_brain::host::{self, Decision, HostProtocol};
 use unterm_brain::{BrainAdapter, BrainEvent, StopReason};
 use unterm_tasks::AgentSession;
 
@@ -67,21 +68,34 @@ fn new_turn_id() -> String {
 /// The CLIs have no turn ids of their own, so one is minted when a turn
 /// starts and carried on every event until it ends -- a consumer that is
 /// handed one event by itself can still say which turn it was part of.
-#[derive(Default)]
+///
+/// Shared, because an approval is answered from outside the reader thread
+/// and its `approval.resolved` belongs to the same turn as the question.
+#[derive(Clone, Default)]
 struct TurnTracker {
-    current: Option<String>,
+    current: Arc<Mutex<Option<String>>>,
 }
 
 impl TurnTracker {
-    fn stamp(&mut self, event: &BrainEvent, described: &mut Value) {
+    fn stamp(&self, event: &BrainEvent, described: &mut Value) {
+        let mut current = self.current.lock().unwrap();
         if matches!(event, BrainEvent::TurnStarted { .. }) {
-            self.current = Some(new_turn_id());
+            *current = Some(new_turn_id());
         }
-        if let (Some(turn), Some(map)) = (&self.current, described.as_object_mut()) {
-            map.insert("turn_id".into(), Value::String(turn.clone()));
-        }
+        Self::put(&current, described);
         if matches!(event, BrainEvent::TurnEnded { .. }) {
-            self.current = None;
+            *current = None;
+        }
+    }
+
+    /// Stamp an event made outside the stream with the turn now open.
+    fn stamp_now(&self, described: &mut Value) {
+        Self::put(&self.current.lock().unwrap(), described);
+    }
+
+    fn put(current: &Option<String>, described: &mut Value) {
+        if let (Some(turn), Some(map)) = (current, described.as_object_mut()) {
+            map.insert("turn_id".into(), Value::String(turn.clone()));
         }
     }
 }
@@ -166,6 +180,12 @@ struct Live {
     /// after event N.
     events: Arc<Mutex<Vec<Value>>>,
     reader: Option<std::thread::JoinHandle<()>>,
+    /// Set for a hosted session: how to talk back to the CLI.
+    host: Option<Box<dyn HostProtocol>>,
+    /// Permission questions the CLI is waiting on, by its request id, with
+    /// the input that was asked about (allowing echoes it back unchanged).
+    pending: Arc<Mutex<HashMap<String, Value>>>,
+    turn: TurnTracker,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -297,11 +317,63 @@ pub fn start(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
+    start_with(command, cwd, env, prompt, adapter, context, false)
+}
+
+/// Start an agent that is *driven*, not just watched.
+///
+/// The CLI is put into its host protocol (for Claude: `--input-format
+/// stream-json --permission-prompt-tool stdio`, added only where the command
+/// does not already say so) and its stdin stays open. Two things follow that
+/// a plain session cannot do:
+///
+/// - **Permission questions come to the caller.** A tool the CLI would
+///   prompt for arrives as `approval.requested` and waits for [`decide`].
+///   Nothing is pre-approved and nothing is skipped: the CLI's own rules
+///   still auto-allow what they allow, and everything else is asked.
+/// - **Follow-up turns.** [`submit_input`] sends the next user message to
+///   the same process.
+///
+/// Only CLIs with a host protocol can be driven; for the others this is an
+/// error rather than a session that silently cannot be answered.
+pub fn start_hosted(
+    command: &[String],
+    cwd: Option<&str>,
+    env: &[(String, String)],
+    prompt: Option<&str>,
+    adapter: Option<&str>,
+    context: TaskContext,
+) -> Result<String> {
+    start_with(command, cwd, env, prompt, adapter, context, true)
+}
+
+fn start_with(
+    command: &[String],
+    cwd: Option<&str>,
+    env: &[(String, String)],
+    prompt: Option<&str>,
+    adapter: Option<&str>,
+    context: TaskContext,
+    hosted: bool,
+) -> Result<String> {
+    let (adapter_id, adapter) = adapter_for(command, adapter)?;
+    let host = if hosted {
+        Some(host::host_for(adapter_id).ok_or_else(|| {
+            anyhow!(
+                "{adapter_id} cannot be driven: no host protocol (hosted sessions support claude)"
+            )
+        })?)
+    } else {
+        None
+    };
+    let command: Vec<String> = match &host {
+        Some(host) => host::with_hosted_args(command, host.as_ref()),
+        None => command.to_vec(),
+    };
     let program = command
         .first()
         .ok_or_else(|| anyhow!("Missing 'command'"))?
         .clone();
-    let (adapter_id, adapter) = adapter_for(command, adapter)?;
 
     let mut spec = Spec::new(&program).args(command[1..].to_vec());
     if let Some(cwd) = cwd {
@@ -310,11 +382,20 @@ pub fn start(
     for (key, value) in env {
         spec = spec.env(key, value);
     }
-    if let Some(prompt) = prompt {
-        spec = spec.prompt(prompt);
+    match (&host, prompt) {
+        (Some(host), prompt) => {
+            spec = spec.keep_stdin_open();
+            if let Some(prompt) = prompt {
+                spec = spec.prompt(host.user_message(prompt));
+            }
+        }
+        (None, Some(prompt)) => spec = spec.prompt(prompt),
+        (None, None) => {}
     }
 
     let id = format!("ags_{}", uuid::Uuid::new_v4().simple());
+    let pending: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+    let turn = TurnTracker::default();
     let mut running = runtime::spawn(&spec, adapter)?;
     let stream = running.events();
     let events: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
@@ -335,7 +416,12 @@ pub fn start(
     };
     store()?.record_agent_session(&session)?;
 
-    push(&events, &context, &id, json!({"event": "session.started", "adapter": adapter_id}));
+    push(
+        &events,
+        &context,
+        &id,
+        json!({"event": "session.started", "adapter": adapter_id, "hosted": host.is_some()}),
+    );
 
     let reader = std::thread::Builder::new()
         .name("agent-session-events".into())
@@ -343,9 +429,16 @@ pub fn start(
             let events = Arc::clone(&events);
             let context = context.clone();
             let id = id.clone();
+            let pending = Arc::clone(&pending);
+            let turn = turn.clone();
             move || {
-                let mut turn = TurnTracker::default();
                 for event in stream {
+                    if let BrainEvent::PermissionRequested { request_id, input, .. } = &event {
+                        // Recorded before the event is published, so a caller
+                        // that answers the moment it sees the question finds
+                        // it pending.
+                        pending.lock().unwrap().insert(request_id.clone(), input.clone());
+                    }
                     let mut described = describe(&event);
                     turn.stamp(&event, &mut described);
                     push(&events, &context, &id, described);
@@ -362,6 +455,9 @@ pub fn start(
             adapter: adapter_id.to_string(),
             events,
             reader,
+            host,
+            pending,
+            turn,
         },
     );
     Ok(id)
@@ -427,6 +523,21 @@ fn describe(event: &BrainEvent) -> Value {
             "state": turn_state(*reason),
             "reason": reason.as_str(),
         }),
+        BrainEvent::PermissionRequested {
+            request_id,
+            tool,
+            input,
+            description,
+        } => {
+            let mut approval = json!({
+                "request_id": request_id,
+                "tool_call": {"tool": tool, "arguments": tool_arguments(input)},
+            });
+            if let Some(description) = description {
+                approval["description"] = Value::String(description.clone());
+            }
+            json!({"event": "approval.requested", "approval": approval})
+        }
         // The CLI upstream has no stable code of its own -- it printed a
         // sentence -- so the code is assigned here, at the boundary that
         // owns the contract. That is the point of the field: a consumer
@@ -488,17 +599,97 @@ pub fn events(id: &str, cursor: usize) -> Result<(Vec<Value>, usize)> {
 }
 
 /// Put something on the agent's stdin.
-pub fn submit_input(id: &str, _text: &str) -> Result<()> {
+pub fn submit_input(id: &str, text: &str) -> Result<()> {
     let sessions = sessions().lock().unwrap();
-    sessions
+    let live = sessions
         .get(id)
         .ok_or_else(|| anyhow!("no such session: {id}"))?;
+    if let Some(host) = &live.host {
+        // A hosted session reads stdin as a stream of user turns.
+        return live.running.write_line(&host.user_message(text));
+    }
     // Said plainly rather than silently accepted: a one-shot CLI's stdin is
     // closed after the prompt, and pretending the text went somewhere would
     // leave a caller waiting for a reply to something nobody read.
     Err(anyhow!(
         "this session's stdin was closed after its prompt; start a session without a prompt to keep it open"
     ))
+}
+
+/// Answer a permission question the agent is waiting on.
+///
+/// `allow` runs the tool with exactly the input that was asked about;
+/// otherwise `message` reaches the model as the tool's error. Answering a
+/// question twice, or one that was never asked, is an error: the CLI is no
+/// longer waiting, and pretending the answer went somewhere would hide that.
+///
+/// `interrupt` (deny only) also ends the turn, so the agent does not go on
+/// to ask for the same thing another way.
+pub fn decide(
+    id: &str,
+    request_id: &str,
+    allow: bool,
+    message: Option<&str>,
+    interrupt: bool,
+) -> Result<Value> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions
+        .get(id)
+        .ok_or_else(|| anyhow!("no such session: {id}"))?;
+    let host = live
+        .host
+        .as_ref()
+        .ok_or_else(|| anyhow!("session {id} is not hosted; nothing in it can be answered"))?;
+    let input = live
+        .pending
+        .lock()
+        .unwrap()
+        .remove(request_id)
+        .ok_or_else(|| anyhow!("no pending approval {request_id} in session {id}: already answered, or never asked"))?;
+    let decision = if allow {
+        Decision::Allow
+    } else {
+        Decision::Deny {
+            message: message.unwrap_or("denied by the user").to_string(),
+            interrupt,
+        }
+    };
+    live.running
+        .write_line(&host.permission_reply(request_id, &decision, &input))?;
+    let mut resolved = resolution(request_id, &decision, "caller");
+    live.turn.stamp_now(&mut resolved);
+    push(&live.events, &live.context, id, resolved.clone());
+    Ok(resolved)
+}
+
+/// The `approval.resolved` event for a decision.
+///
+/// `allow_once` and `deny` are the contract's approval words: this answers
+/// one tool call, it grants nothing beyond it.
+fn resolution(request_id: &str, decision: &Decision, decided_by: &str) -> Value {
+    let mut approval = json!({"request_id": request_id, "decided_by": decided_by});
+    match decision {
+        Decision::Allow => approval["decision"] = json!("allow_once"),
+        Decision::Deny { message, interrupt } => {
+            approval["decision"] = json!("deny");
+            approval["message"] = json!(message);
+            if *interrupt {
+                approval["interrupt"] = json!(true);
+            }
+        }
+    }
+    json!({"event": "approval.resolved", "approval": approval})
+}
+
+/// Approvals still waiting, for a caller that reconnected and lost track.
+pub fn pending_approvals(id: &str) -> Result<Vec<String>> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions
+        .get(id)
+        .ok_or_else(|| anyhow!("no such session: {id}"))?;
+    let mut ids: Vec<String> = live.pending.lock().unwrap().keys().cloned().collect();
+    ids.sort();
+    Ok(ids)
 }
 
 /// Stop the agent, and everything it started.
@@ -519,6 +710,8 @@ pub fn interrupt(id: &str, grace_ms: u64) -> Result<()> {
 pub fn status(id: &str) -> Result<Value> {
     if let Some(live) = sessions().lock().unwrap().get(id) {
         let snapshot = live.running.snapshot();
+        let mut pending: Vec<String> = live.pending.lock().unwrap().keys().cloned().collect();
+        pending.sort();
         return Ok(json!({
             "session_id": id,
             "state": if live.running.is_running() { "running" } else { "finished" },
@@ -531,6 +724,10 @@ pub fn status(id: &str) -> Result<Value> {
             } else {
                 Value::Null
             },
+            "hosted": live.host.is_some(),
+            // A hosted agent blocked on these is waiting for a person, not
+            // working; a status that said only "running" would hide that.
+            "pending_approvals": pending,
             "task_id": live.context.task_id,
             "run_id": live.context.run_id,
             "step_id": live.context.step_id,
@@ -555,8 +752,26 @@ pub fn close(id: &str) -> Result<Value> {
         adapter,
         events,
         reader,
+        host,
+        pending,
+        turn,
     } = live;
 
+    // A question nobody answered is a refusal, said out loud: the CLI would
+    // otherwise wait on it forever, and `wait` below with it.
+    if let Some(host) = &host {
+        let waiting: Vec<(String, Value)> = pending.lock().unwrap().drain().collect();
+        for (request_id, input) in waiting {
+            let decision = Decision::Deny {
+                message: "the session was closed before this was answered".into(),
+                interrupt: true,
+            };
+            let _ = running.write_line(&host.permission_reply(&request_id, &decision, &input));
+            let mut resolved = resolution(&request_id, &decision, "unterm");
+            turn.stamp_now(&mut resolved);
+            push(&events, &context, id, resolved);
+        }
+    }
     let snapshot = running.wait()?;
     if let Some(reader) = reader {
         let _ = reader.join();
@@ -887,6 +1102,97 @@ printf '%s\n' 'not json at all'
         assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
     }
 
+    /// The real Claude CLI, *driven*: nothing pre-approved. Writing a file
+    /// must come back as a question; allowing it writes the file, a follow-up
+    /// turn runs in the same process, and a second session that denies it
+    /// leaves no file. Skipped unless `UNTERM_LIVE_CLAUDE=1`.
+    #[test]
+    fn live_claude_hosted_session_asks_before_writing() {
+        if std::env::var("UNTERM_LIVE_CLAUDE").as_deref() != Ok("1") {
+            eprintln!("skipped: set UNTERM_LIVE_CLAUDE=1 to run against the real claude CLI");
+            return;
+        }
+        let dir = isolate();
+        let run = |name: &str, allow: bool| {
+            let work = dir.path().join(name);
+            std::fs::create_dir_all(&work).unwrap();
+            let command: Vec<String> = ["claude", "-p", "--model", "haiku"].iter().map(|s| s.to_string()).collect();
+            let id = start_hosted(
+                &command,
+                Some(work.to_str().unwrap()),
+                &[],
+                Some("Use the Bash tool to run exactly this command: echo hi > out.txt . Then reply with only: written"),
+                None,
+                TaskContext::default(),
+            )
+            .unwrap();
+            let events = wait_for_long(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+            let asked = events
+                .iter()
+                .find(|e| e["event"] == "approval.requested")
+                .unwrap_or_else(|| panic!("never asked: {events:#?}"))
+                .clone();
+            eprintln!("asked: {asked}");
+            assert_eq!(asked["approval"]["tool_call"]["tool"], "Bash", "{asked}");
+            let request_id = asked["approval"]["request_id"].as_str().unwrap().to_string();
+            decide(&id, &request_id, allow, (!allow).then_some("not on this machine"), !allow).unwrap();
+            let started = std::time::Instant::now();
+            let events = wait_for_long(&id, |e| e.iter().filter(|e| e["event"] == "turn.completed").count() >= 1);
+            let names: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+            eprintln!("{name}: answered turn ended after {:?}: {names:?}", started.elapsed());
+            (id, work, events)
+        };
+
+        // Allowed: the file is written, then a second turn in the same process.
+        let (id, work, _) = run("allowed", true);
+        assert!(work.join("out.txt").exists(), "allowed write did not happen");
+        submit_input(&id, "Now reply with only the word: done").unwrap();
+        let events = wait_for_long(&id, |e| e.iter().filter(|e| e["event"] == "turn.completed").count() >= 2);
+        let second: String = events
+            .iter()
+            .rev()
+            .take_while(|e| e["event"] != "turn.started")
+            .filter(|e| e["event"] == "output.delta" && e["stream"] == "assistant")
+            .filter_map(|e| e["text"].as_str())
+            .collect();
+        assert_eq!(second.trim(), "done", "{events:#?}");
+        let ending = close(&id).unwrap();
+        assert_eq!(ending["state"], "finished", "{ending}");
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            let (all, _) = replay_of(&id);
+            std::fs::write(&path, serde_json::to_string_pretty(&all).unwrap()).unwrap();
+        }
+
+        // Denied, stopping the turn: no file, the turn ends interrupted (not
+        // failed), and the agent does not come back asking another way.
+        let started = std::time::Instant::now();
+        let (id, work, events) = run("denied", false);
+        assert!(!work.join("out.txt").exists(), "denied write happened anyway");
+        assert!(started.elapsed() < std::time::Duration::from_secs(60), "denial did not end the turn");
+        let completed = events.iter().find(|e| e["event"] == "turn.completed").expect("turn ended");
+        assert_eq!(completed["state"], "interrupted", "{completed}");
+        assert_eq!(events.iter().filter(|e| e["event"] == "approval.requested").count(), 1, "asked again");
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").unwrap();
+        assert_eq!(resolved["approval"]["interrupt"], true);
+        assert!(resolved["turn_id"].is_string(), "{resolved}");
+        close(&id).unwrap();
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            let (all, _) = replay_of(&id);
+            std::fs::write(format!("{path}.denied.json"), serde_json::to_string_pretty(&all).unwrap()).unwrap();
+        }
+    }
+
+    fn wait_for_long(id: &str, predicate: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let (events, _) = events(id, 0).unwrap();
+            if predicate(&events) || std::time::Instant::now() > deadline {
+                return events;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     /// The real Antigravity CLI (`agy`) through this session layer. Skipped
     /// unless `UNTERM_LIVE_AGY=1`; needs one interactive `agy` sign-in first
     /// (headless runs reuse the cached credentials).
@@ -1003,6 +1309,129 @@ printf '%s\n' 'not json at all'
             .collect();
         let len = events.len();
         (events, len)
+    }
+
+    /// A stand-in for `claude` driven over its host protocol: it asks one
+    /// permission question, says which answer it got, and takes one
+    /// follow-up turn. Lines are the shapes real Claude Code 2.1.319 uses.
+    const HOSTED_CLAUDE: &str = r#"
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+read -r prompt
+printf '%s\n' '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo hi > out.txt"},"description":"Write hi"}}'
+read -r reply
+case "$reply" in
+  *'"allow"'*) printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"allowed"}]}}' ;;
+  *) printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"denied"}]}}' ;;
+esac
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
+read -r followup || exit 0
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"second turn"}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
+"#;
+
+    fn hosted_fake() -> String {
+        let id = start_hosted(
+            &a_codex_like_agent(HOSTED_CLAUDE),
+            None,
+            &[],
+            Some("write the file"),
+            Some("claude"),
+            TaskContext::default(),
+        )
+        .unwrap();
+        id
+    }
+
+    /// Poll the live stream until `predicate` holds, or give up.
+    fn wait_for(id: &str, predicate: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let (events, _) = events(id, 0).unwrap();
+            if predicate(&events) || std::time::Instant::now() > deadline {
+                return events;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    fn said(events: &[Value], text: &str) -> bool {
+        events.iter().any(|e| e["event"] == "output.delta" && e["text"] == text)
+    }
+
+    #[test]
+    fn a_hosted_session_asks_and_runs_only_what_was_allowed() {
+        let _dir = isolate();
+        let id = hosted_fake();
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        let asked = events.iter().find(|e| e["event"] == "approval.requested").expect("asked");
+        assert_eq!(asked["approval"]["request_id"], "r1", "{asked}");
+        assert_eq!(asked["approval"]["tool_call"]["tool"], "Bash", "{asked}");
+        assert_eq!(asked["approval"]["tool_call"]["arguments"]["command"], "echo hi > out.txt");
+        assert!(asked["turn_id"].is_string(), "inside the turn: {asked}");
+        assert_eq!(pending_approvals(&id).unwrap(), ["r1"]);
+        assert_eq!(status(&id).unwrap()["pending_approvals"], json!(["r1"]));
+
+        let resolved = decide(&id, "r1", true, None, false).unwrap();
+        assert_eq!(resolved["approval"]["decision"], "allow_once");
+        let events = wait_for(&id, |e| said(e, "allowed"));
+        assert!(said(&events, "allowed"), "{events:#?}");
+        // Answering twice is an error, not a second reply nobody reads.
+        assert!(decide(&id, "r1", true, None, false).is_err());
+
+        // The same process takes a follow-up turn.
+        submit_input(&id, "and again").unwrap();
+        let events = wait_for(&id, |e| said(e, "second turn"));
+        assert!(said(&events, "second turn"), "{events:#?}");
+        let turns: Vec<&Value> = events.iter().filter(|e| e["event"] == "turn.started").collect();
+        assert_eq!(turns.len(), 2);
+        assert_ne!(turns[0]["turn_id"], turns[1]["turn_id"], "each turn its own id");
+
+        let ending = close(&id).unwrap();
+        assert_eq!(ending["state"], "finished", "{ending}");
+    }
+
+    #[test]
+    fn a_denied_tool_is_not_run_and_the_model_is_told() {
+        let _dir = isolate();
+        let id = hosted_fake();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        let resolved = decide(&id, "r1", false, Some("not on this machine"), false).unwrap();
+        assert_eq!(resolved["approval"]["decision"], "deny");
+        assert_eq!(resolved["approval"]["message"], "not on this machine");
+        let events = wait_for(&id, |e| said(e, "denied"));
+        assert!(said(&events, "denied"), "{events:#?}");
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn closing_with_a_question_open_denies_it_instead_of_hanging() {
+        let _dir = isolate();
+        let id = hosted_fake();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        // Nobody answers. Close must not wait forever on a CLI that is
+        // waiting on us.
+        let ending = close(&id).unwrap();
+        assert_eq!(ending["state"], "finished", "{ending}");
+        let (events, _) = replay_of(&id);
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decision"], "deny");
+        assert_eq!(resolved["approval"]["decided_by"], "unterm");
+        assert!(said(&events, "denied"), "the model heard the refusal: {events:#?}");
+    }
+
+    #[test]
+    fn only_a_cli_with_a_host_protocol_can_be_driven() {
+        let _dir = isolate();
+        let err = start_hosted(&a_codex_like_agent("true"), None, &[], None, Some("codex"), TaskContext::default())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot be driven"), "{err}");
+        // And a plain session still refuses input it cannot deliver.
+        let id = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), TaskContext::default()).unwrap();
+        assert!(submit_input(&id, "x").is_err());
+        assert!(decide(&id, "r1", true, None, false).is_err());
+        close(&id).unwrap();
     }
 
     #[test]

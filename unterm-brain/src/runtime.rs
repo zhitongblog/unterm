@@ -24,7 +24,7 @@
 use crate::{BrainAdapter, BrainEvent, StopReason, ThreadId, Usage};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -48,6 +48,10 @@ pub struct Spec {
     pub prompt: Option<String>,
     /// The flag that continues an existing conversation, when the CLI has one.
     pub resume_flag: Option<String>,
+    /// Keep stdin open after the prompt, for a CLI driven over a stdin
+    /// protocol (follow-up turns, permission replies). The prompt, if any, is
+    /// written and stdin stays open until [`Running::close_stdin`] or `wait`.
+    pub keep_stdin_open: bool,
 }
 
 impl Spec {
@@ -58,6 +62,7 @@ impl Spec {
             cwd: None,
             env: Vec::new(),
             prompt: None,
+            keep_stdin_open: false,
             resume_flag: None,
         }
     }
@@ -79,6 +84,11 @@ impl Spec {
 
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+
+    pub fn keep_stdin_open(mut self) -> Self {
+        self.keep_stdin_open = true;
         self
     }
 
@@ -159,6 +169,8 @@ pub struct Running {
     snapshot: Arc<Mutex<Snapshot>>,
     interrupted: Arc<AtomicBool>,
     readers: Vec<std::thread::JoinHandle<()>>,
+    /// Present only for a spec that kept stdin open.
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
 }
 
 /// The process a spec describes: program, args, pipes, directory, env.
@@ -198,7 +210,20 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
     let mut child = command.spawn()?;
     let pid = child.id();
 
-    if let Some(prompt) = &spec.prompt {
+    let mut kept_stdin = None;
+    if spec.keep_stdin_open {
+        // Driven over stdin: the prompt (already in the CLI's own framing,
+        // which is the caller's business) goes in, and the pipe stays open
+        // for whatever is said next.
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Some(prompt) = &spec.prompt {
+                let _ = stdin.write_all(prompt.as_bytes());
+                let _ = stdin.write_all(b"\n");
+                let _ = stdin.flush();
+            }
+            kept_stdin = Some(stdin);
+        }
+    } else if let Some(prompt) = &spec.prompt {
         // Closing stdin afterwards is what tells a one-shot CLI the prompt is
         // complete; leaving it open makes the process wait forever.
         if let Some(mut stdin) = child.stdin.take() {
@@ -262,6 +287,7 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
         snapshot,
         interrupted: Arc::new(AtomicBool::new(false)),
         readers,
+        stdin: Arc::new(Mutex::new(kept_stdin)),
     })
 }
 
@@ -303,6 +329,31 @@ impl Running {
     /// What has been seen so far. Safe to call while the brain is running.
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
+    }
+
+    /// Send one line to a brain whose stdin was kept open.
+    ///
+    /// An error, not a silent no-op, when there is no open stdin: a caller
+    /// waiting for an answer to text nobody read would wait forever.
+    pub fn write_line(&self, line: &str) -> anyhow::Result<()> {
+        let mut guard = self.stdin.lock().unwrap();
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("this brain's stdin is not open"))?;
+        stdin.write_all(line.as_bytes())?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(())
+    }
+
+    /// Whether stdin is still open for [`write_line`](Self::write_line).
+    pub fn stdin_open(&self) -> bool {
+        self.stdin.lock().unwrap().is_some()
+    }
+
+    /// Close stdin: for a stream-driven CLI, "there is nothing more".
+    pub fn close_stdin(&self) {
+        drop(self.stdin.lock().unwrap().take());
     }
 
     /// Whether the process is still alive.
@@ -369,6 +420,9 @@ impl Running {
     /// still in the pipe, and returning a snapshot that is missing the final
     /// turn would make a completed run look interrupted.
     pub fn wait(mut self) -> anyhow::Result<Snapshot> {
+        // A CLI reading stdin waits for it to end; waiting on it while the
+        // pipe is still open would wait forever.
+        self.close_stdin();
         let status = self.child.lock().unwrap().wait()?;
         for reader in self.readers.drain(..) {
             let _ = reader.join();
@@ -482,6 +536,36 @@ printf '%s\n' '{"type":"turn.completed"}'
         // Still counted apart after summing — this is the column a bill is
         // reconciled against.
         assert_eq!(snapshot.usage.cached_input_tokens, 6);
+    }
+
+    #[test]
+    fn a_kept_stdin_takes_more_lines_and_wait_closes_it() {
+        // Echo every stdin line back as a Codex message until EOF.
+        let script = r#"while read -r line; do printf '{"type":"agent_message","text":"%s"}\n' "$line"; done"#;
+        let spec = fake_brain(script).keep_stdin_open().prompt("first");
+        let mut running = spawn(&spec, Box::new(CodexAdapter::new())).unwrap();
+        let events = running.events();
+        assert!(running.stdin_open());
+        running.write_line("second").unwrap();
+        // wait() must close stdin itself, or this would never return.
+        running.wait().unwrap();
+        let texts: Vec<String> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                BrainEvent::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["first", "second"]);
+    }
+
+    #[test]
+    fn writing_to_a_closed_stdin_is_an_error() {
+        let mut running = spawn(&fake_brain("true"), Box::new(CodexAdapter::new())).unwrap();
+        running.events();
+        assert!(!running.stdin_open());
+        assert!(running.write_line("anyone?").is_err());
+        running.wait().unwrap();
     }
 
     #[test]

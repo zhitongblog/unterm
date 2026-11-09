@@ -314,6 +314,10 @@ impl BrainAdapter for CodexAdapter {
 pub struct ClaudeAdapter {
     turn_open: bool,
     session: Option<String>,
+    /// Claude said the host interrupted it (a denial with `interrupt`). The
+    /// `error_during_execution` result that follows is that interruption,
+    /// not a failure.
+    stopped_by_host: bool,
 }
 
 impl ClaudeAdapter {
@@ -381,7 +385,11 @@ impl BrainAdapter for ClaudeAdapter {
                             }
                         }
                         "thinking" => {
-                            if let Some(text) = text_at(&block, &[&["thinking"], &["text"]]) {
+                            // Claude can send a thinking block with nothing
+                            // in it (seen live after an interrupted turn).
+                            if let Some(text) = text_at(&block, &[&["thinking"], &["text"]])
+                                .filter(|text| !text.is_empty())
+                            {
                                 events.push(BrainEvent::Reasoning {
                                     text: text.to_string(),
                                 });
@@ -420,6 +428,14 @@ impl BrainAdapter for ClaudeAdapter {
                     .cloned()
                     .unwrap_or_default();
                 for block in blocks {
+                    if block.get("type").and_then(Value::as_str) == Some("text")
+                        && block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.starts_with("[Request interrupted by user"))
+                    {
+                        self.stopped_by_host = true;
+                    }
                     if block.get("type").and_then(Value::as_str) == Some("tool_result") {
                         events.push(BrainEvent::ToolResult {
                             call_id: block
@@ -441,6 +457,25 @@ impl BrainAdapter for ClaudeAdapter {
                     }
                 }
             }
+            // With `--permission-prompt-tool stdio` Claude asks its host,
+            // on stdout, before running a tool it would otherwise prompt for,
+            // and waits for a `control_response` on stdin. Shape verified
+            // against Claude Code 2.1.319.
+            "control_request" => {
+                let request = value.get("request").cloned().unwrap_or(Value::Null);
+                if request.get("subtype").and_then(Value::as_str) == Some("can_use_tool") {
+                    events.push(BrainEvent::PermissionRequested {
+                        request_id: text_at(&value, &[&["request_id"]])
+                            .unwrap_or_default()
+                            .to_string(),
+                        tool: text_at(&request, &[&["tool_name"]])
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        input: request.get("input").cloned().unwrap_or(Value::Null),
+                        description: text_at(&request, &[&["description"]]).map(str::to_string),
+                    });
+                }
+            }
             "result" => {
                 self.turn_open = false;
                 if let Some(usage) = value.get("usage") {
@@ -451,6 +486,12 @@ impl BrainAdapter for ClaudeAdapter {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let subtype = value.get("subtype").and_then(Value::as_str).unwrap_or("");
+                if std::mem::take(&mut self.stopped_by_host) {
+                    events.push(BrainEvent::TurnEnded {
+                        reason: StopReason::Interrupted,
+                    });
+                    return events;
+                }
                 if errored {
                     events.push(BrainEvent::Error {
                         message: text_at(&value, &[&["result"], &["error"]])
@@ -1842,6 +1883,58 @@ mod tests {
                 output: Some("nope".into()),
             }]
         );
+    }
+
+    #[test]
+    fn claude_turn_stopped_by_a_denial_is_interrupted_not_failed() {
+        // Live shape after `deny` with `interrupt: true` (Claude Code 2.1.319).
+        let events = replay(
+            &mut ClaudeAdapter::new(),
+            r#"{"type":"system","subtype":"init","model":"m"}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"The user doesn't want to proceed with this tool use.","is_error":true,"tool_use_id":"t1"}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+{"type":"result","subtype":"error_during_execution","is_error":true,"result":null}
+{"type":"system","subtype":"init","model":"m"}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"done"}]}}
+{"type":"result","subtype":"success","is_error":false}"#,
+        );
+        assert!(!events.iter().any(|e| matches!(e, BrainEvent::Error { .. })), "{events:?}");
+        assert!(!events.iter().any(|e| matches!(e, BrainEvent::Reasoning { .. })), "empty thinking: {events:?}");
+        let ends: Vec<&BrainEvent> = events.iter().filter(|e| matches!(e, BrainEvent::TurnEnded { .. })).collect();
+        assert_eq!(
+            ends,
+            [
+                &BrainEvent::TurnEnded { reason: StopReason::Interrupted },
+                &BrainEvent::TurnEnded { reason: StopReason::Completed },
+            ],
+            "the next turn is unaffected"
+        );
+    }
+
+    #[test]
+    fn claude_permission_question_is_read_as_a_question() {
+        // Verbatim shape from Claude Code 2.1.319 with
+        // `--permission-prompt-tool stdio` (suggestions trimmed).
+        let events = replay(
+            &mut ClaudeAdapter::new(),
+            r#"{"type":"control_request","request_id":"a331","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"echo hi > out.txt","description":"Write hi"},"description":"Write hi","permission_suggestions":[]}}"#,
+        );
+        assert_eq!(
+            events,
+            vec![BrainEvent::PermissionRequested {
+                request_id: "a331".into(),
+                tool: "Bash".into(),
+                input: serde_json::json!({"command": "echo hi > out.txt", "description": "Write hi"}),
+                description: Some("Write hi".into()),
+            }]
+        );
+        assert!(!events[0].is_tool_request(), "a question, not a request to run");
+        // Other control requests are not permission questions.
+        assert!(replay(
+            &mut ClaudeAdapter::new(),
+            r#"{"type":"control_request","request_id":"x","request":{"subtype":"interrupt"}}"#
+        )
+        .is_empty());
     }
 
     #[test]

@@ -31,10 +31,12 @@ escape-parser / bidi）。上游 MIT，义务跟随代码来源而非 crate 命�
   生命周期，禁止绕过 Core 保存 Screen 状态。
 - **副作用入口走 Action Gateway**，不再往 `unterm-mcp/src/handler.rs` 堆
   全局状态。
-- **新增 MCP 方法要过五道注册守卫**，每一道都是断言具体数字的测试，漏一处
-  就红：`unterm-agents/src/mcp_meta.rs` 的 `MCP_METHODS`、
+- **新增 MCP 方法要过六道注册守卫**，每一道都是断言具体数字或逐个检查的
+  测试，漏一处就红：`unterm-agents/src/mcp_meta.rs` 的 `MCP_METHODS`、
   `unterm-mcp/src/meta.rs`、`unterm-cli/src/reference.rs`、
-  `unterm-gateway/src/lib.rs` 的风险分级、dispatcher 本身。
+  `unterm-gateway/src/lib.rs` 的风险分级、dispatcher 本身，以及
+  `unterm-mcp/src/handler.rs` 的审计分类（`method_is_mutating` /
+  `method_is_read_only` 必须恰好命中一个）。
 
 ## 两个 state 目录不是一回事
 

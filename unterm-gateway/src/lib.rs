@@ -436,6 +436,8 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         "orchestrate.broadcast",
         "agent_session.start",
         "agent_session.submit_input",
+        // Allowing a held tool call is what makes it run.
+        "agent_session.decide",
         // The envelope runs whatever it carries; the method inside is judged
         // on its own terms as well.
         "terminal.invoke",

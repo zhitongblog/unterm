@@ -44,6 +44,7 @@ pub const METHODS: &[&str] = &[
     "agent_session.interrupt",
     "agent_session.status",
     "agent_session.close",
+    "agent_session.decide",
     "terminal.manifest",
     "terminal.health",
     "terminal.capabilities",
@@ -403,7 +404,12 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 })
                 .unwrap_or_default();
             let context = task_context(params);
-            let id = unterm_services::agent_session::start(
+            let start = if params.get("hosted").and_then(Value::as_bool).unwrap_or(false) {
+                unterm_services::agent_session::start_hosted
+            } else {
+                unterm_services::agent_session::start
+            };
+            let id = start(
                 &command,
                 params.get("cwd").and_then(Value::as_str),
                 &env,
@@ -446,6 +452,19 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
             unterm_services::agent_session::status(&text(params, "session_id")?)
         }
 
+        "agent_session.decide" => {
+            let allow = params
+                .get("allow")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| anyhow!("Missing 'allow'"))?;
+            unterm_services::agent_session::decide(
+                &text(params, "session_id")?,
+                &text(params, "request_id")?,
+                allow,
+                params.get("message").and_then(Value::as_str),
+                params.get("interrupt").and_then(Value::as_bool).unwrap_or(false),
+            )
+        }
         "agent_session.close" => {
             unterm_services::agent_session::close(&text(params, "session_id")?)
         }
