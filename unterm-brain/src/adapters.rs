@@ -1,6 +1,6 @@
 //! The CLIs, read into one vocabulary.
 //!
-//! Codex, Claude and Gemini all emit JSON Lines, and they disagree about almost
+//! Codex, Claude, Gemini and OpenCode all emit JSON Lines, and they disagree about almost
 //! everything above that: what a turn is called, where the text lives, how a
 //! tool call is spelled, whether usage arrives per turn or per message. The
 //! adapters absorb that so nothing downstream has to know which one ran.
@@ -639,6 +639,174 @@ impl BrainAdapter for GeminiAdapter {
     }
 }
 
+/// Reads `opencode run --format json`.
+///
+/// The wire format is `packages/opencode/src/cli/cmd/run.ts` plus the part
+/// types in the SDK (checked against v1.19.5): every line is
+/// `{type, timestamp, sessionID, part}` with `type` one of `step_start`,
+/// `step_finish`, `text`, `reasoning`, `tool_use`, or `{type:"error", error}`.
+///
+/// It differs from the other three in ways that decide how this is written:
+///
+/// - **There is no end-of-turn line.** `run` stops when the session goes idle
+///   and the process exits. The turn therefore ends at EOF, and *how* it
+///   ended is read from the last `step_finish.reason`: `stop` finished,
+///   `length` hit a limit, anything else (or nothing) means the stream was
+///   cut off mid-turn.
+/// - **A turn is several steps**, one per model call, each with its own
+///   `step_finish` and tokens. They are added up and reported once at the
+///   end, so a turn costs one `Usage` here as it does for every other CLI.
+/// - **A tool is reported once, after it ran** (`state.status` completed or
+///   error), carrying both its input and its outcome. One line becomes the
+///   request and the result, in that order -- the same pair the others emit
+///   from two lines.
+/// - **No model name** appears anywhere in the stream; `TurnStarted` says so
+///   by leaving it out rather than guessing.
+/// - Reasoning only appears when `run` is given `--thinking`.
+#[derive(Default)]
+pub struct OpenCodeAdapter {
+    turn_open: bool,
+    session: Option<String>,
+    usage: Usage,
+    usage_seen: bool,
+    last_finish: Option<String>,
+    errored: bool,
+}
+
+impl OpenCodeAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn open_turn(&mut self, events: &mut Vec<BrainEvent>) {
+        if !self.turn_open {
+            self.turn_open = true;
+            self.usage = Usage::default();
+            self.usage_seen = false;
+            self.last_finish = None;
+            self.errored = false;
+            events.push(BrainEvent::TurnStarted { model: None });
+        }
+    }
+}
+
+impl BrainAdapter for OpenCodeAdapter {
+    fn id(&self) -> &'static str {
+        "opencode"
+    }
+
+    fn on_line(&mut self, line: &str) -> Vec<BrainEvent> {
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return vec![BrainEvent::Error {
+                message: format!("opencode: unparsable line: {}", truncate(line)),
+            }];
+        };
+        if let Some(session) = text_at(&value, &[&["sessionID"]]) {
+            self.session = Some(session.to_string());
+        }
+        let part = value.get("part").cloned().unwrap_or(Value::Null);
+        let mut events = Vec::new();
+
+        match value.get("type").and_then(Value::as_str).unwrap_or_default() {
+            "step_start" => self.open_turn(&mut events),
+            "step_finish" => {
+                self.open_turn(&mut events);
+                if let Some(tokens) = part.get("tokens") {
+                    self.usage_seen = true;
+                    self.usage.input_tokens += u64_at(tokens, &["input"]);
+                    self.usage.output_tokens += u64_at(tokens, &["output"]);
+                    self.usage.cached_input_tokens += tokens
+                        .get("cache")
+                        .map(|cache| u64_at(cache, &["read"]))
+                        .unwrap_or(0);
+                }
+                self.last_finish = text_at(&part, &[&["reason"]]).map(str::to_string);
+            }
+            "text" => {
+                self.open_turn(&mut events);
+                if let Some(text) = text_at(&part, &[&["text"]]) {
+                    if !text.is_empty() {
+                        events.push(BrainEvent::Text {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            }
+            "reasoning" => {
+                self.open_turn(&mut events);
+                if let Some(text) = text_at(&part, &[&["text"]]) {
+                    if !text.is_empty() {
+                        events.push(BrainEvent::Reasoning {
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            }
+            "tool_use" => {
+                self.open_turn(&mut events);
+                let call_id = text_at(&part, &[&["callID"], &["id"]])
+                    .unwrap_or("unknown")
+                    .to_string();
+                let state = part.get("state").cloned().unwrap_or(Value::Null);
+                events.push(BrainEvent::ToolRequested {
+                    call_id: call_id.clone(),
+                    name: text_at(&part, &[&["tool"]]).unwrap_or("unknown").to_string(),
+                    arguments: state.get("input").cloned().unwrap_or(Value::Null),
+                });
+                let ok = state.get("status").and_then(Value::as_str) == Some("completed");
+                events.push(BrainEvent::ToolResult {
+                    call_id,
+                    ok,
+                    output: text_at(&state, &[&["output"], &["error"]]).map(str::to_string),
+                });
+            }
+            "error" => {
+                self.errored = true;
+                let error = value.get("error").cloned().unwrap_or(Value::Null);
+                events.push(BrainEvent::Error {
+                    message: text_at(&error, &[&["data", "message"], &["message"], &["name"]])
+                        .unwrap_or("opencode reported an error")
+                        .to_string(),
+                });
+            }
+            _ => {}
+        }
+        events
+    }
+
+    fn external_id(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    fn on_eof(&mut self) -> Vec<BrainEvent> {
+        if !self.turn_open {
+            return Vec::new();
+        }
+        self.turn_open = false;
+        let mut events = Vec::new();
+        if self.usage_seen {
+            events.push(BrainEvent::Usage(self.usage));
+        }
+        let reason = if self.errored {
+            StopReason::Error
+        } else {
+            match self.last_finish.as_deref() {
+                Some("stop") | Some("end_turn") => StopReason::Completed,
+                Some("length") | Some("max_tokens") => StopReason::Limit,
+                // `tool-calls` with nothing after it, or no step ever
+                // finishing: the process went away in the middle.
+                _ => StopReason::Interrupted,
+            }
+        };
+        events.push(BrainEvent::TurnEnded { reason });
+        events
+    }
+}
+
 /// Reads a CLI no adapter knows: each line of output is output, nothing
 /// more is claimed about it.
 ///
@@ -672,7 +840,12 @@ impl BrainAdapter for GenericAdapter {
 
 fn usage_from(value: &Value) -> Usage {
     Usage {
-        input_tokens: u64_at(value, &["input_tokens", "prompt_tokens", "input"]),
+        // Claude reports tokens written to the prompt cache apart from
+        // `input_tokens`. They are fresh input -- billed as such, at a
+        // premium -- not cache reads, so they belong here. Left out, a live
+        // `claude -p` turn reported 4 input tokens for a ~17k-token prompt.
+        input_tokens: u64_at(value, &["input_tokens", "prompt_tokens", "input"])
+            + u64_at(value, &["cache_creation_input_tokens"]),
         output_tokens: u64_at(value, &["output_tokens", "completion_tokens", "output"]),
         cached_input_tokens: u64_at(
             value,
@@ -735,6 +908,137 @@ mod tests {
 
     fn gemini() -> Vec<BrainEvent> {
         replay(&mut GeminiAdapter::new(), GEMINI_STREAM)
+    }
+
+    /// The same turn as `opencode run --format json --thinking` prints it:
+    /// two steps (the tool call, then the answer), the tool reported once
+    /// after it ran, tokens split across the steps, and no closing line.
+    const OPENCODE_STREAM: &str = r#"
+{"type":"step_start","timestamp":1,"sessionID":"ses_1","part":{"id":"p1","sessionID":"ses_1","messageID":"m1","type":"step-start"}}
+{"type":"reasoning","timestamp":2,"sessionID":"ses_1","part":{"id":"p2","type":"reasoning","text":"I should list the directory","time":{"start":1,"end":2}}}
+{"type":"tool_use","timestamp":3,"sessionID":"ses_1","part":{"id":"p3","type":"tool","callID":"call_1","tool":"shell","state":{"status":"completed","input":{"command":"ls"},"output":"a\nb","title":"ls","metadata":{},"time":{"start":2,"end":3}}}}
+{"type":"step_finish","timestamp":4,"sessionID":"ses_1","part":{"id":"p4","type":"step-finish","reason":"tool-calls","cost":0,"tokens":{"input":70,"output":10,"reasoning":0,"cache":{"read":60,"write":0}}}}
+{"type":"step_start","timestamp":5,"sessionID":"ses_1","part":{"id":"p5","type":"step-start"}}
+{"type":"text","timestamp":6,"sessionID":"ses_1","part":{"id":"p6","type":"text","text":"There are two files.","time":{"start":5,"end":6}}}
+{"type":"step_finish","timestamp":7,"sessionID":"ses_1","part":{"id":"p7","type":"step-finish","reason":"stop","cost":0,"tokens":{"input":50,"output":20,"reasoning":0,"cache":{"read":40,"write":0}}}}
+"#;
+
+    fn opencode() -> Vec<BrainEvent> {
+        replay(&mut OpenCodeAdapter::new(), OPENCODE_STREAM)
+    }
+
+    #[test]
+    fn opencode_describes_the_same_turn_the_same_way() {
+        // OpenCode never names the model, so that one field is set aside;
+        // everything else -- including the tokens it splits across two
+        // steps -- must come out as the other CLIs say it.
+        let normalized = |events: Vec<BrainEvent>| {
+            let mut described: Vec<String> = events
+                .into_iter()
+                .map(|event| match event {
+                    BrainEvent::TurnStarted { .. } => BrainEvent::TurnStarted { model: None },
+                    other => other,
+                })
+                .map(|event| serde_json::to_string(&event).unwrap())
+                .collect();
+            described.sort();
+            described
+        };
+        assert_eq!(
+            normalized(opencode()),
+            normalized(replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM))
+        );
+    }
+
+    #[test]
+    fn opencode_reports_a_tool_as_request_then_result() {
+        let kinds: Vec<&str> = opencode().iter().map(BrainEvent::kind).collect();
+        let request = kinds.iter().position(|k| *k == "tool_requested").unwrap();
+        assert_eq!(kinds[request + 1], "tool_result", "{kinds:?}");
+    }
+
+    #[test]
+    fn opencode_ends_the_turn_once_at_eof_with_one_usage() {
+        let events = opencode();
+        let kinds: Vec<&str> = events.iter().map(BrainEvent::kind).collect();
+        assert_eq!(kinds.iter().filter(|k| **k == "turn_started").count(), 1, "{kinds:?}");
+        assert_eq!(kinds.iter().filter(|k| **k == "usage").count(), 1, "{kinds:?}");
+        assert_eq!(&kinds[kinds.len() - 2..], ["usage", "turn_ended"]);
+    }
+
+    #[test]
+    fn opencode_learns_the_session_it_would_resume_by() {
+        let mut adapter = OpenCodeAdapter::new();
+        replay(&mut adapter, OPENCODE_STREAM);
+        assert_eq!(adapter.external_id(), Some("ses_1"));
+    }
+
+    #[test]
+    fn opencode_cut_off_after_a_tool_call_is_an_interruption() {
+        // The last step asked for a tool and nothing followed: the process
+        // went away mid-turn, which must not read as a clean finish.
+        let events = replay(
+            &mut OpenCodeAdapter::new(),
+            r#"{"type":"step_start","sessionID":"s","part":{"type":"step-start"}}
+{"type":"step_finish","sessionID":"s","part":{"type":"step-finish","reason":"tool-calls","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}"#,
+        );
+        assert_eq!(
+            events.last(),
+            Some(&BrainEvent::TurnEnded { reason: StopReason::Interrupted })
+        );
+    }
+
+    #[test]
+    fn opencode_running_out_of_length_is_a_limit() {
+        let events = replay(
+            &mut OpenCodeAdapter::new(),
+            r#"{"type":"step_finish","sessionID":"s","part":{"type":"step-finish","reason":"length","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}"#,
+        );
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Limit }));
+    }
+
+    #[test]
+    fn opencode_session_error_ends_the_turn_as_an_error() {
+        let events = replay(
+            &mut OpenCodeAdapter::new(),
+            r#"{"type":"step_start","sessionID":"s","part":{"type":"step-start"}}
+{"type":"error","sessionID":"s","error":{"name":"ProviderAuthError","data":{"message":"no api key"}}}"#,
+        );
+        assert!(events.contains(&BrainEvent::Error { message: "no api key".into() }), "{events:?}");
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Error }));
+    }
+
+    #[test]
+    fn opencode_failed_tool_keeps_its_reason() {
+        let events = replay(
+            &mut OpenCodeAdapter::new(),
+            r#"{"type":"tool_use","sessionID":"s","part":{"type":"tool","callID":"c1","tool":"read","state":{"status":"error","input":{"path":"x"},"error":"nope","time":{"start":1,"end":2}}}}"#,
+        );
+        assert!(events.contains(&BrainEvent::ToolResult {
+            call_id: "c1".into(),
+            ok: false,
+            output: Some("nope".into()),
+        }), "{events:?}");
+    }
+
+    #[test]
+    fn claude_cache_writes_count_as_input_not_as_nothing() {
+        // Shape taken from a live `claude -p --output-format stream-json` run.
+        let events = replay(
+            &mut ClaudeAdapter::new(),
+            r#"{"type":"system","subtype":"init","model":"m"}
+{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":2,"cache_creation_input_tokens":17360,"cache_read_input_tokens":14517,"output_tokens":4}}"#,
+        );
+        assert!(events.contains(&BrainEvent::Usage(Usage {
+            input_tokens: 17362,
+            output_tokens: 4,
+            cached_input_tokens: 14517,
+        })), "{events:?}");
+    }
+
+    #[test]
+    fn opencode_silence_is_not_a_turn() {
+        assert!(replay(&mut OpenCodeAdapter::new(), "").is_empty());
     }
 
     #[test]
@@ -993,6 +1297,7 @@ mod tests {
             ("codex", replay(&mut CodexAdapter::new(), CODEX_STREAM)),
             ("claude", replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM)),
             ("gemini", gemini()),
+            ("opencode", opencode()),
         ] {
             let requested = events.iter().find_map(|event| match event {
                 BrainEvent::ToolRequested { call_id, name, .. } => {
@@ -1051,6 +1356,7 @@ mod tests {
             ("codex", replay(&mut CodexAdapter::new(), CODEX_STREAM)),
             ("claude", replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM)),
             ("gemini", gemini()),
+            ("opencode", opencode()),
         ] {
             let interruptions = events
                 .iter()
@@ -1080,6 +1386,10 @@ mod tests {
             (
                 "gemini",
                 replay(&mut GeminiAdapter::new(), "warning: rate limited"),
+            ),
+            (
+                "opencode",
+                replay(&mut OpenCodeAdapter::new(), "warning: rate limited"),
             ),
         ] {
             assert!(

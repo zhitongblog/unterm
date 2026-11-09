@@ -265,6 +265,8 @@ fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static 
                 "codex".into()
             } else if program.contains("gemini") {
                 "gemini".into()
+            } else if program.contains("opencode") {
+                "opencode".into()
             } else {
                 "generic".into()
             }
@@ -274,8 +276,9 @@ fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static 
         "claude" => ("claude", Box::new(unterm_brain::adapters::ClaudeAdapter::new())),
         "codex" => ("codex", Box::new(unterm_brain::adapters::CodexAdapter::new())),
         "gemini" => ("gemini", Box::new(unterm_brain::adapters::GeminiAdapter::new())),
+        "opencode" => ("opencode", Box::new(unterm_brain::adapters::OpenCodeAdapter::new())),
         "generic" => ("generic", Box::new(unterm_brain::adapters::GenericAdapter::new())),
-        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex, gemini or generic"),
+        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex, gemini, opencode or generic"),
     })
 }
 
@@ -802,6 +805,66 @@ printf '%s\n' 'not json at all'
         turns.dedup();
         assert_eq!(turns.len(), 1, "one turn, one id carried throughout: {turns:?}");
         assert!(events.iter().any(|e| e["event"] == "error"), "the junk line was reported");
+    }
+
+    /// The real Claude CLI, end to end through this session layer: a tool
+    /// call, its result, the answer, the cost. Skipped unless
+    /// `UNTERM_LIVE_CLAUDE=1`, because it spends tokens and needs a logged-in
+    /// `claude` on PATH. `UNTERM_CONTRACT_DUMP` works here too.
+    #[test]
+    fn live_claude_session_speaks_the_contract() {
+        if std::env::var("UNTERM_LIVE_CLAUDE").as_deref() != Ok("1") {
+            eprintln!("skipped: set UNTERM_LIVE_CLAUDE=1 to run against the real claude CLI");
+            return;
+        }
+        let dir = isolate();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("alpha.txt"), "a").unwrap();
+        std::fs::write(work.join("beta.txt"), "b").unwrap();
+
+        let command: Vec<String> = [
+            "claude", "-p", "--output-format", "stream-json", "--verbose",
+            "--model", "haiku", "--allowedTools", "Bash(ls:*)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let id = start(
+            &command,
+            Some(work.to_str().unwrap()),
+            &[],
+            Some("Use the Bash tool to run `ls` in the current directory, then reply with only the number of files."),
+            None,
+            TaskContext::default(),
+        )
+        .unwrap();
+        let ending = close(&id).unwrap();
+        let (events, _) = replay_of(&id);
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            std::fs::write(&path, serde_json::to_string_pretty(&events).unwrap()).unwrap();
+        }
+
+        let names: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+        eprintln!("events: {names:?}");
+        assert_eq!(ending["state"], "finished", "{ending}");
+        assert_eq!(ending["adapter"], "claude", "picked from the program name");
+        for expected in [
+            "session.started", "turn.started", "tool_call.requested", "tool_call.result",
+            "output.delta", "usage.updated", "turn.completed", "session.closed",
+        ] {
+            assert!(names.contains(&expected), "missing {expected}: {names:?}");
+        }
+        let request = events.iter().find(|e| e["event"] == "tool_call.requested").unwrap();
+        assert_eq!(request["tool_call"]["tool"], "Bash", "{request}");
+        let result = events.iter().find(|e| e["event"] == "tool_call.result").unwrap();
+        assert_eq!(result["external_call_id"], request["tool_call"]["external_call_id"]);
+        let answer: String = events
+            .iter()
+            .filter(|e| e["event"] == "output.delta" && e["stream"] == "assistant")
+            .filter_map(|e| e["text"].as_str())
+            .collect();
+        assert!(answer.contains('2'), "two files, the model said: {answer:?}");
     }
 
     // The events vector is moved into `close`; for assertions the audit trail
