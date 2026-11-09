@@ -864,7 +864,70 @@ printf '%s\n' 'not json at all'
             .filter(|e| e["event"] == "output.delta" && e["stream"] == "assistant")
             .filter_map(|e| e["text"].as_str())
             .collect();
-        assert!(answer.contains('2'), "two files, the model said: {answer:?}");
+        // Exactly 2: a looser check let "21" through when the agent ran in
+        // the wrong directory.
+        assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
+    }
+
+    /// The real OpenCode CLI through this session layer, on one of its free
+    /// models so no login is needed. Skipped unless `UNTERM_LIVE_OPENCODE=1`;
+    /// `UNTERM_LIVE_OPENCODE_MODEL` overrides the model.
+    #[test]
+    fn live_opencode_session_speaks_the_contract() {
+        if std::env::var("UNTERM_LIVE_OPENCODE").as_deref() != Ok("1") {
+            eprintln!("skipped: set UNTERM_LIVE_OPENCODE=1 to run against the real opencode CLI");
+            return;
+        }
+        let dir = isolate();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("alpha.txt"), "a").unwrap();
+        std::fs::write(work.join("beta.txt"), "b").unwrap();
+        let model = std::env::var("UNTERM_LIVE_OPENCODE_MODEL")
+            .unwrap_or_else(|_| "opencode/deepseek-v4.1-flash-free".into());
+
+        // npm installs opencode as a .cmd shim on Windows; the session layer
+        // sees through `cmd /c` to pick the adapter.
+        let mut command: Vec<String> = Vec::new();
+        if cfg!(windows) {
+            command.extend(["cmd".to_string(), "/c".to_string()]);
+        }
+        command.extend(
+            [
+                "opencode", "run", "--format", "json", "--auto", "-m", &model,
+                "Use the bash tool to run ls in the current directory, then reply with only the number of files.",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+        let id = start(&command, Some(work.to_str().unwrap()), &[], None, None, TaskContext::default()).unwrap();
+        let ending = close(&id).unwrap();
+        let (events, _) = replay_of(&id);
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            std::fs::write(&path, serde_json::to_string_pretty(&events).unwrap()).unwrap();
+        }
+
+        let names: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+        eprintln!("events: {names:?}");
+        assert_eq!(ending["adapter"], "opencode", "picked through cmd /c: {ending}");
+        assert_eq!(ending["state"], "finished", "{ending}");
+        for expected in [
+            "turn.started", "tool_call.requested", "tool_call.result",
+            "output.delta", "usage.updated", "turn.completed",
+        ] {
+            assert!(names.contains(&expected), "missing {expected}: {names:?}");
+        }
+        assert_eq!(names.iter().filter(|n| **n == "turn.completed").count(), 1, "{names:?}");
+        let completed = events.iter().find(|e| e["event"] == "turn.completed").unwrap();
+        assert_eq!(completed["state"], "finished", "{completed}");
+        let answer: String = events
+            .iter()
+            .filter(|e| e["event"] == "output.delta" && e["stream"] == "assistant")
+            .filter_map(|e| e["text"].as_str())
+            .collect();
+        // Exactly 2: a looser check let "21" through when the agent ran in
+        // the wrong directory.
+        assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
     }
 
     // The events vector is moved into `close`; for assertions the audit trail

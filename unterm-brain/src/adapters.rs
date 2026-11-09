@@ -49,6 +49,10 @@ fn u64_at(value: &Value, keys: &[&str]) -> u64 {
 pub struct CodexAdapter {
     turn_open: bool,
     session: Option<String>,
+    /// A non-transient `error` was seen in the open turn. The turn is not
+    /// over until `turn.failed` (or EOF) says so, but if the stream stops
+    /// here it ended in error, not by interruption.
+    errored: bool,
 }
 
 impl CodexAdapter {
@@ -91,6 +95,7 @@ impl BrainAdapter for CodexAdapter {
         match kind.as_str() {
             "turn.started" | "task_started" => {
                 self.turn_open = true;
+                self.errored = false;
                 events.push(BrainEvent::TurnStarted {
                     model: text_at(&value, &[&["model"], &["turn", "model"]])
                         .map(str::to_string),
@@ -251,10 +256,26 @@ impl BrainAdapter for CodexAdapter {
                 });
             }
             "thread.started" => {}
-            "turn.failed" | "error" => {
+            // `error` is not the end of the turn. Codex 0.167 prints one per
+            // retry ("Reconnecting... 2/5 (…)") and goes on; treating each as
+            // a failed turn ended a turn ten times over on one bad request,
+            // and would end a turn that a reconnect was about to save. Only
+            // `turn.failed` ends it.
+            "error" => {
+                let message = text_at(&value, &[&["message"], &["error", "message"]])
+                    .unwrap_or("codex reported an error");
+                if !message.starts_with("Reconnecting...") {
+                    self.errored = true;
+                    events.push(BrainEvent::Error {
+                        message: message.to_string(),
+                    });
+                }
+            }
+            "turn.failed" => {
                 self.turn_open = false;
+                self.errored = false;
                 events.push(BrainEvent::Error {
-                    message: text_at(&value, &[&["message"], &["error"], &["error", "message"]])
+                    message: text_at(&value, &[&["message"], &["error", "message"]])
                         .unwrap_or("codex reported an error")
                         .to_string(),
                 });
@@ -274,11 +295,15 @@ impl BrainAdapter for CodexAdapter {
     fn on_eof(&mut self) -> Vec<BrainEvent> {
         if self.turn_open {
             // The process died mid-turn. Saying so is the difference between
-            // a task that recovers and one that waits forever.
+            // a task that recovers and one that waits forever. After an
+            // error it died *of* that error, which is not resumable.
             self.turn_open = false;
-            return vec![BrainEvent::TurnEnded {
-                reason: StopReason::Interrupted,
-            }];
+            let reason = if std::mem::take(&mut self.errored) {
+                StopReason::Error
+            } else {
+                StopReason::Interrupted
+            };
+            return vec![BrainEvent::TurnEnded { reason }];
         }
         Vec::new()
     }
@@ -717,7 +742,12 @@ impl BrainAdapter for OpenCodeAdapter {
                 self.open_turn(&mut events);
                 if let Some(tokens) = part.get("tokens") {
                     self.usage_seen = true;
-                    self.usage.input_tokens += u64_at(tokens, &["input"]);
+                    // Cache writes are fresh input, as for Claude.
+                    self.usage.input_tokens += u64_at(tokens, &["input"])
+                        + tokens
+                            .get("cache")
+                            .map(|cache| u64_at(cache, &["write"]))
+                            .unwrap_or(0);
                     self.usage.output_tokens += u64_at(tokens, &["output"]);
                     self.usage.cached_input_tokens += tokens
                         .get("cache")
@@ -1034,6 +1064,73 @@ mod tests {
             output_tokens: 4,
             cached_input_tokens: 14517,
         })), "{events:?}");
+    }
+
+    /// Shape recorded from a real `codex exec --json` 0.167 run without
+    /// credentials (URL and config path trimmed): retries, a fallback
+    /// notice, then one `turn.failed`.
+    const CODEX_UNAUTHORIZED: &str = r#"
+{"type":"thread.started","thread_id":"01a1c04c-b5a9-7750-b3ee-acc8ea5f0dda"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header)"}
+{"type":"item.completed","item":{"id":"item_2","type":"error","message":"Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized"}}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header)"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"}}
+"#;
+
+    #[test]
+    fn codex_retries_do_not_end_the_turn_turn_failed_does() {
+        let events = replay(&mut CodexAdapter::new(), CODEX_UNAUTHORIZED);
+        let ended: Vec<&BrainEvent> = events
+            .iter()
+            .filter(|e| matches!(e, BrainEvent::TurnEnded { .. }))
+            .collect();
+        assert_eq!(ended, [&BrainEvent::TurnEnded { reason: StopReason::Error }], "{events:#?}");
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Error }));
+        // Retry notices are not errors; the real failure is reported.
+        let errors: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                BrainEvent::Error { message } => Some(message.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(errors.iter().all(|m| !m.starts_with("Reconnecting")), "{errors:?}");
+        assert!(errors.iter().any(|m| m.contains("401")), "{errors:?}");
+    }
+
+    #[test]
+    fn codex_turn_that_recovers_after_a_retry_is_not_failed() {
+        let events = replay(
+            &mut CodexAdapter::new(),
+            r#"{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (stream disconnected)"}
+{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#,
+        );
+        assert!(!events.iter().any(|e| matches!(e, BrainEvent::Error { .. })), "{events:?}");
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Completed }));
+    }
+
+    #[test]
+    fn codex_dying_after_an_error_ended_in_error() {
+        let events = replay(
+            &mut CodexAdapter::new(),
+            r#"{"type":"turn.started"}
+{"type":"error","message":"quota exceeded"}"#,
+        );
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Error }));
+    }
+
+    #[test]
+    fn opencode_cache_writes_count_as_input() {
+        let events = replay(
+            &mut OpenCodeAdapter::new(),
+            r#"{"type":"step_finish","sessionID":"s","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":5,"write":7}}}}"#,
+        );
+        assert!(events.contains(&BrainEvent::Usage(Usage { input_tokens: 17, output_tokens: 2, cached_input_tokens: 5 })), "{events:?}");
     }
 
     #[test]
