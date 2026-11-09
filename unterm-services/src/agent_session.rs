@@ -267,6 +267,11 @@ fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static 
                 "gemini".into()
             } else if program.contains("opencode") {
                 "opencode".into()
+            } else if program == "agy" || program.contains("antigravity") {
+                // Google's agent CLI; checked before "gemini" would matter
+                // only if a name held both, but `agy` is exact on purpose:
+                // three letters inside another program's name is no signal.
+                "agy".into()
             } else {
                 "generic".into()
             }
@@ -277,8 +282,9 @@ fn adapter_for(command: &[String], requested: Option<&str>) -> Result<(&'static 
         "codex" => ("codex", Box::new(unterm_brain::adapters::CodexAdapter::new())),
         "gemini" => ("gemini", Box::new(unterm_brain::adapters::GeminiAdapter::new())),
         "opencode" => ("opencode", Box::new(unterm_brain::adapters::OpenCodeAdapter::new())),
+        "agy" | "antigravity" => ("agy", Box::new(unterm_brain::adapters::AgyAdapter::new())),
         "generic" => ("generic", Box::new(unterm_brain::adapters::GenericAdapter::new())),
-        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex, gemini, opencode or generic"),
+        other => anyhow::bail!("unknown adapter {other:?}: use claude, codex, gemini, opencode, agy or generic"),
     })
 }
 
@@ -644,6 +650,12 @@ mod tests {
         assert_eq!(pick(&["cmd", "/c", "qwen", "--yolo"]), "generic");
         assert_eq!(pick(&["cmd", "/c", "echo", "hello"]), "generic");
         assert_eq!(pick(&["codex", "exec", "--json"]), "codex");
+        assert_eq!(pick(&["agy", "-p", "hi", "--output-format", "stream-json"]), "agy");
+        assert_eq!(pick(&[r"C:\Users\u\AppData\Local\agy\bin\agy.exe", "-p"]), "agy");
+        assert_eq!(pick(&["gemini", "-p", "hi"]), "gemini");
+        assert_eq!(pick(&["cmd", "/c", "opencode", "run"]), "opencode");
+        // `agy` only as the whole name, never as a fragment of another.
+        assert_eq!(pick(&["stagyard"]), "generic");
         assert_eq!(super::adapter_for(&argv(&["anything"]), Some("claude")).unwrap().0, "claude");
         assert!(super::adapter_for(&argv(&["anything"]), Some("bogus")).is_err());
     }
@@ -866,6 +878,51 @@ printf '%s\n' 'not json at all'
             .collect();
         // Exactly 2: a looser check let "21" through when the agent ran in
         // the wrong directory.
+        assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
+    }
+
+    /// The real Antigravity CLI (`agy`) through this session layer. Skipped
+    /// unless `UNTERM_LIVE_AGY=1`; needs one interactive `agy` sign-in first
+    /// (headless runs reuse the cached credentials).
+    #[test]
+    fn live_agy_session_speaks_the_contract() {
+        if std::env::var("UNTERM_LIVE_AGY").as_deref() != Ok("1") {
+            eprintln!("skipped: set UNTERM_LIVE_AGY=1 to run against the real agy CLI");
+            return;
+        }
+        let dir = isolate();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("alpha.txt"), "a").unwrap();
+        std::fs::write(work.join("beta.txt"), "b").unwrap();
+        // The prompt goes on the command line: plain-text stdin with `-p` is
+        // not documented for agy.
+        let command: Vec<String> = [
+            "agy", "-p",
+            "Run a shell command that lists the files in the current directory, then reply with only the number of files.",
+            "--output-format", "stream-json", "--dangerously-skip-permissions",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let id = start(&command, Some(work.to_str().unwrap()), &[], None, None, TaskContext::default()).unwrap();
+        let ending = close(&id).unwrap();
+        let (events, _) = replay_of(&id);
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            std::fs::write(&path, serde_json::to_string_pretty(&events).unwrap()).unwrap();
+        }
+        let names: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+        eprintln!("events: {names:?}");
+        assert_eq!(ending["adapter"], "agy", "{ending}");
+        assert_eq!(ending["state"], "finished", "{ending}");
+        for expected in ["turn.started", "tool_call.requested", "tool_call.result", "output.delta", "usage.updated", "turn.completed"] {
+            assert!(names.contains(&expected), "missing {expected}: {names:?}");
+        }
+        let answer: String = events
+            .iter()
+            .filter(|e| e["event"] == "output.delta" && e["stream"] == "assistant")
+            .filter_map(|e| e["text"].as_str())
+            .collect();
         assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
     }
 

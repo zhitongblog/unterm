@@ -1,6 +1,6 @@
 //! The CLIs, read into one vocabulary.
 //!
-//! Codex, Claude, Gemini and OpenCode all emit JSON Lines, and they disagree about almost
+//! Codex, Claude, Gemini, OpenCode and Antigravity (`agy`) all emit JSON Lines, and they disagree about almost
 //! everything above that: what a turn is called, where the text lives, how a
 //! tool call is spelled, whether usage arrives per turn or per message. The
 //! adapters absorb that so nothing downstream has to know which one ran.
@@ -837,6 +837,171 @@ impl BrainAdapter for OpenCodeAdapter {
     }
 }
 
+/// Reads the Antigravity CLI: `agy -p … --output-format stream-json`.
+///
+/// Google's agent CLI, and a different wire format from `gemini` entirely
+/// (checked against agy 1.5.3 and https://antigravity.google/docs/cli/headless/).
+/// Three events: `init`, `step_update`, `result`, each with its payload under
+/// the key of the same name.
+///
+/// - **Everything happens in `step_update`**, told apart by `step_type`:
+///   `agent_response` carries `text_delta` (partial while `ACTIVE`, the rest
+///   on `DONE`), `tool` carries `tool_info{name, parameters, output, error}`,
+///   and `user_input` / `checkpoint` say nothing about the model.
+/// - **A tool is reported once, on `DONE`**, input and outcome together, and
+///   it has no call id: the step index is the only stable handle, so it
+///   becomes one (`step_<index>`).
+/// - **No reasoning text**, only a `thinking_tokens` count.
+/// - **Usage is taken from `result`**, which is cumulative for the turn;
+///   per-step usage would be the same tokens counted again. Its
+///   `input_tokens` includes `cache_read_tokens`, so the fresh part is the
+///   difference.
+/// - **Failure is a `result`**, `status: ERROR` with an `error` string, and
+///   can arrive with no `init` before it (an unauthenticated run prints only
+///   that). There is no separate error event.
+#[derive(Default)]
+pub struct AgyAdapter {
+    turn_open: bool,
+    conversation: Option<String>,
+    model: Option<String>,
+}
+
+impl AgyAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn open_turn(&mut self, events: &mut Vec<BrainEvent>) {
+        if !self.turn_open {
+            self.turn_open = true;
+            events.push(BrainEvent::TurnStarted {
+                model: self.model.clone(),
+            });
+        }
+    }
+}
+
+impl BrainAdapter for AgyAdapter {
+    fn id(&self) -> &'static str {
+        "agy"
+    }
+
+    fn on_line(&mut self, line: &str) -> Vec<BrainEvent> {
+        let line = line.trim();
+        if line.is_empty() {
+            return Vec::new();
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return vec![BrainEvent::Error {
+                message: format!("agy: unparsable line: {}", truncate(line)),
+            }];
+        };
+        let kind = value.get("event").and_then(Value::as_str).unwrap_or_default();
+        let payload = value.get(kind).cloned().unwrap_or(Value::Null);
+        if let Some(id) = text_at(&value, &[&["conversation_id"]])
+            .or_else(|| text_at(&payload, &[&["conversation_id"]]))
+            .filter(|id| !id.is_empty())
+        {
+            self.conversation = Some(id.to_string());
+        }
+        let mut events = Vec::new();
+
+        match kind {
+            "init" => {
+                self.model = text_at(&payload, &[&["model"]]).map(str::to_string);
+                self.turn_open = false;
+                self.open_turn(&mut events);
+            }
+            "step_update" => {
+                let done = payload.get("state").and_then(Value::as_str) == Some("DONE");
+                match payload.get("step_type").and_then(Value::as_str).unwrap_or_default() {
+                    "agent_response" => {
+                        if let Some(text) = text_at(&payload, &[&["text_delta"]]) {
+                            if !text.is_empty() {
+                                self.open_turn(&mut events);
+                                events.push(BrainEvent::Text {
+                                    text: text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    "tool" if done => {
+                        self.open_turn(&mut events);
+                        let info = payload.get("tool_info").cloned().unwrap_or(Value::Null);
+                        let call_id = format!(
+                            "step_{}",
+                            payload.get("step_index").and_then(Value::as_u64).unwrap_or(0)
+                        );
+                        events.push(BrainEvent::ToolRequested {
+                            call_id: call_id.clone(),
+                            name: text_at(&info, &[&["name"]])
+                                .or_else(|| text_at(&payload, &[&["tool_name"]]))
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            arguments: info.get("parameters").cloned().unwrap_or(Value::Null),
+                        });
+                        let failed = info.get("error").is_some_and(|error| !error.is_null());
+                        events.push(BrainEvent::ToolResult {
+                            call_id,
+                            ok: !failed,
+                            output: text_at(&info, &[&["output"], &["error", "message"]])
+                                .map(str::to_string),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            "result" => {
+                self.turn_open = false;
+                if let Some(usage) = payload.get("usage") {
+                    let prompt = u64_at(usage, &["input_tokens"]);
+                    let cached = u64_at(usage, &["cache_read_tokens"]);
+                    events.push(BrainEvent::Usage(Usage {
+                        input_tokens: prompt.saturating_sub(cached),
+                        output_tokens: u64_at(usage, &["output_tokens"]),
+                        cached_input_tokens: cached,
+                    }));
+                }
+                let status = payload.get("status").and_then(Value::as_str).unwrap_or("SUCCESS");
+                let finished = payload.get("finished_reason").and_then(Value::as_str);
+                let reason = match (status, finished) {
+                    (_, Some("print_timeout")) => StopReason::Limit,
+                    ("SUCCESS", _) => StopReason::Completed,
+                    ("CANCELED" | "INTERRUPTED", _) | (_, Some("interrupted")) => {
+                        StopReason::Interrupted
+                    }
+                    _ => StopReason::Error,
+                };
+                if reason == StopReason::Error {
+                    events.push(BrainEvent::Error {
+                        message: text_at(&payload, &[&["error"], &["error", "message"]])
+                            .filter(|message| !message.is_empty())
+                            .unwrap_or("agy reported an error")
+                            .to_string(),
+                    });
+                }
+                events.push(BrainEvent::TurnEnded { reason });
+            }
+            _ => {}
+        }
+        events
+    }
+
+    fn external_id(&self) -> Option<&str> {
+        self.conversation.as_deref()
+    }
+
+    fn on_eof(&mut self) -> Vec<BrainEvent> {
+        if self.turn_open {
+            self.turn_open = false;
+            return vec![BrainEvent::TurnEnded {
+                reason: StopReason::Interrupted,
+            }];
+        }
+        Vec::new()
+    }
+}
+
 /// Reads a CLI no adapter knows: each line of output is output, nothing
 /// more is claimed about it.
 ///
@@ -1131,6 +1296,127 @@ mod tests {
             r#"{"type":"step_finish","sessionID":"s","part":{"type":"step-finish","reason":"stop","tokens":{"input":10,"output":2,"reasoning":0,"cache":{"read":5,"write":7}}}}"#,
         );
         assert!(events.contains(&BrainEvent::Usage(Usage { input_tokens: 17, output_tokens: 2, cached_input_tokens: 5 })), "{events:?}");
+    }
+
+    /// The same turn as `agy -p … --output-format stream-json` prints it.
+    /// No reasoning text (agy only counts thinking tokens) and no tool call
+    /// id; `input_tokens` includes the 100 cached.
+    const AGY_STREAM: &str = r#"
+{"event":"init","conversation_id":"c3b6","init":{"cwd":"/w","tools":["run_command"],"permission_mode":"always-proceed","model":"gpt-5"}}
+{"event":"step_update","step_update":{"conversation_id":"c3b6","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"c3b6","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"shell"}}
+{"event":"step_update","step_update":{"conversation_id":"c3b6","step_index":1,"state":"DONE","step_type":"tool","tool_name":"shell","duration_seconds":0.07,"tool_info":{"name":"shell","parameters":{"command":"ls"},"output":"a\nb"}}}
+{"event":"step_update","step_update":{"conversation_id":"c3b6","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"There are "}}
+{"event":"step_update","step_update":{"conversation_id":"c3b6","step_index":2,"state":"DONE","step_type":"agent_response","text_delta":"two files.","usage":{"input_tokens":220,"output_tokens":30,"thinking_tokens":5,"cache_read_tokens":100,"total_tokens":250}}}
+{"event":"step_update","step_update":{"conversation_id":"c3b6","step_index":3,"state":"DONE","step_type":"checkpoint","usage":{"input_tokens":9,"output_tokens":1,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":10}}}
+{"event":"result","result":{"conversation_id":"c3b6","status":"SUCCESS","response":"There are two files.","duration_seconds":2.1,"num_turns":1,"usage":{"input_tokens":220,"output_tokens":30,"thinking_tokens":5,"cache_read_tokens":100,"total_tokens":250}}}
+"#;
+
+    fn agy() -> Vec<BrainEvent> {
+        replay(&mut AgyAdapter::new(), AGY_STREAM)
+    }
+
+    #[test]
+    fn agy_describes_the_same_turn_as_the_others() {
+        // agy has no reasoning text and no tool call ids; set those aside
+        // and the turn must read as Claude's does. Its text arrives in two
+        // deltas, which concatenate to Claude's one block.
+        let normalize = |events: Vec<BrainEvent>| {
+            let mut text = String::new();
+            let mut rest: Vec<String> = Vec::new();
+            for event in events {
+                match event {
+                    BrainEvent::Reasoning { .. } => {}
+                    BrainEvent::Text { text: t } => text.push_str(&t),
+                    BrainEvent::ToolRequested { name, arguments, .. } => rest.push(
+                        serde_json::to_string(&BrainEvent::ToolRequested { call_id: String::new(), name, arguments }).unwrap(),
+                    ),
+                    BrainEvent::ToolResult { ok, output, .. } => rest.push(
+                        serde_json::to_string(&BrainEvent::ToolResult { call_id: String::new(), ok, output }).unwrap(),
+                    ),
+                    other => rest.push(serde_json::to_string(&other).unwrap()),
+                }
+            }
+            rest.sort();
+            (text, rest)
+        };
+        assert_eq!(normalize(agy()), normalize(replay(&mut ClaudeAdapter::new(), CLAUDE_STREAM)));
+    }
+
+    #[test]
+    fn agy_tool_request_and_result_share_the_step_handle() {
+        let events = agy();
+        let ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                BrainEvent::ToolRequested { call_id, .. } | BrainEvent::ToolResult { call_id, .. } => Some(call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        // One pair, from the DONE line only -- the ACTIVE line is not a
+        // second request.
+        assert_eq!(ids, ["step_1", "step_1"]);
+    }
+
+    #[test]
+    fn agy_counts_the_turn_once_from_the_result() {
+        let usage: Vec<Usage> = agy()
+            .into_iter()
+            .filter_map(|e| match e {
+                BrainEvent::Usage(u) => Some(u),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(usage, [Usage { input_tokens: 120, output_tokens: 30, cached_input_tokens: 100 }]);
+    }
+
+    #[test]
+    fn agy_learns_the_conversation_it_would_resume_by() {
+        let mut adapter = AgyAdapter::new();
+        replay(&mut adapter, AGY_STREAM);
+        assert_eq!(adapter.external_id(), Some("c3b6"));
+    }
+
+    #[test]
+    fn agy_unauthenticated_run_is_an_error_not_silence() {
+        // Verbatim from agy 1.5.3 with no cached login: one result line, no
+        // init, an empty conversation id.
+        let mut adapter = AgyAdapter::new();
+        let events = replay(
+            &mut adapter,
+            r#"{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}"#,
+        );
+        assert!(events.contains(&BrainEvent::Error { message: "authentication failed or timed out".into() }), "{events:?}");
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Error }));
+        assert_eq!(adapter.external_id(), None, "an empty id is no id");
+    }
+
+    #[test]
+    fn agy_print_timeout_is_a_limit_and_cancel_an_interruption() {
+        let end = |line: &str| replay(&mut AgyAdapter::new(), line).pop();
+        assert_eq!(
+            end(r#"{"event":"result","result":{"status":"ERROR","error":"timed out","finished_reason":"print_timeout"}}"#),
+            Some(BrainEvent::TurnEnded { reason: StopReason::Limit })
+        );
+        assert_eq!(
+            end(r#"{"event":"result","result":{"status":"CANCELED"}}"#),
+            Some(BrainEvent::TurnEnded { reason: StopReason::Interrupted })
+        );
+    }
+
+    #[test]
+    fn agy_failed_tool_keeps_its_reason() {
+        let events = replay(
+            &mut AgyAdapter::new(),
+            r#"{"event":"step_update","step_update":{"step_index":4,"state":"DONE","step_type":"tool","tool_name":"view_file","tool_info":{"name":"view_file","parameters":{"path":"x"},"error":{"type":"NOT_FOUND","message":"nope"}}}}"#,
+        );
+        assert!(events.contains(&BrainEvent::ToolResult { call_id: "step_4".into(), ok: false, output: Some("nope".into()) }), "{events:?}");
+    }
+
+    #[test]
+    fn agy_cut_off_mid_turn_is_an_interruption() {
+        let events = replay(&mut AgyAdapter::new(), r#"{"event":"init","conversation_id":"c","init":{}}"#);
+        assert_eq!(events.last(), Some(&BrainEvent::TurnEnded { reason: StopReason::Interrupted }));
     }
 
     #[test]
@@ -1488,6 +1774,7 @@ mod tests {
                 "opencode",
                 replay(&mut OpenCodeAdapter::new(), "warning: rate limited"),
             ),
+            ("agy", replay(&mut AgyAdapter::new(), "warning: rate limited")),
         ] {
             assert!(
                 matches!(events.first(), Some(BrainEvent::Error { .. })),
