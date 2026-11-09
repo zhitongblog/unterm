@@ -260,6 +260,33 @@ mod imp {
             .unwrap_or(false)
     }
 
+    pub fn work_area(window: &Window) -> Option<(i32, i32, u32, u32)> {
+        let hwnd = hwnd(window)?;
+        unsafe {
+            let monitor = winuser::MonitorFromWindow(hwnd, winuser::MONITOR_DEFAULTTONEAREST);
+            if monitor.is_null() {
+                return None;
+            }
+            let mut info: winuser::MONITORINFO = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<winuser::MONITORINFO>() as DWORD;
+            if winuser::GetMonitorInfoW(monitor, &mut info) == 0 {
+                return None;
+            }
+            let work = info.rcWork;
+            let mon = info.rcMonitor;
+            let width = (work.right - work.left).max(1) as u32;
+            let mut height = (work.bottom - work.top).max(1) as u32;
+            if work.left == mon.left
+                && work.top == mon.top
+                && work.right == mon.right
+                && work.bottom == mon.bottom
+            {
+                height = height.saturating_sub(1).max(1);
+            }
+            Some((work.left, work.top, width, height))
+        }
+    }
+
     /// Ask for a repaint: `WM_PAINT` reaches winit as `RedrawRequested`, so the
     /// hover the procedure just recorded is drawn without waiting for a tick.
     unsafe fn repaint(hwnd: HWND) {
@@ -346,6 +373,38 @@ mod imp {
     ) -> LRESULT {
         let key = hwnd as isize;
         match message {
+            winuser::WM_GETMINMAXINFO => {
+                let result = winapi::um::commctrl::DefSubclassProc(hwnd, message, wparam, lparam);
+                if lparam != 0 {
+                    let monitor =
+                        winuser::MonitorFromWindow(hwnd, winuser::MONITOR_DEFAULTTONEAREST);
+                    if !monitor.is_null() {
+                        let mut info: winuser::MONITORINFO = std::mem::zeroed();
+                        info.cbSize = std::mem::size_of::<winuser::MONITORINFO>() as DWORD;
+                        if winuser::GetMonitorInfoW(monitor, &mut info) != 0 {
+                            let work = info.rcWork;
+                            let mon = info.rcMonitor;
+                            let width = (work.right - work.left).max(1);
+                            let mut height = (work.bottom - work.top).max(1);
+                            if work.left == mon.left
+                                && work.top == mon.top
+                                && work.right == mon.right
+                                && work.bottom == mon.bottom
+                            {
+                                height = (height - 1).max(1);
+                            }
+                            let mmi = &mut *(lparam as *mut winuser::MINMAXINFO);
+                            mmi.ptMaxPosition.x = work.left - mon.left;
+                            mmi.ptMaxPosition.y = work.top - mon.top;
+                            mmi.ptMaxSize.x = width;
+                            mmi.ptMaxSize.y = height;
+                            mmi.ptMaxTrackSize.x = mmi.ptMaxTrackSize.x.max(width);
+                            mmi.ptMaxTrackSize.y = mmi.ptMaxTrackSize.y.max(height);
+                        }
+                    }
+                }
+                result
+            }
             winuser::WM_NCHITTEST => {
                 let result = winapi::um::commctrl::DefSubclassProc(hwnd, message, wparam, lparam);
                 if result != winuser::HTCLIENT as LRESULT {
@@ -468,6 +527,9 @@ mod imp {
     pub fn take_maximise_click(_: &Window) -> bool {
         false
     }
+    pub fn work_area(_: &Window) -> Option<(i32, i32, u32, u32)> {
+        None
+    }
 }
 
 pub use imp::Composition;
@@ -543,6 +605,11 @@ pub fn maximise_pressed(window: &Window) -> bool {
 /// A click on the maximise button finished since last asked.
 pub fn take_maximise_click(window: &Window) -> bool {
     imp::take_maximise_click(window)
+}
+
+/// The work area (excluding taskbar) of the monitor currently containing `window`.
+pub fn work_area(window: &Window) -> Option<(i32, i32, u32, u32)> {
+    imp::work_area(window)
 }
 
 #[cfg(test)]

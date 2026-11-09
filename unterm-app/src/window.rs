@@ -1711,6 +1711,22 @@ impl App {
                 .with_inner_size(winit::dpi::PhysicalSize::new(saved.width, saved.height));
             if saved.maximized {
                 if let Some((left, top, width, height)) = unterm_services::work_area() {
+                    let restore_w = if saved.width > 0 && saved.width < width {
+                        saved.width
+                    } else {
+                        (width * 4 / 5).max(640)
+                    };
+                    let restore_h = if saved.height > 0 && saved.height < height {
+                        saved.height
+                    } else {
+                        (height * 4 / 5).max(400)
+                    };
+                    let restore_x = left + (width.saturating_sub(restore_w) / 2) as i32;
+                    let restore_y = top + (height.saturating_sub(restore_h) / 2) as i32;
+                    self.window.unmaximized_rect = Some((
+                        winit::dpi::PhysicalPosition::new(restore_x, restore_y),
+                        winit::dpi::PhysicalSize::new(restore_w, restore_h),
+                    ));
                     attributes = attributes
                         .with_position(winit::dpi::PhysicalPosition::new(left, top))
                         .with_inner_size(winit::dpi::PhysicalSize::new(width, height));
@@ -1740,7 +1756,7 @@ impl App {
         #[cfg(windows)]
         {
             window.set_visible(true);
-            if want_maximized {
+            if want_maximized && (self.system_decorations || self.window.unmaximized_rect.is_none()) {
                 window.set_maximized(true);
             }
         }
@@ -5189,12 +5205,10 @@ impl App {
             };
             let toggles = click.streak() >= 2;
             self.window.last_topbar_click = Some(click);
-            if let Some(live) = self.window.state.as_ref() {
-                if toggles {
-                    live.window.set_maximized(!live.window.is_maximized());
-                } else {
-                    let _ = live.window.drag_window();
-                }
+            if toggles {
+                self.toggle_maximize();
+            } else if let Some(live) = self.window.state.as_ref() {
+                let _ = live.window.drag_window();
             }
             return true;
         }
@@ -7959,7 +7973,9 @@ impl App {
             let _ = live.window.request_inner_size(size);
             return;
         }
-        let Some((left, top, width, height)) = unterm_services::work_area() else {
+        let Some((left, top, width, height)) =
+            crate::win_chrome::work_area(&live.window).or_else(unterm_services::work_area)
+        else {
             live.window.set_maximized(!live.window.is_maximized());
             return;
         };
@@ -8298,7 +8314,11 @@ impl App {
     /// What `last_session.json` should say about the window in front.
     fn current_last_session(&self) -> Option<crate::session_restore::LastSession> {
         let live = self.window.state.as_ref()?;
-        let size = live.window.inner_size();
+        let size = self
+            .window
+            .unmaximized_rect
+            .map(|(_, size)| size)
+            .unwrap_or_else(|| live.window.inner_size());
         let mut cwds = Vec::new();
         let sessions =
             unterm_engine::SessionEngine::list_sessions(&self.engine).unwrap_or_default();

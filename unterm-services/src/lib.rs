@@ -49,11 +49,18 @@ pub fn work_area() -> Option<(i32, i32, u32, u32)> {
         if ok == 0 {
             return None;
         }
+        let width = (rect.right - rect.left).max(1);
+        let mut height = (rect.bottom - rect.top).max(1);
+        let screen_w = winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_CXSCREEN);
+        let screen_h = winapi::um::winuser::GetSystemMetrics(winapi::um::winuser::SM_CYSCREEN);
+        if rect.left == 0 && rect.top == 0 && width == screen_w && height == screen_h {
+            height = (height - 1).max(1);
+        }
         return Some((
             rect.left,
             rect.top,
-            (rect.right - rect.left).max(1) as u32,
-            (rect.bottom - rect.top).max(1) as u32,
+            width as u32,
+            height as u32,
         ));
     }
     #[allow(unreachable_code)]
