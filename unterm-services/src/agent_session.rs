@@ -387,6 +387,9 @@ fn describe(event: &BrainEvent) -> Value {
             Some(model) => json!({"event": "turn.started", "model": model}),
             None => json!({"event": "turn.started"}),
         },
+        // `message` duplicates `text` for readers of the older contract
+        // wording (unterm#30). The contract's field is `text`; the alias is
+        // kept until those readers have moved, and must always equal it.
         BrainEvent::Text { text } => {
             json!({"event": "output.delta", "stream": "assistant", "text": text, "message": text})
         }
@@ -787,7 +790,10 @@ printf '%s\n' 'not json at all'
                 "output.delta" => {
                     assert!(matches!(event["stream"].as_str(), Some("assistant" | "reasoning")), "{event}");
                     assert!(event["text"].is_string(), "{event}");
-                    assert!(event.get("message").is_none(), "{event}");
+                    // The compatibility alias, if present, says the same thing.
+                    if let Some(alias) = event.get("message") {
+                        assert_eq!(alias, &event["text"], "{event}");
+                    }
                     turns.push(turn_id(event));
                 }
                 "tool_call.requested" => {
