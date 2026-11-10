@@ -111,8 +111,44 @@ fn handle_client(mut stream: TcpStream, auth_token: &str, handler: &McpHandler) 
         }
     };
 
-    let resp = route(&req, auth_token, handler);
+    let origin = req.header("origin").filter(|o| is_app_origin(o)).map(str::to_string);
+    let mut resp = if req.method == "OPTIONS" {
+        // A preflight. Answered only for the app's own origin; anything
+        // else gets no CORS headers and the browser refuses the real call.
+        if origin.is_some() {
+            Response::text(204, "No Content", "text/plain; charset=utf-8", Vec::new())
+        } else {
+            Response::text(403, "Forbidden", "text/plain; charset=utf-8", b"origin not allowed".to_vec())
+        }
+    } else {
+        route(&req, auth_token, handler)
+    };
+    // The bootstrap record hands out the token without asking for one; it
+    // stays same-origin. The app reads the token from the Core's discovery
+    // record instead.
+    if let Some(origin) = origin.filter(|_| req.path != "/bootstrap.json") {
+        cors_headers(&mut resp, origin);
+    }
     write_response(&mut stream, &resp)
+}
+
+/// Origins the Unzoo One desktop app's pages have (Tauri 2: the custom
+/// protocol on macOS/Linux, `http(s)://tauri.localhost` on Windows). Only a
+/// page packaged inside a local app can have one; a website cannot.
+///
+/// Letting such a page read responses adds no new reach: every call still
+/// needs the bearer token, which only a local process that can read the
+/// Core's discovery record has.
+fn is_app_origin(origin: &str) -> bool {
+    matches!(origin, "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost")
+}
+
+fn cors_headers(resp: &mut Response, origin: String) {
+    resp.extra_headers.push(("Access-Control-Allow-Origin", origin));
+    resp.extra_headers.push(("Vary", "Origin".to_string()));
+    resp.extra_headers.push(("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".to_string()));
+    resp.extra_headers.push(("Access-Control-Allow-Headers", "authorization, content-type".to_string()));
+    resp.extra_headers.push(("Access-Control-Max-Age", "600".to_string()));
 }
 
 #[derive(Debug)]
@@ -2584,6 +2620,16 @@ mod tests {
         );
         assert_eq!(response.status, 200);
         assert_eq!(response_json(response)["ok"], true);
+    }
+
+    #[test]
+    fn only_the_desktop_apps_own_pages_may_call_across_origins() {
+        assert!(is_app_origin("tauri://localhost"));
+        assert!(is_app_origin("http://tauri.localhost"));
+        assert!(is_app_origin("https://tauri.localhost"));
+        for other in ["https://evil.example", "http://localhost:3000", "http://tauri.localhost.evil.example", "null", ""] {
+            assert!(!is_app_origin(other), "{other}");
+        }
     }
 
     #[test]
