@@ -228,6 +228,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
         "session_id": field("session_id"),
         "summary": field("summary"),
         "error": field("error"),
+        "error_code": field("error_code"),
         "waiting": detail.get("waiting").and_then(Value::as_bool).unwrap_or(false),
         "usage": field("usage"),
     })
@@ -438,6 +439,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         Ok(value) => value,
         Err(message) => {
             detail["error"] = json!(message);
+            detail["error_code"] = json!("start_failed");
             finish(&store, &task.id, &run.id, &step.id, detail, State::Failed);
             let run = store.runs(&task.id)?.into_iter().find(|r| r.id == run.id).unwrap_or(run);
             return Ok(run_view(&run, store.step(&step.id)?.as_ref()));
@@ -470,6 +472,9 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
 struct Turn {
     text: String,
     error: Option<String>,
+    /// Why the runtime itself ended the turn, for the console to say in the
+    /// reader's language; `None` when the agent reported its own error.
+    error_code: Option<&'static str>,
     waiting: bool,
     ended: Option<String>,
 }
@@ -550,6 +555,7 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
                 turn.ended = Some(match state.as_deref() {
                     Some("running") | None => {
                         turn.error.get_or_insert_with(|| "the agent session disappeared".into());
+                        turn.error_code.get_or_insert("session_lost");
                         "failed".into()
                     }
                     Some(state) => state.to_string(),
@@ -586,6 +592,7 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             None if last_progress.elapsed() > IDLE_LIMIT => {
                 idled = Some(Instant::now());
                 turn.error = Some(format!("no progress for {} minutes; stopped", IDLE_LIMIT.as_secs() / 60));
+                turn.error_code = Some("idle_timeout");
                 let _ = agent_session::interrupt(&session, 2_000);
             }
             Some(at) if at.elapsed() > Duration::from_secs(30) => {
@@ -619,6 +626,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     if state == State::Failed {
         if let Some(error) = &turn.error {
             detail["error"] = json!(error);
+            if let Some(code) = turn.error_code {
+                detail["error_code"] = json!(code);
+            }
         }
     }
     match store() {
@@ -658,7 +668,8 @@ pub fn sweep_orphans() -> Result<usize> {
             if let Some(step) = step {
                 let mut detail = step.detail.clone();
                 detail["waiting"] = json!(false);
-                detail["error"] = json!("Unterm stopped before this run finished");
+                detail["error"] = json!("the background service stopped before this run finished");
+                detail["error_code"] = json!("service_restarted");
                 let _ = store.set_step_detail(&step.id, detail, State::Interrupted);
             }
             store.finish_run(&run.id, State::Interrupted, run.version)?;
@@ -913,6 +924,7 @@ mod tests {
         assert_eq!(runs[0]["id"], "run-old");
         assert_eq!(runs[0]["state"], "interrupted");
         assert!(runs[0]["error"].as_str().unwrap().contains("stopped"));
+        assert_eq!(runs[0]["error_code"], "service_restarted");
         assert_eq!(sweep_orphans().unwrap(), 0);
 
         delete("task-1").unwrap();
