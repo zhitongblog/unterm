@@ -37,6 +37,13 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// Bind the HTTP server, register its port in `~/.unterm/server.json`, and
 /// start serving on a background thread. Returns the bound port.
+/// The port this process's settings server listens on, once it does.
+fn served_port() -> u16 {
+    SERVED_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static SERVED_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
 pub fn start_web_settings_server(auth_token: String) -> u16 {
     let (listener, port) = match server_info::bind_with_fallback(HTTP_PREFERRED_PORT) {
         Ok(pair) => pair,
@@ -46,6 +53,7 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
         }
     };
 
+    SERVED_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
     if let Err(e) = server_info::set_http_port(port) {
         log::warn!("Could not stamp http_port in server.json: {}", e);
     }
@@ -324,10 +332,17 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "unterm-cli".to_string());
+        // The token is the one this server checks requests against, so
+        // the page and the server agree by construction -- also in a Core,
+        // which serves this page with no instance record of its own.
+        let http_port = match served_port() {
+            0 => info.http_port,
+            port => port,
+        };
         return Response::ok_json(json!({
-            "auth_token": info.auth_token,
+            "auth_token": auth_token,
             "mcp_port": info.mcp_port,
-            "http_port": info.http_port,
+            "http_port": http_port,
             "platform": std::env::consts::OS,
             "unterm_cli_path": unterm_cli_path,
         }));
@@ -2580,7 +2595,9 @@ mod tests {
             &handler,
         );
         assert_eq!(bootstrap.status, 200);
-        assert!(response_json(bootstrap).get("auth_token").is_some());
+        // The token this server checks, also where no instance record exists
+        // (a Core serving the console).
+        assert_eq!(response_json(bootstrap)["auth_token"], "secret");
 
         let reference = route(
             &request("GET", "/api/reference", None, Vec::new()),

@@ -53,6 +53,13 @@ pub struct DiscoveryInfo {
     /// alive; a GUI's own MCP server keeps `server.json` untouched.
     #[serde(default)]
     pub mcp_port: Option<u16>,
+    /// The Core-hosted HTTP surface: the settings page, the console and its
+    /// REST API (agent runs, inbox, console tasks and their scheduler). Same
+    /// token. A window attached to this Core opens these pages here instead
+    /// of serving its own, for the same reason it serves no MCP: agent runs
+    /// started from the console are sessions, and sessions live in the Core.
+    #[serde(default)]
+    pub http_port: Option<u16>,
     /// Whether this Core runs without windows on purpose (`--headless`).
     /// A headless Core is left running when windows quit and is never ended
     /// by the orphan watchdog; `unterm-cli quit` stops it only with `--all`.
@@ -93,6 +100,7 @@ pub fn write_discovery(
     endpoint: &str,
     token: &str,
     mcp_port: Option<u16>,
+    http_port: Option<u16>,
     started_at: &str,
 ) -> Result<()> {
     let Some(path) = discovery_path() else {
@@ -112,6 +120,7 @@ pub fn write_discovery(
         process_role: ProcessRole::Core,
         started_at: started_at.into(),
         mcp_port,
+        http_port,
         headless: lifetime::mode() == lifetime::CoreMode::Headless,
     };
     let tmp = path.with_extension("json.tmp");

@@ -6241,6 +6241,7 @@ dependencies = [
  "unterm-mcp",
  "unterm-protocol",
  "unterm-services",
+ "unterm-settings",
  "uuid",
 ]
 

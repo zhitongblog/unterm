@@ -16,6 +16,7 @@ unterm-protocol.workspace = true
 unterm-engine.workspace = true
 unterm-mcp.workspace = true
 unterm-services.workspace = true
+unterm-settings.workspace = true
 log.workspace = true
 
 [dev-dependencies]
