@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.71.24 — 2026-11-10
+
+### Added
+
+- **First-party `agy` (Google Antigravity CLI) & `qwen-code` (Alibaba Qwen Code CLI) manifests, plus China Coding Plan modes.**
+  - Ships signed manifests (`unterm-2026-5`) for `agy` (v2) and `qwen-code` (v1), and adds first-class China Coding Plan (`cn_coding_plan`) authentication modes for `claude-code` (v4), `kimi-code` (v3), `opencode` (v3), and `trae-agent` (v2) covering Zhipu GLM, Aliyun Bailian / DashScope, Volcengine Ark, DeepSeek, MiniMax, and Moonshot Kimi endpoints.
+  - Supports headless execution (`unterm-cli agent run` / `agent_session.start`) and MCP auto-wiring (`~/.gemini/antigravity/mcp_config.json`, `~/.qwen/settings.json`), plus `agy` lifecycle hooks (`~/.gemini/settings.json`) and process detection across `unterm-services`, `unterm-cli`, and `unterm-settings`.
+- **Guided AI agent installation & one-click PATH repair (`unterm-cli agent repair-path` / `fix-path`).**
+  - `unterm-cli agent launch <id> [--install]`, `unterm-cli agent run <id> [--install]`, and `unterm-cli setup-ai [--install <id|all>]` now detect missing agent binaries, prompt or auto-run the official platform installer, handle Unix `npm install -g` `EACCES` fallback to `~/.local/bin`, and automatically persist the binary directory to the user's shell RC files (`.zshrc`, `.bashrc`, `.bash_profile`, `config.fish`) or Windows `HKCU\Environment\Path`.
+  - Adds `unterm-cli agent repair-path [id]` (alias `fix-path`), `POST /api/agents/repair-path`, `POST /api/agents/<id>/repair-path`, and **Repair PATH / 修复 PATH** actions in the Web Settings AI Agents tab.
+- **AtomGit mainland China mirror & high-speed release downloads.**
+  - Mirrors repository and release artifacts to `https://atomgit.com/zhitongblog/unterm`, adds `make release-atomgit` (`ci/release-to-atomgit.sh`), and routes mainland China downloads and `--cn` / `--mirror=atomgit` install scripts through AtomGit CDN links.
+
+### Fixed
+
+- **macOS & cross-platform ghost command completion history.**
+  - Preloads recent commands from `~/.zsh_history`, `~/.bash_history`, Fish history, and PowerShell PSReadLine history on startup, persists Unterm's own command history across restarts (`~/.unterm/command_history.json`), and adds built-in command/flag completion for `agy` (`antigravity`).
+
 ## v0.71.23 — 2026-11-09
 
 ### Fixed
