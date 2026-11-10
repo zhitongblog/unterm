@@ -175,8 +175,9 @@ pub fn is_compound(command: &str) -> bool {
 
 /// The command a tool call runs, as text: Claude's `command`, agy's
 /// `CommandLine`, `cmd`. Codex wraps it in its shell
-/// (`"...\bash.exe" -c 'cargo test'`, `powershell.exe -Command '...'`); the
-/// wrapper is taken off so a rule names the command, not the shell.
+/// (`"...\bash.exe" -c 'cargo test'`, `powershell.exe -Command "..."`, with
+/// either quote); the wrapper is taken off so a rule names the command, not
+/// the shell.
 pub fn command_of(input: &Value) -> Option<String> {
     let raw = ["command", "CommandLine", "cmd"]
         .iter()
@@ -185,15 +186,21 @@ pub fn command_of(input: &Value) -> Option<String> {
 }
 
 fn unwrap_shell(command: &str) -> &str {
-    for flag in [" -lc '", " -c '", " -Command '"] {
-        if let Some(at) = command.find(flag) {
+    for quote in ['\'', '"'] {
+        for flag in [" -lc ", " -c ", " -Command "] {
+            let opener = format!("{flag}{quote}");
+            let Some(at) = command.find(&opener) else { continue };
             let head = command[..at].to_ascii_lowercase();
             let shell = ["bash", "sh", "zsh", "powershell", "pwsh"]
                 .iter()
                 .any(|name| head.trim_end_matches('"').trim_end_matches(".exe").ends_with(name));
-            let inner = &command[at + flag.len()..];
-            if shell && inner.ends_with('\'') && inner.len() > 1 {
-                return &inner[..inner.len() - 1];
+            let inner = &command[at + opener.len()..];
+            let Some(body) = inner.strip_suffix(quote) else { continue };
+            // The quote again inside means the shell sees more than one
+            // argument (`-Command "npm test" -File x.ps1"`): not one plain
+            // command, so it stays wrapped and no prefix rule matches it.
+            if shell && !body.is_empty() && !body.contains(quote) {
+                return body;
             }
         }
     }
@@ -419,6 +426,14 @@ mod tests {
             command_of(&json!({"command": "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'npm test'"})).as_deref(),
             Some("npm test")
         );
+        // Codex 0.167 on Windows quotes with double quotes (live).
+        assert_eq!(
+            command_of(&json!({"command": "\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"Set-Content -LiteralPath 'notes.txt' -Value 'hi'\""})).as_deref(),
+            Some("Set-Content -LiteralPath 'notes.txt' -Value 'hi'")
+        );
+        // The quote again inside: more than one argument, left wrapped.
+        let smuggled = "powershell.exe -Command \"npm test\" -File evil.ps1\"";
+        assert_eq!(command_of(&json!({"command": smuggled})).as_deref(), Some(smuggled));
         // Not a shell: left alone.
         assert_eq!(command_of(&json!({"command": "python -c 'print(1)'"})).as_deref(), Some("python -c 'print(1)'"));
         assert_eq!(command_of(&json!({"file_path": "a.txt"})), None);
