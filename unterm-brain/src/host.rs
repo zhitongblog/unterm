@@ -6,10 +6,14 @@
 //! and the replies are written from wherever the decision is made, and
 //! because a CLI can be read without being driven.
 //!
-//! Like the adapters, this is pure: it formats lines and writes nothing.
-//! [`crate::runtime::Running::write_line`] does the writing.
+//! It formats lines and writes nothing: [`crate::runtime::Running::write_line`]
+//! and the runtime's tap do the writing. A request/response protocol (ACP,
+//! see [`crate::acp`]) has to remember what the CLI said to answer it, so a
+//! host may keep state; a stream protocol like Claude's needs none.
 
 use serde_json::{json, Value};
+
+use crate::BrainAdapter;
 
 /// A host's answer to [`crate::BrainEvent::PermissionRequested`].
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +31,10 @@ pub enum Decision {
 }
 
 /// How one CLI expects to be driven over stdin.
+///
+/// Every method that produces output returns the stdin lines to write, in
+/// order -- possibly none (a prompt held until the session exists), possibly
+/// several (a refusal followed by a cancel).
 pub trait HostProtocol: Send + Sync {
     /// Which adapter this pairs with.
     fn id(&self) -> &'static str;
@@ -35,13 +43,44 @@ pub trait HostProtocol: Send + Sync {
     /// only when the command does not already carry them.
     fn hosted_args(&self) -> &'static [&'static str];
 
-    /// One user turn, as a stdin line.
-    fn user_message(&self, text: &str) -> String;
+    /// The adapter that reads the CLI in this mode, when it is not the one
+    /// that reads its plain output (`opencode acp` is not `opencode run`).
+    fn adapter(&self) -> Option<Box<dyn BrainAdapter>> {
+        None
+    }
 
-    /// The reply to a permission question, as a stdin line. `input` is the
-    /// input that was asked about; allowing echoes it back unchanged, so
-    /// what runs is what was approved.
-    fn permission_reply(&self, request_id: &str, decision: &Decision, input: &Value) -> String;
+    /// The command in host-driven mode. By default the [`hosted_args`]
+    /// added where missing; an error when the command cannot be put into
+    /// that mode without guessing.
+    ///
+    /// [`hosted_args`]: HostProtocol::hosted_args
+    fn hosted_command(&self, command: &[String]) -> anyhow::Result<Vec<String>> {
+        Ok(with_args(command, self.hosted_args()))
+    }
+
+    /// Environment the mode needs. The caller's own values win.
+    fn hosted_env(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    /// Lines written before anything else (a handshake).
+    fn opening(&self, _cwd: Option<&str>) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Sees every stdout line, before the adapter; returns lines to write
+    /// in response.
+    fn observe(&self, _line: &str) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// One user turn.
+    fn user_message(&self, text: &str) -> Vec<String>;
+
+    /// The reply to a permission question. `input` is the input that was
+    /// asked about; allowing echoes it back unchanged where the protocol
+    /// carries it, so what runs is what was approved.
+    fn permission_reply(&self, request_id: &str, decision: &Decision, input: &Value) -> Vec<String>;
 }
 
 /// Claude Code over `--input-format stream-json --permission-prompt-tool stdio`.
@@ -68,11 +107,11 @@ impl HostProtocol for ClaudeHost {
         ]
     }
 
-    fn user_message(&self, text: &str) -> String {
-        json!({"type": "user", "message": {"role": "user", "content": text}}).to_string()
+    fn user_message(&self, text: &str) -> Vec<String> {
+        vec![json!({"type": "user", "message": {"role": "user", "content": text}}).to_string()]
     }
 
-    fn permission_reply(&self, request_id: &str, decision: &Decision, input: &Value) -> String {
+    fn permission_reply(&self, request_id: &str, decision: &Decision, input: &Value) -> Vec<String> {
         let answer = match decision {
             Decision::Allow => json!({"behavior": "allow", "updatedInput": input}),
             Decision::Deny { message, interrupt } => {
@@ -83,11 +122,11 @@ impl HostProtocol for ClaudeHost {
                 answer
             }
         };
-        json!({
+        vec![json!({
             "type": "control_response",
             "response": {"subtype": "success", "request_id": request_id, "response": answer},
         })
-        .to_string()
+        .to_string()]
     }
 }
 
@@ -95,6 +134,7 @@ impl HostProtocol for ClaudeHost {
 pub fn host_for(adapter: &str) -> Option<Box<dyn HostProtocol>> {
     match adapter {
         "claude" => Some(Box::new(ClaudeHost)),
+        "opencode" => Some(Box::new(crate::acp::AcpHost::opencode())),
         _ => None,
     }
 }
@@ -103,8 +143,22 @@ pub fn host_for(adapter: &str) -> Option<Box<dyn HostProtocol>> {
 /// them. A flag already present is left as the caller wrote it, value and
 /// all: overriding a caller's explicit choice would be a surprise.
 pub fn with_hosted_args(command: &[String], host: &dyn HostProtocol) -> Vec<String> {
+    with_args(command, host.hosted_args())
+}
+
+/// A program's bare name: `C:\bin\opencode.cmd` is `opencode`.
+pub fn program_name(word: &str) -> String {
+    let base = word.rsplit(['/', '\\']).next().unwrap_or(word).to_ascii_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".ps1"] {
+        if let Some(stem) = base.strip_suffix(ext) {
+            return stem.to_string();
+        }
+    }
+    base
+}
+
+fn with_args(command: &[String], wanted: &[&str]) -> Vec<String> {
     let mut out = command.to_vec();
-    let wanted = host.hosted_args();
     let mut i = 0;
     while i < wanted.len() {
         let flag = wanted[i];
@@ -127,36 +181,40 @@ mod tests {
     #[test]
     fn claude_replies_are_the_shapes_claude_reads() {
         let host = ClaudeHost;
-        let allow: Value = serde_json::from_str(&host.permission_reply(
+        let one = |lines: Vec<String>| -> String {
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            lines.into_iter().next().unwrap()
+        };
+        let allow: Value = serde_json::from_str(&one(host.permission_reply(
             "r1",
             &Decision::Allow,
             &json!({"command": "echo hi > out.txt"}),
-        ))
+        )))
         .unwrap();
         assert_eq!(allow["type"], "control_response");
         assert_eq!(allow["response"]["request_id"], "r1");
         assert_eq!(allow["response"]["response"]["behavior"], "allow");
         assert_eq!(allow["response"]["response"]["updatedInput"]["command"], "echo hi > out.txt");
 
-        let deny: Value = serde_json::from_str(&host.permission_reply(
+        let deny: Value = serde_json::from_str(&one(host.permission_reply(
             "r2",
             &Decision::Deny { message: "not on this machine".into(), interrupt: false },
             &Value::Null,
-        ))
+        )))
         .unwrap();
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert_eq!(deny["response"]["response"]["message"], "not on this machine");
         assert!(deny["response"]["response"].get("interrupt").is_none());
 
-        let stop: Value = serde_json::from_str(&host.permission_reply(
+        let stop: Value = serde_json::from_str(&one(host.permission_reply(
             "r3",
             &Decision::Deny { message: "stop".into(), interrupt: true },
             &Value::Null,
-        ))
+        )))
         .unwrap();
         assert_eq!(stop["response"]["response"]["interrupt"], true);
 
-        let user: Value = serde_json::from_str(&host.user_message("hello")).unwrap();
+        let user: Value = serde_json::from_str(&one(host.user_message("hello"))).unwrap();
         assert_eq!(user, json!({"type": "user", "message": {"role": "user", "content": "hello"}}));
     }
 
@@ -185,7 +243,8 @@ mod tests {
     #[test]
     fn only_clis_with_a_host_protocol_get_one() {
         assert!(host_for("claude").is_some());
-        for other in ["codex", "gemini", "opencode", "agy", "generic"] {
+        assert!(host_for("opencode").is_some());
+        for other in ["codex", "gemini", "agy", "generic"] {
             assert!(host_for(other).is_none(), "{other}");
         }
     }

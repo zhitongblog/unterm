@@ -196,8 +196,24 @@ fn base_command(spec: &Spec) -> Command {
     command
 }
 
+/// Sees every stdout line before the adapter does and returns the lines to
+/// write back to stdin. For a CLI whose protocol needs answers the adapter
+/// cannot give -- a request/response protocol like ACP, where the prompt
+/// can only be sent once the session it belongs to has been created.
+pub type Tap = Box<dyn FnMut(&str) -> Vec<String> + Send>;
+
 /// Start a brain and begin reading it.
-pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
+pub fn spawn(spec: &Spec, adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
+    spawn_tapped(spec, adapter, None)
+}
+
+/// [`spawn`], with a [`Tap`] on stdout. What the tap returns is written to
+/// stdin when it is open (`keep_stdin_open`), and dropped otherwise.
+pub fn spawn_tapped(
+    spec: &Spec,
+    mut adapter: Box<dyn BrainAdapter>,
+    mut tap: Option<Tap>,
+) -> anyhow::Result<Running> {
     let mut command = base_command(spec);
     // Its own process group, so interrupting reaches the shells and builds the
     // agent started rather than only the agent itself.
@@ -240,6 +256,7 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
     }));
     let (sender, receiver) = mpsc::channel();
     let mut readers = Vec::new();
+    let stdin = Arc::new(Mutex::new(kept_stdin));
 
     if let Some(stderr) = child.stderr.take() {
         let snapshot = Arc::clone(&snapshot);
@@ -256,9 +273,23 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
 
     if let Some(stdout) = child.stdout.take() {
         let snapshot = Arc::clone(&snapshot);
+        let stdin = Arc::clone(&stdin);
         readers.push(std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
+                if let Some(tap) = tap.as_mut() {
+                    let replies = tap(&line);
+                    if !replies.is_empty() {
+                        if let Some(stdin) = stdin.lock().unwrap().as_mut() {
+                            for reply in replies {
+                                let _ = stdin.write_all(reply.as_bytes());
+                                let _ = stdin.write_all(b"
+");
+                            }
+                            let _ = stdin.flush();
+                        }
+                    }
+                }
                 for event in adapter.on_line(&line) {
                     record(&snapshot, &event, adapter.external_id());
                     if sender.send(event).is_err() {
@@ -287,7 +318,7 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
         snapshot,
         interrupted: Arc::new(AtomicBool::new(false)),
         readers,
-        stdin: Arc::new(Mutex::new(kept_stdin)),
+        stdin,
     })
 }
 

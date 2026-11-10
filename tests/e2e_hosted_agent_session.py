@@ -1,14 +1,15 @@
-"""End-to-end: an MCP client drives a hosted Claude Code session through
+"""End-to-end: an MCP client drives a hosted agent session through
 unterm's real product path (unterm-core --headless + unterm-cli mcp-stdio).
 
-Needs a logged-in `claude` on PATH and a running Core; spends a few cents
-of haiku tokens. Run against an isolated Core:
+Agents: `claude` (default; needs a logged-in claude, spends a few cents of
+haiku) or `opencode` (ACP over `opencode acp`, on OpenCode's free model).
+Run against an isolated Core:
 
     export UNTERM_STATE_DIR=$(mktemp -d)
     target/debug/unterm-core --headless &
-    python -I tests/e2e_hosted_agent_session.py target/debug/unterm-cli <workdir> <logfile>
+    python -I tests/e2e_hosted_agent_session.py target/debug/unterm-cli <workdir> <logfile> [claude|opencode]
 
-usage: python -I e2e_hosted_agent_session.py <unterm-cli> <workdir> <logfile>
+usage: python -I e2e_hosted_agent_session.py <unterm-cli> <workdir> <logfile> [agent]
 
 Scenario A (allow): ask Claude to write out.txt -> approval.requested ->
   decide(allow) -> file exists -> submit_input follow-up -> close.
@@ -20,6 +21,16 @@ Scenario C (unanswered): ask -> close without answering -> auto-deny, close
 import json, os, subprocess, sys, time
 
 cli, root, logfile = sys.argv[1:4]
+agent = sys.argv[4] if len(sys.argv) > 4 else "claude"
+if agent == "claude":
+    COMMAND, ENV = ["claude", "-p", "--model", "haiku"], {}
+elif agent == "opencode":
+    # Through cmd /c on Windows: opencode is an npm .cmd shim. unterm turns
+    # `opencode` into `opencode acp` and sets its tools to ask.
+    COMMAND = (["cmd", "/c", "opencode"] if os.name == "nt" else ["opencode"])
+    ENV = {"OPENCODE_CONFIG_CONTENT": json.dumps({"model": "opencode/deepseek-v4.1-flash-free"})}
+else:
+    sys.exit(f"unknown agent {agent!r}: claude or opencode")
 log = open(logfile, "w", encoding="utf-8")
 
 def note(*parts):
@@ -84,13 +95,13 @@ for short in ["start", "events", "decide", "submit_input", "status", "close"]:
     TOOLS[short] = match[0]
 
 TASK_IDS = {'allow': 'task_01JBQ8XG4T7N2M9V0KRSD3WZ1A', 'deny': 'task_01JBQ8XG4T7N2M9V0KRSD3WZ1B', 'unanswered': 'task_01JBQ8XG4T7N2M9V0KRSD3WZ1C'}  # contract-shaped ids
-ASK = "Use the Bash tool to run exactly this command: echo hi > out.txt . Then reply with only: written"
+ASK = "Use the bash tool to run exactly this command: echo hi > out.txt . Then reply with only: written"
 results = {}
 
 def start_session(name):
     work = os.path.join(root, name)
     os.makedirs(work, exist_ok=True)
-    res = call(TOOLS["start"], {"command": ["claude", "-p", "--model", "haiku"], "hosted": True,
+    res = call(TOOLS["start"], {"command": COMMAND, "env": ENV, "hosted": True,
                                 "cwd": work, "prompt": ASK, "task_id": TASK_IDS[name]})
     sid = res["session_id"]
     note(f"[{name}] started", sid)

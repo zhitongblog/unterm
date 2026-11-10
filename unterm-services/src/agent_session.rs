@@ -181,7 +181,7 @@ struct Live {
     events: Arc<Mutex<Vec<Value>>>,
     reader: Option<std::thread::JoinHandle<()>>,
     /// Set for a hosted session: how to talk back to the CLI.
-    host: Option<Box<dyn HostProtocol>>,
+    host: Option<Arc<dyn HostProtocol>>,
     /// Permission questions the CLI is waiting on, by its request id, with
     /// the input that was asked about (allowing echoes it back unchanged).
     pending: Arc<Mutex<HashMap<String, Value>>>,
@@ -356,18 +356,25 @@ fn start_with(
     context: TaskContext,
     hosted: bool,
 ) -> Result<String> {
-    let (adapter_id, adapter) = adapter_for(command, adapter)?;
-    let host = if hosted {
-        Some(host::host_for(adapter_id).ok_or_else(|| {
+    let (adapter_id, mut adapter) = adapter_for(command, adapter)?;
+    let host: Option<Arc<dyn HostProtocol>> = if hosted {
+        Some(Arc::from(host::host_for(adapter_id).ok_or_else(|| {
             anyhow!(
-                "{adapter_id} cannot be driven: no host protocol (hosted sessions support claude)"
+                "{adapter_id} cannot be driven: no host protocol (hosted sessions support claude and opencode)"
             )
-        })?)
+        })?))
     } else {
         None
     };
     let command: Vec<String> = match &host {
-        Some(host) => host::with_hosted_args(command, host.as_ref()),
+        Some(host) => {
+            // The mode can read differently from the plain output: `opencode
+            // acp` speaks ACP, not `opencode run --format json`.
+            if let Some(hosted_adapter) = host.adapter() {
+                adapter = hosted_adapter;
+            }
+            host.hosted_command(command)?
+        }
         None => command.to_vec(),
     };
     let program = command
@@ -379,14 +386,27 @@ fn start_with(
     if let Some(cwd) = cwd {
         spec = spec.cwd(cwd);
     }
+    if let Some(host) = &host {
+        // The mode's own environment first, so the caller's wins: a caller
+        // that set OPENCODE_PERMISSION itself meant it.
+        for (key, value) in host.hosted_env() {
+            if !env.iter().any(|(k, _)| *k == key) {
+                spec = spec.env(key, value);
+            }
+        }
+    }
     for (key, value) in env {
         spec = spec.env(key, value);
     }
     match (&host, prompt) {
         (Some(host), prompt) => {
             spec = spec.keep_stdin_open();
+            let mut first = host.opening(cwd);
             if let Some(prompt) = prompt {
-                spec = spec.prompt(host.user_message(prompt));
+                first.extend(host.user_message(prompt));
+            }
+            if !first.is_empty() {
+                spec = spec.prompt(first.join("\n"));
             }
         }
         (None, Some(prompt)) => spec = spec.prompt(prompt),
@@ -396,7 +416,11 @@ fn start_with(
     let id = format!("ags_{}", uuid::Uuid::new_v4().simple());
     let pending: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     let turn = TurnTracker::default();
-    let mut running = runtime::spawn(&spec, adapter)?;
+    let tap: Option<runtime::Tap> = host.as_ref().map(|host| {
+        let host = Arc::clone(host);
+        Box::new(move |line: &str| host.observe(line)) as runtime::Tap
+    });
+    let mut running = runtime::spawn_tapped(&spec, adapter, tap)?;
     let stream = running.events();
     let events: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -598,6 +622,13 @@ pub fn events(id: &str, cursor: usize) -> Result<(Vec<Value>, usize)> {
     Ok((events[from..].to_vec(), events.len()))
 }
 
+fn write_lines(running: &runtime::Running, lines: Vec<String>) -> Result<()> {
+    for line in lines {
+        running.write_line(&line)?;
+    }
+    Ok(())
+}
+
 /// Put something on the agent's stdin.
 pub fn submit_input(id: &str, text: &str) -> Result<()> {
     let sessions = sessions().lock().unwrap();
@@ -606,7 +637,7 @@ pub fn submit_input(id: &str, text: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("no such session: {id}"))?;
     if let Some(host) = &live.host {
         // A hosted session reads stdin as a stream of user turns.
-        return live.running.write_line(&host.user_message(text));
+        return write_lines(&live.running, host.user_message(text));
     }
     // Said plainly rather than silently accepted: a one-shot CLI's stdin is
     // closed after the prompt, and pretending the text went somewhere would
@@ -654,8 +685,7 @@ pub fn decide(
             interrupt,
         }
     };
-    live.running
-        .write_line(&host.permission_reply(request_id, &decision, &input))?;
+    write_lines(&live.running, host.permission_reply(request_id, &decision, &input))?;
     let mut resolved = resolution(request_id, &decision, "caller");
     live.turn.stamp_now(&mut resolved);
     push(&live.events, &live.context, id, resolved.clone());
@@ -769,7 +799,7 @@ pub fn close(id: &str) -> Result<Value> {
                 message: "the session was closed before this was answered".into(),
                 interrupt: true,
             };
-            let _ = running.write_line(&host.permission_reply(&request_id, &decision, &input));
+            let _ = write_lines(&running, host.permission_reply(&request_id, &decision, &input));
             let mut resolved = resolution(&request_id, &decision, "unterm");
             turn.stamp_now(&mut resolved);
             push(&events, &context, id, resolved);
@@ -1453,6 +1483,111 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"i
         assert_eq!(resolved["approval"]["decision"], "deny");
         assert_eq!(resolved["approval"]["decided_by"], "unterm");
         assert!(said(&events, "denied"), "the model heard the refusal: {events:#?}");
+    }
+
+    /// An ACP agent in the shape OpenCode 1.19.5 speaks over `opencode acp`.
+    /// It checks what the host sends: the handshake, then a prompt carrying
+    /// the session id it was given -- a prompt sent before the session
+    /// existed would have no id to carry.
+    const HOSTED_ACP: &str = r#"
+id_of() { printf '%s' "$1" | sed 's/.*"id":\([0-9]*\).*/\1/'; }
+read -r init
+case "$init" in *'"initialize"'*) ;; *) exit 3 ;; esac
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read -r new
+case "$new" in *'"session/new"'*) ;; *) exit 4 ;; esac
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","configOptions":[{"category":"model","currentValue":"m"}]}}'
+read -r prompt
+case "$prompt" in *'"sessionId":"s1"'*) ;; *) exit 5 ;; esac
+turn=$(id_of "$prompt")
+case "$OPENCODE_PERMISSION" in *'"bash":"ask"'*) perm=asks ;; *) perm=allows ;; esac
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"agent_thought_chunk\",\"content\":{\"type\":\"text\",\"text\":\"bash $perm\"}}}}"
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"c1","title":"bash","kind":"execute","status":"pending","rawInput":{}}}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"c1","title":"echo hi > out.txt","kind":"execute","rawInput":{"command":"echo hi > out.txt"}},"options":[{"optionId":"once","kind":"allow_once"},{"optionId":"always","kind":"allow_always"},{"optionId":"reject","kind":"reject_once"}]}}'
+read -r reply
+case "$reply" in
+  *'"optionId":"once"'*)
+    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"(no output)"}}]}}}'
+    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"allowed"}}}}'
+    printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$turn,\"result\":{\"stopReason\":\"end_turn\",\"usage\":{\"inputTokens\":3,\"outputTokens\":1,\"cachedReadTokens\":10}}}" ;;
+  *'"optionId":"reject"'*)
+    read -r cancel
+    case "$cancel" in *'"session/cancel"'*) ;; *) exit 6 ;; esac
+    printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"c1","status":"failed","content":[{"type":"content","content":{"type":"text","text":"Tool execution aborted"}}]}}}'
+    printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$turn,\"result\":{\"stopReason\":\"cancelled\"}}" ;;
+  *) exit 7 ;;
+esac
+read -r followup || exit 0
+turn=$(id_of "$followup")
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second turn"}}}}'
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$turn,\"result\":{\"stopReason\":\"end_turn\"}}"
+read -r rest || exit 0
+"#;
+
+    fn hosted_acp_fake() -> String {
+        start_hosted(
+            &a_codex_like_agent(HOSTED_ACP),
+            None,
+            &[],
+            Some("write the file"),
+            Some("opencode"),
+            TaskContext::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_acp_session_asks_runs_what_was_allowed_and_takes_a_second_turn() {
+        let _dir = isolate();
+        let id = hosted_acp_fake();
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        assert!(said(&events, "bash asks"), "OpenCode set to ask: {events:#?}");
+        let asked = events.iter().find(|e| e["event"] == "approval.requested").expect("asked");
+        assert_eq!(asked["approval"]["request_id"], "0", "{asked}");
+        assert_eq!(asked["approval"]["tool_call"]["tool"], "bash", "{asked}");
+        assert_eq!(asked["approval"]["tool_call"]["arguments"]["command"], "echo hi > out.txt");
+        let requested = events.iter().find(|e| e["event"] == "tool_call.requested").expect("requested");
+        assert_eq!(requested["tool_call"]["arguments"]["command"], "echo hi > out.txt", "{requested}");
+        assert_eq!(pending_approvals(&id).unwrap(), ["0"]);
+
+        decide(&id, "0", true, None, false).unwrap();
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        assert!(said(&events, "allowed"), "{events:#?}");
+        let done = events.iter().find(|e| e["event"] == "turn.completed").unwrap();
+        assert_eq!(done["state"], "finished", "{done}");
+        assert!(events.iter().any(|e| e["event"] == "usage.updated"), "{events:#?}");
+
+        submit_input(&id, "and again").unwrap();
+        let events = wait_for(&id, |e| said(e, "second turn") && e.iter().filter(|e| e["event"] == "turn.completed").count() == 2);
+        let turns: Vec<&Value> = events.iter().filter(|e| e["event"] == "turn.started").collect();
+        assert_eq!(turns.len(), 2, "{events:#?}");
+        assert_ne!(turns[0]["turn_id"], turns[1]["turn_id"]);
+
+        let ending = close(&id).unwrap();
+        assert_eq!(ending["state"], "finished", "{ending}");
+    }
+
+    #[test]
+    fn an_acp_refusal_with_interrupt_cancels_the_turn() {
+        let _dir = isolate();
+        let id = hosted_acp_fake();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        decide(&id, "0", false, Some("not here"), true).unwrap();
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        let done = events.iter().find(|e| e["event"] == "turn.completed").expect("ended");
+        assert_eq!(done["state"], "interrupted", "{events:#?}");
+        assert!(!said(&events, "allowed"));
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn closing_an_acp_session_with_a_question_open_cancels_it() {
+        let _dir = isolate();
+        let id = hosted_acp_fake();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        let ending = close(&id).unwrap();
+        assert_eq!(ending["state"], "interrupted", "{ending}");
+        assert!(ending["reason"].as_str().unwrap().contains("1 unanswered"), "{ending}");
     }
 
     #[test]

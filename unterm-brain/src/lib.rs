@@ -20,6 +20,7 @@
 //! a *request*, and the only thing allowed to act on it is the action
 //! gateway.
 
+pub mod acp;
 pub mod adapters;
 pub mod health;
 pub mod host;
