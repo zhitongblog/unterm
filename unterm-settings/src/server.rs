@@ -37,6 +37,13 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 /// Bind the HTTP server, register its port in `~/.unterm/server.json`, and
 /// start serving on a background thread. Returns the bound port.
+/// The port this process's settings server listens on, once it does.
+fn served_port() -> u16 {
+    SERVED_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static SERVED_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
 pub fn start_web_settings_server(auth_token: String) -> u16 {
     let (listener, port) = match server_info::bind_with_fallback(HTTP_PREFERRED_PORT) {
         Ok(pair) => pair,
@@ -46,11 +53,14 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
         }
     };
 
+    SERVED_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
     if let Err(e) = server_info::set_http_port(port) {
         log::warn!("Could not stamp http_port in server.json: {}", e);
     }
 
     let handler = Arc::new(McpHandler::new());
+    // Console tasks run on schedule whether or not a console page is open.
+    crate::console_tasks::start_scheduler(Arc::clone(&handler));
     if crate::remote::load_or_init_config().enabled {
         crate::remote::ensure_remote_server_started(Arc::clone(&handler));
     }
@@ -101,8 +111,44 @@ fn handle_client(mut stream: TcpStream, auth_token: &str, handler: &McpHandler) 
         }
     };
 
-    let resp = route(&req, auth_token, handler);
+    let origin = req.header("origin").filter(|o| is_app_origin(o)).map(str::to_string);
+    let mut resp = if req.method == "OPTIONS" {
+        // A preflight. Answered only for the app's own origin; anything
+        // else gets no CORS headers and the browser refuses the real call.
+        if origin.is_some() {
+            Response::text(204, "No Content", "text/plain; charset=utf-8", Vec::new())
+        } else {
+            Response::text(403, "Forbidden", "text/plain; charset=utf-8", b"origin not allowed".to_vec())
+        }
+    } else {
+        route(&req, auth_token, handler)
+    };
+    // The bootstrap record hands out the token without asking for one; it
+    // stays same-origin. The app reads the token from the Core's discovery
+    // record instead.
+    if let Some(origin) = origin.filter(|_| req.path != "/bootstrap.json") {
+        cors_headers(&mut resp, origin);
+    }
     write_response(&mut stream, &resp)
+}
+
+/// Origins the Unzoo One desktop app's pages have (Tauri 2: the custom
+/// protocol on macOS/Linux, `http(s)://tauri.localhost` on Windows). Only a
+/// page packaged inside a local app can have one; a website cannot.
+///
+/// Letting such a page read responses adds no new reach: every call still
+/// needs the bearer token, which only a local process that can read the
+/// Core's discovery record has.
+fn is_app_origin(origin: &str) -> bool {
+    matches!(origin, "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost")
+}
+
+fn cors_headers(resp: &mut Response, origin: String) {
+    resp.extra_headers.push(("Access-Control-Allow-Origin", origin));
+    resp.extra_headers.push(("Vary", "Origin".to_string()));
+    resp.extra_headers.push(("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".to_string()));
+    resp.extra_headers.push(("Access-Control-Allow-Headers", "authorization, content-type".to_string()));
+    resp.extra_headers.push(("Access-Control-Max-Age", "600".to_string()));
 }
 
 #[derive(Debug)]
@@ -322,10 +368,17 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "unterm-cli".to_string());
+        // The token is the one this server checks requests against, so
+        // the page and the server agree by construction -- also in a Core,
+        // which serves this page with no instance record of its own.
+        let http_port = match served_port() {
+            0 => info.http_port,
+            port => port,
+        };
         return Response::ok_json(json!({
-            "auth_token": info.auth_token,
+            "auth_token": auth_token,
             "mcp_port": info.mcp_port,
-            "http_port": info.http_port,
+            "http_port": http_port,
             "platform": std::env::consts::OS,
             "unterm_cli_path": unterm_cli_path,
         }));
@@ -502,6 +555,21 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/agent/close") => {
             super::agent_run::api_session_act(handler, "agent_session.close", &req.body)
         }
+        // The inbox: open permission questions of hosted runs, and answers.
+        ("GET", "/api/agent/approvals") => super::agent_run::api_approvals(),
+        ("POST", "/api/agent/decide") => super::agent_run::api_decide(handler, &req.body),
+        ("POST", "/api/agent/resume") => super::agent_run::api_resume(handler, &req.body),
+        // Standing answers. Console-only: no MCP method adds a rule.
+        ("GET", "/api/agent/policy") => super::agent_run::api_policy_list(),
+        ("POST", "/api/agent/policy") => super::agent_run::api_policy_add(&req.body),
+        ("POST", "/api/agent/policy/remove") => super::agent_run::api_policy_remove(&req.body),
+        ("GET", "/api/console/tasks") => super::console_tasks::api_list(),
+        ("POST", "/api/console/tasks/put") => super::console_tasks::api_put(&req.body),
+        ("POST", "/api/console/tasks/delete") => super::console_tasks::api_delete(&req.body),
+        ("POST", "/api/console/tasks/run") => super::console_tasks::api_run(handler, &req.body),
+        ("POST", "/api/console/tasks/stop") => super::console_tasks::api_stop(&req.body),
+        ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
+        ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),
@@ -2560,6 +2628,16 @@ mod tests {
     }
 
     #[test]
+    fn only_the_desktop_apps_own_pages_may_call_across_origins() {
+        assert!(is_app_origin("tauri://localhost"));
+        assert!(is_app_origin("http://tauri.localhost"));
+        assert!(is_app_origin("https://tauri.localhost"));
+        for other in ["https://evil.example", "http://localhost:3000", "http://tauri.localhost.evil.example", "null", ""] {
+            assert!(!is_app_origin(other), "{other}");
+        }
+    }
+
+    #[test]
     fn bootstrap_remains_public_but_api_reference_is_token_gated() {
         let handler = McpHandler::new();
         let bootstrap = route(
@@ -2568,7 +2646,9 @@ mod tests {
             &handler,
         );
         assert_eq!(bootstrap.status, 200);
-        assert!(response_json(bootstrap).get("auth_token").is_some());
+        // The token this server checks, also where no instance record exists
+        // (a Core serving the console).
+        assert_eq!(response_json(bootstrap)["auth_token"], "secret");
 
         let reference = route(
             &request("GET", "/api/reference", None, Vec::new()),

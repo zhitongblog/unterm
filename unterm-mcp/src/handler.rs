@@ -245,6 +245,8 @@ fn method_is_mutating(method: &str) -> bool {
             | "agent_session.submit_input"
             | "agent_session.interrupt"
             | "agent_session.close"
+            | "agent_session.decide"
+            | "agent_session.resume"
             | "terminal.invoke"
             | "terminal.accept_lease"
             | "terminal.cancel"
@@ -4744,6 +4746,11 @@ struct McpState {
     /// different instance than the one owning its pane -- and those keep
     /// falling back to the active pane. Cleared when the connection drops.
     panes_by_connection: HashMap<u64, usize>,
+    /// Connections that presented a live hosted grant at login, with the
+    /// token: re-verified on every write, so a session that has closed stops
+    /// covering its connection at once. See `unterm_services::hosted_grant`.
+    /// Cleared when the connection drops.
+    hosted_by_connection: HashMap<u64, String>,
     /// First time we ever saw a given agent name (across all
     /// connections). Used by the (future, P0.3) "first-time per agent"
     /// confirmation flow to decide whether this agent is novel enough
@@ -5754,6 +5761,7 @@ fn mcp_state() -> &'static Mutex<McpState> {
             agents_by_connection: HashMap::new(),
             clients_by_connection: HashMap::new(),
             panes_by_connection: HashMap::new(),
+            hosted_by_connection: HashMap::new(),
             known_agents: HashMap::new(),
             pane_agents: HashMap::new(),
             agents_with_input_history: std::collections::HashSet::new(),
@@ -5800,6 +5808,33 @@ impl McpHandler {
 
     /// Remember which pane a connection speaks from. See
     /// `panes_by_connection`.
+    /// The connection presented a hosted grant at login. Verified here, not
+    /// trusted: a token that names no live grant changes nothing (and says
+    /// so in the audit log).
+    pub fn register_hosted_grant(&self, conn_id: u64, token: &str) {
+        match unterm_services::hosted_grant::verify(token) {
+            Some(_) => {
+                mcp_state()
+                    .lock()
+                    .hosted_by_connection
+                    .insert(conn_id, token.to_string());
+            }
+            None => self.audit(
+                "mcp.hosted_grant.rejected",
+                None,
+                "a connection presented a hosted grant that is not live; treated as an ordinary agent",
+            ),
+        }
+    }
+
+    /// The hosted session whose host approves this connection's calls --
+    /// if its grant is still live right now.
+    fn hosted_session() -> Option<String> {
+        let conn_id = CURRENT_CONN_ID.with(|cell| *cell.borrow())?;
+        let token = mcp_state().lock().hosted_by_connection.get(&conn_id).cloned()?;
+        unterm_services::hosted_grant::verify(&token).map(|grant| grant.session_id)
+    }
+
     pub fn register_caller_pane(&self, conn_id: u64, pane_id: usize) {
         mcp_state()
             .lock()
@@ -7223,6 +7258,21 @@ impl McpHandler {
             return Ok(GateOutcome::Allow);
         }
 
+        // A governed hosted session: this exact tool call was put to a
+        // person (or a standing rule) by the session's host before the agent
+        // could make it. Asking again here would be the same question twice
+        // -- and headless, a refusal of something already approved. The
+        // grant is re-checked on every write, so a closed session's
+        // connection stops passing at once.
+        if let Some(session) = Self::hosted_session() {
+            self.audit(
+                "mcp.confirm.hosted",
+                Some(&pane_id.to_string()),
+                &format!("agent={agent} {preview} (approved by the host of session {session})"),
+            );
+            return Ok(GateOutcome::Allow);
+        }
+
         let policy = cfg.mcp_input_confirmation;
         // Three ways an agent can already be trusted, and they mean
         // different things. The config list is the user declaring it up
@@ -8182,6 +8232,7 @@ impl McpHandler {
         state.agents_by_connection.remove(&conn_id);
         state.clients_by_connection.remove(&conn_id);
         state.panes_by_connection.remove(&conn_id);
+        state.hosted_by_connection.remove(&conn_id);
     }
 
     // --- Ghost text debug ---

@@ -44,6 +44,8 @@ pub const METHODS: &[&str] = &[
     "agent_session.interrupt",
     "agent_session.status",
     "agent_session.close",
+    "agent_session.decide",
+    "agent_session.resume",
     "terminal.manifest",
     "terminal.health",
     "terminal.capabilities",
@@ -403,7 +405,14 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 })
                 .unwrap_or_default();
             let context = task_context(params);
-            let id = unterm_services::agent_session::start(
+            let start = if params.get("governed").and_then(Value::as_bool).unwrap_or(false) {
+                unterm_services::agent_session::start_governed
+            } else if params.get("hosted").and_then(Value::as_bool).unwrap_or(false) {
+                unterm_services::agent_session::start_hosted
+            } else {
+                unterm_services::agent_session::start
+            };
+            let id = start(
                 &command,
                 params.get("cwd").and_then(Value::as_str),
                 &env,
@@ -446,8 +455,45 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
             unterm_services::agent_session::status(&text(params, "session_id")?)
         }
 
+        "agent_session.decide" => {
+            let allow = params
+                .get("allow")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| anyhow!("Missing 'allow'"))?;
+            unterm_services::agent_session::decide_and_remember(
+                &text(params, "session_id")?,
+                &text(params, "request_id")?,
+                allow,
+                params.get("message").and_then(Value::as_str),
+                params.get("interrupt").and_then(Value::as_bool).unwrap_or(false),
+                params.get("remember").and_then(Value::as_bool).unwrap_or(false),
+            )
+        }
         "agent_session.close" => {
             unterm_services::agent_session::close(&text(params, "session_id")?)
+        }
+        "agent_session.resume" => {
+            let env: Vec<(String, String)> = params
+                .get("env")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(key, value)| {
+                            value.as_str().map(|value| (key.clone(), value.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // The task ids the caller gives win; otherwise the old session's.
+            let context = task_context(params);
+            let given = context.task_id.is_some() || context.run_id.is_some() || context.step_id.is_some();
+            let id = unterm_services::agent_session::resume(
+                &text(params, "session_id")?,
+                params.get("prompt").and_then(Value::as_str),
+                &env,
+                given.then_some(context),
+            )?;
+            Ok(json!({"session_id": id, "resumed_from": text(params, "session_id")?}))
         }
 
         // ---- Unterm as a governable provider ---------------------------

@@ -20,8 +20,11 @@
 //! a *request*, and the only thing allowed to act on it is the action
 //! gateway.
 
+pub mod acp;
 pub mod adapters;
+pub mod codex_app;
 pub mod health;
+pub mod host;
 pub mod sdk;
 pub mod runtime;
 pub mod supervisor;
@@ -194,6 +197,18 @@ pub enum BrainEvent {
     /// failure. Never silently dropped: a stream that stops making sense is
     /// something an operator has to be able to see.
     Error { message: String },
+    /// The CLI is asking its host whether a tool may run, and is waiting for
+    /// the answer. Only a CLI driven over a host protocol asks (Claude with
+    /// `--permission-prompt-tool stdio`); the answer goes back through
+    /// [`host::HostProtocol::permission_reply`]. Like `ToolRequested`, this
+    /// is a question, never a grant.
+    PermissionRequested {
+        /// The CLI's id for this question; the reply must carry it back.
+        request_id: String,
+        tool: String,
+        input: serde_json::Value,
+        description: Option<String>,
+    },
 }
 
 impl BrainEvent {
@@ -208,6 +223,7 @@ impl BrainEvent {
             BrainEvent::Usage(_) => "usage",
             BrainEvent::TurnEnded { .. } => "turn_ended",
             BrainEvent::Error { .. } => "error",
+            BrainEvent::PermissionRequested { .. } => "permission_requested",
         }
     }
 

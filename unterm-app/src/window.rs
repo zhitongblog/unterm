@@ -1690,7 +1690,7 @@ impl App {
                 })
         };
         let mut attributes = Window::default_attributes()
-            .with_title("Unterm")
+            .with_title(unterm_protocol::product_name())
             .with_window_icon(window_icon)
             // The top bar is the title bar. A grey native one above a dark
             // one is the three-stacked-strips look the design called out.
@@ -11017,7 +11017,7 @@ impl App {
             (subject, instance)
         };
         self.window.bar_title = subject.clone();
-        let title = format!("{subject} — Unterm{instance}");
+        let title = format!("{subject} — {}{instance}", unterm_protocol::product_name());
         if self.window.window_title.as_deref() == Some(title.as_str()) {
             return;
         }

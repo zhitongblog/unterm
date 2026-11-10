@@ -292,6 +292,9 @@ fn run() -> anyhow::Result<()> {
     // here would answer the same questions from an empty world, and an
     // agent would have no way to tell which one it reached.
     let served_here = matches!(backend, engine_backend::Backend::Local);
+    // The Core's settings and console surface, when it serves one: same
+    // reasoning as MCP, and it is where the console's agent runs live.
+    let mut core_http_port: Option<u16> = None;
     let (_port, token) = if admin {
         // Nothing for the unelevated side to connect to: no MCP server, no
         // instance record, no settings page.
@@ -311,6 +314,7 @@ fn run() -> anyhow::Result<()> {
         match unterm_core::read_discovery() {
             Ok(Some(core)) => {
                 let port = core.mcp_port.unwrap_or(0);
+                core_http_port = core.http_port;
                 match unterm_services::server_info::write_initial_with_version_token(
                     port,
                     unterm_protocol::PRODUCT_VERSION,
@@ -333,7 +337,7 @@ fn run() -> anyhow::Result<()> {
     };
     startup_trace::mark("instance.registered");
     if !admin {
-        start_shared_services(token);
+        start_shared_services(token, core_http_port);
     }
     stallwatch_and_watchers();
     let event_loop = winit::event_loop::EventLoop::new()?;
@@ -344,7 +348,7 @@ fn run() -> anyhow::Result<()> {
 /// What a normal window shares with the rest of the machine: the bridge
 /// bookkeeping, the settings page and the update check. The administrator
 /// window runs none of them.
-fn start_shared_services(token: String) {
+fn start_shared_services(token: String, core_http_port: Option<u16>) {
     match unterm_services::bridge_registry::request_incompatible_drains() {
         Ok(0) => {}
         Ok(count) => log::info!("requested drain for {count} incompatible MCP bridge(s)"),
@@ -376,8 +380,20 @@ fn start_shared_services(token: String) {
         .ok();
 
     // The settings UI, on the same token. `unterm-cli settings` opens it.
-    let settings_port = unterm_settings::start_web_settings_server(token);
-    log::info!("settings UI listening on 127.0.0.1:{settings_port}");
+    // A Core that serves it already keeps it: a second server here would run
+    // console agent sessions in this window's process, outside the Core.
+    match core_http_port {
+        Some(port) => {
+            if let Err(err) = unterm_services::server_info::set_http_port(port) {
+                log::warn!("could not record the Core's settings port: {err:#}");
+            }
+            log::info!("settings UI is served by unterm-core on 127.0.0.1:{port}");
+        }
+        None => {
+            let settings_port = unterm_settings::start_web_settings_server(token);
+            log::info!("settings UI listening on 127.0.0.1:{settings_port}");
+        }
+    }
     startup_trace::mark("settings_server.started");
 
     // The update check, which existed but was never started: without this

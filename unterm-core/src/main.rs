@@ -107,6 +107,16 @@ fn main() -> Result<()> {
         Ok(0) | Err(_) => {}
         Ok(count) => eprintln!("unterm-core: requested drain for {count} incompatible bridge(s)"),
     }
+    // The settings page, the console and their REST API, on the same token.
+    // Served here and not by a window: an agent run the console starts is a
+    // session, and its scheduled runs have to happen with no window open.
+    let http_port = match unterm_settings::start_web_settings_server(token.clone()) {
+        0 => {
+            eprintln!("unterm-core: settings and console surface unavailable");
+            None
+        }
+        port => Some(port),
+    };
 
     // Two installs share one state directory: whichever starts first owns the
     // sessions, and two versions can migrate the same database differently.
@@ -117,11 +127,12 @@ fn main() -> Result<()> {
         eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
     }
 
-    write_discovery(&endpoint.to_string(), &token, mcp_port, server.started_at())?;
+    write_discovery(&endpoint.to_string(), &token, mcp_port, http_port, server.started_at())?;
     eprintln!(
-        "unterm-core ready endpoint={} mcp_port={:?} pid={}",
+        "unterm-core ready endpoint={} mcp_port={:?} http_port={:?} pid={}",
         endpoint,
         mcp_port,
+        http_port,
         std::process::id()
     );
     // The system will tell us before it takes this process away — SIGTERM on

@@ -24,7 +24,7 @@
 use crate::{BrainAdapter, BrainEvent, StopReason, ThreadId, Usage};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -48,6 +48,10 @@ pub struct Spec {
     pub prompt: Option<String>,
     /// The flag that continues an existing conversation, when the CLI has one.
     pub resume_flag: Option<String>,
+    /// Keep stdin open after the prompt, for a CLI driven over a stdin
+    /// protocol (follow-up turns, permission replies). The prompt, if any, is
+    /// written and stdin stays open until [`Running::close_stdin`] or `wait`.
+    pub keep_stdin_open: bool,
 }
 
 impl Spec {
@@ -58,6 +62,7 @@ impl Spec {
             cwd: None,
             env: Vec::new(),
             prompt: None,
+            keep_stdin_open: false,
             resume_flag: None,
         }
     }
@@ -79,6 +84,11 @@ impl Spec {
 
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+
+    pub fn keep_stdin_open(mut self) -> Self {
+        self.keep_stdin_open = true;
         self
     }
 
@@ -159,10 +169,13 @@ pub struct Running {
     snapshot: Arc<Mutex<Snapshot>>,
     interrupted: Arc<AtomicBool>,
     readers: Vec<std::thread::JoinHandle<()>>,
+    /// Present only for a spec that kept stdin open.
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
 }
 
-/// Start a brain and begin reading it.
-pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
+/// The process a spec describes: program, args, pipes, directory, env.
+/// Split out so what the child inherits can be checked without running it.
+fn base_command(spec: &Spec) -> Command {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -171,10 +184,64 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
         .stderr(Stdio::piped());
     if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
+        // What a shell does on `cd`, and what Bun/Node agents read first:
+        // OpenCode resolved its project from an inherited, stale `PWD` and
+        // ran its tools in the directory Unterm was launched from, not the
+        // one asked for. Caller-supplied env below still wins.
+        command.env("PWD", cwd);
     }
     for (key, value) in &spec.env {
         command.env(key, value);
     }
+    command
+}
+
+/// Sees every stdout line before the adapter does and returns the lines to
+/// write back to stdin. For a CLI whose protocol needs answers the adapter
+/// cannot give -- a request/response protocol like ACP, where the prompt
+/// can only be sent once the session it belongs to has been created.
+pub type Tap = Box<dyn FnMut(&str) -> Vec<String> + Send>;
+
+/// See [`Running::external_id_watch`].
+#[derive(Clone)]
+pub struct ExternalIdWatch(Arc<Mutex<Snapshot>>);
+
+impl ExternalIdWatch {
+    pub fn get(&self) -> Option<String> {
+        self.0.lock().unwrap().external_id.clone()
+    }
+}
+
+/// Writes lines to a running brain's stdin; see [`Running::stdin_writer`].
+#[derive(Clone)]
+pub struct StdinWriter(Arc<Mutex<Option<ChildStdin>>>);
+
+impl StdinWriter {
+    pub fn write_line(&self, line: &str) -> anyhow::Result<()> {
+        let mut guard = self.0.lock().unwrap();
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("this brain's stdin is not open"))?;
+        stdin.write_all(line.as_bytes())?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(())
+    }
+}
+
+/// Start a brain and begin reading it.
+pub fn spawn(spec: &Spec, adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
+    spawn_tapped(spec, adapter, None)
+}
+
+/// [`spawn`], with a [`Tap`] on stdout. What the tap returns is written to
+/// stdin when it is open (`keep_stdin_open`), and dropped otherwise.
+pub fn spawn_tapped(
+    spec: &Spec,
+    mut adapter: Box<dyn BrainAdapter>,
+    mut tap: Option<Tap>,
+) -> anyhow::Result<Running> {
+    let mut command = base_command(spec);
     // Its own process group, so interrupting reaches the shells and builds the
     // agent started rather than only the agent itself.
     #[cfg(unix)]
@@ -186,7 +253,20 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
     let mut child = command.spawn()?;
     let pid = child.id();
 
-    if let Some(prompt) = &spec.prompt {
+    let mut kept_stdin = None;
+    if spec.keep_stdin_open {
+        // Driven over stdin: the prompt (already in the CLI's own framing,
+        // which is the caller's business) goes in, and the pipe stays open
+        // for whatever is said next.
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Some(prompt) = &spec.prompt {
+                let _ = stdin.write_all(prompt.as_bytes());
+                let _ = stdin.write_all(b"\n");
+                let _ = stdin.flush();
+            }
+            kept_stdin = Some(stdin);
+        }
+    } else if let Some(prompt) = &spec.prompt {
         // Closing stdin afterwards is what tells a one-shot CLI the prompt is
         // complete; leaving it open makes the process wait forever.
         if let Some(mut stdin) = child.stdin.take() {
@@ -203,6 +283,7 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
     }));
     let (sender, receiver) = mpsc::channel();
     let mut readers = Vec::new();
+    let stdin = Arc::new(Mutex::new(kept_stdin));
 
     if let Some(stderr) = child.stderr.take() {
         let snapshot = Arc::clone(&snapshot);
@@ -219,9 +300,23 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
 
     if let Some(stdout) = child.stdout.take() {
         let snapshot = Arc::clone(&snapshot);
+        let stdin = Arc::clone(&stdin);
         readers.push(std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
+                if let Some(tap) = tap.as_mut() {
+                    let replies = tap(&line);
+                    if !replies.is_empty() {
+                        if let Some(stdin) = stdin.lock().unwrap().as_mut() {
+                            for reply in replies {
+                                let _ = stdin.write_all(reply.as_bytes());
+                                let _ = stdin.write_all(b"
+");
+                            }
+                            let _ = stdin.flush();
+                        }
+                    }
+                }
                 for event in adapter.on_line(&line) {
                     record(&snapshot, &event, adapter.external_id());
                     if sender.send(event).is_err() {
@@ -250,6 +345,7 @@ pub fn spawn(spec: &Spec, mut adapter: Box<dyn BrainAdapter>) -> anyhow::Result<
         snapshot,
         interrupted: Arc::new(AtomicBool::new(false)),
         readers,
+        stdin,
     })
 }
 
@@ -291,6 +387,44 @@ impl Running {
     /// What has been seen so far. Safe to call while the brain is running.
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
+    }
+
+    /// The CLI's own id for the conversation, as soon as the stream has
+    /// named it -- readable from another thread (the one reading events)
+    /// while this brain runs.
+    pub fn external_id_watch(&self) -> ExternalIdWatch {
+        ExternalIdWatch(Arc::clone(&self.snapshot))
+    }
+
+    /// Send one line to a brain whose stdin was kept open.
+    ///
+    /// An error, not a silent no-op, when there is no open stdin: a caller
+    /// waiting for an answer to text nobody read would wait forever.
+    pub fn write_line(&self, line: &str) -> anyhow::Result<()> {
+        let mut guard = self.stdin.lock().unwrap();
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("this brain's stdin is not open"))?;
+        stdin.write_all(line.as_bytes())?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(())
+    }
+
+    /// A handle to this brain's stdin for another thread -- the one reading
+    /// its events, when an answer is decided there (a standing rule).
+    pub fn stdin_writer(&self) -> StdinWriter {
+        StdinWriter(Arc::clone(&self.stdin))
+    }
+
+    /// Whether stdin is still open for [`write_line`](Self::write_line).
+    pub fn stdin_open(&self) -> bool {
+        self.stdin.lock().unwrap().is_some()
+    }
+
+    /// Close stdin: for a stream-driven CLI, "there is nothing more".
+    pub fn close_stdin(&self) {
+        drop(self.stdin.lock().unwrap().take());
     }
 
     /// Whether the process is still alive.
@@ -357,6 +491,9 @@ impl Running {
     /// still in the pipe, and returning a snapshot that is missing the final
     /// turn would make a completed run look interrupted.
     pub fn wait(mut self) -> anyhow::Result<Snapshot> {
+        // A CLI reading stdin waits for it to end; waiting on it while the
+        // pipe is still open would wait forever.
+        self.close_stdin();
         let status = self.child.lock().unwrap().wait()?;
         for reader in self.readers.drain(..) {
             let _ = reader.join();
@@ -473,6 +610,36 @@ printf '%s\n' '{"type":"turn.completed"}'
     }
 
     #[test]
+    fn a_kept_stdin_takes_more_lines_and_wait_closes_it() {
+        // Echo every stdin line back as a Codex message until EOF.
+        let script = r#"while read -r line; do printf '{"type":"agent_message","text":"%s"}\n' "$line"; done"#;
+        let spec = fake_brain(script).keep_stdin_open().prompt("first");
+        let mut running = spawn(&spec, Box::new(CodexAdapter::new())).unwrap();
+        let events = running.events();
+        assert!(running.stdin_open());
+        running.write_line("second").unwrap();
+        // wait() must close stdin itself, or this would never return.
+        running.wait().unwrap();
+        let texts: Vec<String> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                BrainEvent::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["first", "second"]);
+    }
+
+    #[test]
+    fn writing_to_a_closed_stdin_is_an_error() {
+        let mut running = spawn(&fake_brain("true"), Box::new(CodexAdapter::new())).unwrap();
+        running.events();
+        assert!(!running.stdin_open());
+        assert!(running.write_line("anyone?").is_err());
+        running.wait().unwrap();
+    }
+
+    #[test]
     fn the_prompt_goes_in_over_stdin() {
         // Not on the command line: a prompt in argv is visible to every `ps`
         // on the machine, and lands in whatever recorded the launch.
@@ -572,6 +739,27 @@ sleep 30"#;
             Some("connection refused"),
             "a brain that failed without saying why must still be diagnosable"
         );
+    }
+
+    #[test]
+    fn the_brain_is_told_its_directory_in_pwd_too() {
+        // OpenCode (Bun) trusts PWD over the real cwd; a stale one inherited
+        // from the launching shell sent its tools to the wrong directory.
+        let dir = std::env::temp_dir();
+        let spec = Spec::new("anything").cwd(&dir);
+        let command = base_command(&spec);
+        let pwd = command
+            .get_envs()
+            .find(|(key, _)| *key == "PWD")
+            .and_then(|(_, value)| value);
+        assert_eq!(pwd, Some(dir.as_os_str()));
+        assert_eq!(command.get_current_dir(), Some(dir.as_path()));
+
+        // A caller that sets PWD itself is not overridden.
+        let spec = Spec::new("anything").cwd(&dir).env("PWD", "/elsewhere");
+        let command = base_command(&spec);
+        let pwd = command.get_envs().filter(|(key, _)| *key == "PWD").last().and_then(|(_, v)| v);
+        assert_eq!(pwd, Some(std::ffi::OsStr::new("/elsewhere")));
     }
 
     #[test]

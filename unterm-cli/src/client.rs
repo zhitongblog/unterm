@@ -124,6 +124,13 @@ impl McpClient {
         if let Some(pane) = caller_pane {
             login["pane_id"] = json!(pane);
         }
+        // Started by a governed hosted session (the MCP bridge an agent
+        // spawns inherits it): say so, and the server checks it.
+        if let Ok(grant) = std::env::var("UNTERM_HOSTED_GRANT") {
+            if !grant.trim().is_empty() {
+                login["hosted_grant"] = json!(grant.trim());
+            }
+        }
         let resp = client
             .call("auth.login", login)
             .context("MCP auth.login")?;

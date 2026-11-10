@@ -6241,6 +6241,7 @@ dependencies = [
  "unterm-mcp",
  "unterm-protocol",
  "unterm-services",
+ "unterm-settings",
  "uuid",
 ]
 
@@ -6428,11 +6429,13 @@ dependencies = [
  "socket2 0.5.10",
  "tempfile",
  "unterm-agents",
+ "unterm-brain",
  "unterm-engine",
  "unterm-mcp",
  "unterm-profile",
  "unterm-protocol",
  "unterm-services",
+ "unterm-tasks",
  "uuid",
 ]
 

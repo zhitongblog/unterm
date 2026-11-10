@@ -33,7 +33,10 @@ unterm-mcp = { path = "../unterm-mcp" }
 unterm-profile.workspace = true
 unterm-protocol.workspace = true
 unterm-services.workspace = true
+unterm-tasks.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+unterm-brain.workspace = true
 tempfile.workspace = true
+unterm-services = { workspace = true, features = ["test-support"] }

@@ -337,6 +337,11 @@ fn handle_client(stream: TcpStream, auth_token: &str, handler: &McpHandler) -> R
                     if let Some(pane) = params.get("pane_id").and_then(|v| v.as_u64()) {
                         handler.register_caller_pane(conn_id, pane as usize);
                     }
+                    // An agent run by a governed hosted session: its host
+                    // approves each tool call before it is made.
+                    if let Some(grant) = params.get("hosted_grant").and_then(|v| v.as_str()) {
+                        handler.register_hosted_grant(conn_id, grant);
+                    }
                     let resp = make_success_response(id, serde_json::json!({"status": "ok"}));
                     write_response(&mut writer, &resp)?;
                 } else {
