@@ -336,6 +336,13 @@ pub fn api_resume(handler: &McpHandler, body: &[u8]) -> Response {
     if let Some(prompt) = string_field(&body, "prompt") {
         params.insert("prompt".into(), json!(prompt));
     }
+    // A continued conversation is a new run of the same task: the console
+    // names the run and step, and the task id defaults to the earlier one's.
+    for key in ["task_id", "run_id", "step_id"] {
+        if let Some(value) = string_field(&body, key) {
+            params.insert(key.into(), json!(value));
+        }
+    }
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
     match handler.handle(&ctx, "agent_session.resume", &Value::Object(params)) {
         Ok(value) => Response::ok_json(value),

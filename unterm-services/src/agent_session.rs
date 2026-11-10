@@ -449,12 +449,22 @@ pub fn resume(
     let record = resume_record(previous_id)?.ok_or_else(|| {
         anyhow!("session {previous_id} cannot be resumed: it was not hosted, or its agent never named a conversation")
     })?;
-    let context = context.unwrap_or_else(|| TaskContext {
-        task_id: record.task_id.clone(),
-        run_id: record.run_id.clone(),
-        step_id: record.step_id.clone(),
-        ..TaskContext::default()
-    });
+    // A continued conversation stays on its task unless the caller moves it;
+    // a caller that names only the new run keeps the earlier task id.
+    let context = match context {
+        Some(mut given) => {
+            if given.task_id.is_none() {
+                given.task_id = record.task_id.clone();
+            }
+            given
+        }
+        None => TaskContext {
+            task_id: record.task_id.clone(),
+            run_id: record.run_id.clone(),
+            step_id: record.step_id.clone(),
+            ..TaskContext::default()
+        },
+    };
     start_with(
         &record.command,
         record.cwd.as_deref(),
@@ -2181,6 +2191,18 @@ read -r rest || exit 0
         assert!(args.contains("--resume s1"), "{args}");
         assert!(events.iter().all(|e| e["task_id"] == "task_resume"), "the task ids come back too");
         close(&second).unwrap();
+
+        // A caller naming only the new run keeps the earlier task.
+        let third = resume(
+            &first,
+            Some("once more"),
+            &[],
+            Some(TaskContext { run_id: Some("run_next".into()), ..TaskContext::default() }),
+        )
+        .unwrap();
+        let events = wait_for(&third, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        assert!(events.iter().all(|e| e["task_id"] == "task_resume" && e["run_id"] == "run_next"), "{events:#?}");
+        close(&third).unwrap();
 
         // Nothing to continue: an error, never a fresh conversation.
         assert!(resume("ags_nosuchsession", None, &[], None).is_err());
