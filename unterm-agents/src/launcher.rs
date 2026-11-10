@@ -98,7 +98,7 @@ pub fn build_launch_plan(inputs: &LaunchInputs<'_>) -> Result<LaunchPlan> {
         mcp_token: inputs.mcp.map(|m| m.token.clone()),
     };
 
-    let exec = expand(&inputs.manifest.launch.exec, &ctx)?;
+    let mut exec = expand(&inputs.manifest.launch.exec, &ctx)?;
     let mut args = expand_args(&inputs.manifest.launch.args, &ctx)?;
     if inputs.cwd.is_some() && !inputs.manifest.launch.args_when_cwd_set.is_empty() {
         args.extend(expand_args(
@@ -115,6 +115,23 @@ pub fn build_launch_plan(inputs: &LaunchInputs<'_>) -> Result<LaunchPlan> {
     )?);
 
     let mut env_set: BTreeMap<String, String> = BTreeMap::new();
+    // If the agent binary lives in a fallback dir (e.g. ~/.local/bin, ~/.npm-global/bin,
+    // %LOCALAPPDATA%\agy\bin) that isn't on the caller's inherited $PATH yet, resolve
+    // `exec` to its absolute path and prepend its parent directory to PATH.
+    if let Some(resolved) = crate::installer::which(&exec) {
+        if let Some(bin_dir) = std::path::Path::new(&resolved).parent() {
+            let current_path = std::env::var_os("PATH").unwrap_or_default();
+            let in_inherited_path = std::env::split_paths(&current_path).any(|d| d == bin_dir);
+            if !in_inherited_path {
+                exec = resolved.clone();
+                let mut dirs = vec![bin_dir.to_path_buf()];
+                dirs.extend(std::env::split_paths(&crate::installer::enriched_path()));
+                if let Ok(joined) = std::env::join_paths(dirs) {
+                    env_set.insert("PATH".into(), joined.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
     env_set.insert("UNTERM_AGENT_ID".into(), inputs.manifest.id.clone());
     env_set.insert(
         "UNTERM_AGENT_MANIFEST_VERSION".into(),

@@ -61,6 +61,19 @@ fn baked_envelope_verifies_and_lists_known_agents() {
             && kimi_install_text.contains("https://code.kimi.com/kimi-code/install.ps1"),
         "Kimi Code manifest should advertise official macOS/Linux and Windows installers"
     );
+
+    let agy = envelope
+        .manifests
+        .iter()
+        .find(|m| m.id == "agy")
+        .expect("agy manifest present");
+    let agy_install_text =
+        serde_json::to_string(&agy.install).expect("serialize agy install spec");
+    assert!(
+        agy_install_text.contains("https://antigravity.google/cli/install.sh")
+            && agy_install_text.contains("https://antigravity.google/cli/install.ps1"),
+        "Antigravity CLI (agy) manifest should advertise official macOS/Linux and Windows installers"
+    );
 }
 
 #[test]

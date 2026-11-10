@@ -212,11 +212,29 @@ fn windows_npm_prefixes() -> &'static [std::path::PathBuf] {
 fn extra_path_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let mut dirs: Vec<PathBuf> = Vec::new();
+    for k in ["npm_config_prefix", "NPM_CONFIG_PREFIX"] {
+        if let Some(v) = std::env::var_os(k) {
+            let p = PathBuf::from(v);
+            if !p.as_os_str().is_empty() {
+                #[cfg(unix)]
+                dirs.push(p.join("bin"));
+                dirs.push(p);
+            }
+        }
+    }
+    if let Some(pnpm) = std::env::var_os("PNPM_HOME") {
+        let p = PathBuf::from(pnpm);
+        if !p.as_os_str().is_empty() {
+            dirs.push(p);
+        }
+    }
     if let Some(home) = dirs_next::home_dir() {
         for sub in [
             ".local/bin",
             ".npm-global/bin",
             ".cargo/bin",
+            ".kimi/bin",
+            ".antigravity/bin",
             ".pyenv/shims",
             ".rye/shims",
             ".bun/bin",
@@ -225,8 +243,36 @@ fn extra_path_dirs() -> Vec<std::path::PathBuf> {
             "Library/Python/3.13/bin",
             "Library/Python/3.12/bin",
             "Library/Python/3.11/bin",
+            "Library/pnpm",
+            ".local/share/pnpm",
         ] {
             dirs.push(home.join(sub));
+        }
+        #[cfg(unix)]
+        if let Ok(rc) = std::fs::read_to_string(home.join(".npmrc")) {
+            for line in rc.lines() {
+                let line = line.trim();
+                if line.starts_with('#') || line.starts_with(';') {
+                    continue;
+                }
+                if let Some(rest) = line.strip_prefix("prefix") {
+                    let val = rest
+                        .trim_start()
+                        .trim_start_matches('=')
+                        .trim()
+                        .trim_matches('"');
+                    if !val.is_empty() {
+                        let expanded = if let Some(stripped) = val.strip_prefix("~/") {
+                            home.join(stripped)
+                        } else if let Some(stripped) = val.strip_prefix("$HOME/") {
+                            home.join(stripped)
+                        } else {
+                            PathBuf::from(val)
+                        };
+                        dirs.push(expanded.join("bin"));
+                    }
+                }
+            }
         }
         // Version managers put node/npm under a per-version bin dir that isn't
         // a fixed path; glob the common ones so nvm / fnm users get the same
@@ -261,6 +307,8 @@ fn extra_path_dirs() -> Vec<std::path::PathBuf> {
         }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             let local = PathBuf::from(&local);
+            dirs.push(local.join("agy").join("bin")); // Antigravity CLI (agy.exe)
+            dirs.push(local.join("kimi").join("bin")); // Kimi Code CLI
             dirs.push(local.join("pnpm")); // pnpm global
             dirs.push(local.join("Microsoft").join("WinGet").join("Links")); // winget shims
                                                                              // CPython installs (PythonXY\python.exe + PythonXY\Scripts\pip.exe);
@@ -281,6 +329,7 @@ fn extra_path_dirs() -> Vec<std::path::PathBuf> {
             }
         }
         if let Some(home) = dirs_next::home_dir() {
+            dirs.push(home.join(".local").join("bin")); // uv / pipx / kimi on Windows
             dirs.push(home.join("scoop").join("shims")); // scoop
             dirs.push(home.join(".bun").join("bin")); // bun
             dirs.push(home.join(".deno").join("bin")); // deno
@@ -394,6 +443,209 @@ fn ensure_pipx_if_needed(platform: &PlatformInstall) {
     let _ = c.output();
 }
 
+/// If an install plan invokes `uv` (e.g. `trae-agent`) and `uv` is not yet
+/// installed, bootstrap it via `python -m pip install --user uv` or the
+/// official Astral installer (`~/.local/bin/uv`).
+fn ensure_uv_if_needed(platform: &PlatformInstall) {
+    let needs_uv = platform.steps.iter().any(|s| {
+        matches!(s, InstallStep::Shell { cmd } if cmd.first().map(|c| c == "uv").unwrap_or(false))
+    });
+    if !needs_uv || which("uv").is_some() {
+        return;
+    }
+    if let Some(py) = which("python")
+        .or_else(|| which("python3"))
+        .or_else(|| which("py"))
+    {
+        let mut c = spawn_command(&py);
+        c.env("PATH", enriched_path())
+            .args(["-m", "pip", "install", "--user", "uv"]);
+        let _ = c.output();
+        if which("uv").is_some() {
+            return;
+        }
+    }
+    #[cfg(unix)]
+    if let Some(sh) = which("sh").or_else(|| which("bash")) {
+        let mut c = spawn_command(&sh);
+        c.env("PATH", enriched_path())
+            .args(["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"]);
+        let _ = c.output();
+    }
+    #[cfg(windows)]
+    {
+        let mut c = spawn_command("powershell");
+        c.env("PATH", enriched_path()).args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "irm https://astral.sh/uv/install.ps1 | iex",
+        ]);
+        let _ = c.output();
+    }
+}
+
+/// Ensure `bin_dir` is on the current process's `$PATH` AND persisted in the
+/// user's shell startup files (`.zshrc` / `.bashrc` / `.bash_profile` /
+/// `config.fish` on Unix, or `HKCU\Environment\Path` on Windows).
+///
+/// Returns the list of shell config files (or registry entries) that were
+/// modified or verified.
+pub fn ensure_dir_on_user_path(bin_dir: &std::path::Path) -> Vec<String> {
+    // 1. Prepend to current process PATH if not already present so subsequent
+    // spawns in this Unterm session find the newly-installed binary immediately.
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    let already_in_env = std::env::split_paths(&current_path).any(|p| p == bin_dir);
+    if !already_in_env {
+        let mut dirs = vec![bin_dir.to_path_buf()];
+        dirs.extend(std::env::split_paths(&current_path));
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            std::env::set_var("PATH", joined);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let Some(home) = dirs_next::home_dir() else {
+            return Vec::new();
+        };
+        let shell = std::env::var("SHELL").ok();
+        return ensure_dir_on_user_path_in_home(bin_dir, &home, shell.as_deref());
+    }
+
+    #[cfg(windows)]
+    {
+        return ensure_dir_on_windows_user_path(bin_dir);
+    }
+}
+
+#[cfg(windows)]
+fn ensure_dir_on_windows_user_path(bin_dir: &std::path::Path) -> Vec<String> {
+    let dir_str = bin_dir.to_string_lossy().to_string();
+    let script = format!(
+        "$dir = '{}'; \
+         $u = [Environment]::GetEnvironmentVariable('Path', 'User'); \
+         $m = [Environment]::GetEnvironmentVariable('Path', 'Machine'); \
+         $all = (($u + ';' + $m) -split ';') | ForEach-Object {{ $_.Trim().TrimEnd('\\') }}; \
+         $norm = $dir.Trim().TrimEnd('\\'); \
+         if ($all -notcontains $norm) {{ \
+             $newU = if ([string]::IsNullOrWhiteSpace($u)) {{ $dir }} else {{ $u.TrimEnd(';') + ';' + $dir }}; \
+             [Environment]::SetEnvironmentVariable('Path', $newU, 'User'); \
+             Write-Output 'updated:HKCU\\Environment\\Path' \
+         }}",
+        dir_str.replace('\'', "''")
+    );
+    let mut cmd = spawn_command("powershell");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]);
+    if let Ok(out) = cmd.output() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if stdout.contains("updated:HKCU\\Environment\\Path") {
+            return vec!["HKCU\\Environment\\Path".to_string()];
+        }
+    }
+    Vec::new()
+}
+
+/// Testable Unix helper that writes the idempotent PATH export snippet to the
+/// user's shell RC files under `home` when `bin_dir` is not already present.
+pub fn ensure_dir_on_user_path_in_home(
+    bin_dir: &std::path::Path,
+    home: &std::path::Path,
+    shell: Option<&str>,
+) -> Vec<String> {
+    let dir_raw = bin_dir.to_string_lossy().to_string();
+    // Standard system directories are already on every login shell's default PATH.
+    if matches!(
+        dir_raw.as_str(),
+        "/usr/bin" | "/bin" | "/usr/sbin" | "/sbin"
+    ) {
+        return Vec::new();
+    }
+
+    // Use `$HOME/...` when `bin_dir` lives inside `home` so the shell snippet
+    // remains portable across home directory moves.
+    let (posix_expr, rel_sub) = match bin_dir.strip_prefix(home) {
+        Ok(rel) if !rel.as_os_str().is_empty() => {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            (format!("$HOME/{rel_str}"), Some(rel_str))
+        }
+        _ => (dir_raw.clone(), None),
+    };
+
+    let shell_name = shell.unwrap_or("");
+    let mut posix_targets = Vec::new();
+    let zshrc = home.join(".zshrc");
+    if shell_name.contains("zsh") || zshrc.exists() || cfg!(target_os = "macos") {
+        posix_targets.push(zshrc);
+    }
+    let bashrc = home.join(".bashrc");
+    if shell_name.contains("bash") || bashrc.exists() {
+        posix_targets.push(bashrc);
+    }
+    let bash_profile = home.join(".bash_profile");
+    if bash_profile.exists() {
+        posix_targets.push(bash_profile);
+    }
+    if posix_targets.is_empty() {
+        posix_targets.push(home.join(".profile"));
+    }
+
+    let mut updated = Vec::new();
+    let already_mentions = |content: &str| -> bool {
+        if content.contains(&dir_raw) || content.contains(&posix_expr) {
+            return true;
+        }
+        if let Some(rel) = &rel_sub {
+            if content.contains(&format!("~/{rel}")) || content.contains(&format!("${{HOME}}/{rel}")) {
+                return true;
+            }
+        }
+        false
+    };
+
+    let posix_snippet = format!(
+        "\n# Added by Unterm (AI agent PATH)\ncase \":$PATH:\" in\n  *\":{posix_expr}:\"*) ;;\n  *) export PATH=\"{posix_expr}:$PATH\" ;;\nesac\n"
+    );
+
+    for rc in posix_targets {
+        let existing = std::fs::read_to_string(&rc).unwrap_or_default();
+        if already_mentions(&existing) {
+            continue;
+        }
+        let mut next = existing;
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(&posix_snippet);
+        if std::fs::write(&rc, next).is_ok() {
+            updated.push(rc.to_string_lossy().to_string());
+        }
+    }
+
+    let fish_cfg = home.join(".config").join("fish").join("config.fish");
+    if shell_name.contains("fish") || fish_cfg.exists() {
+        let existing = std::fs::read_to_string(&fish_cfg).unwrap_or_default();
+        if !already_mentions(&existing) {
+            if let Some(parent) = fish_cfg.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let mut next = existing;
+            if !next.is_empty() && !next.ends_with('\n') {
+                next.push('\n');
+            }
+            next.push_str(&format!(
+                "\n# Added by Unterm (AI agent PATH)\nfish_add_path -g \"{posix_expr}\"\n"
+            ));
+            if std::fs::write(&fish_cfg, next).is_ok() {
+                updated.push(fish_cfg.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    updated
+}
+
 pub fn run_install(manifest: &AgentManifest) -> Result<Vec<StepReport>> {
     let platform: &PlatformInstall =
         manifest
@@ -407,10 +659,11 @@ pub fn run_install(manifest: &AgentManifest) -> Result<Vec<StepReport>> {
                 ),
             })?;
 
-    // Non-technical-user nicety: if a step needs `pipx` and it isn't present,
-    // bootstrap it via pip (Python is far more commonly installed than pipx).
-    // Best-effort — if it can't, the real step still reports a clear error.
+    // Non-technical-user nicety: if a step needs `pipx` or `uv` and it isn't
+    // present, bootstrap it automatically so the user doesn't have to install
+    // package managers by hand first.
     ensure_pipx_if_needed(platform);
+    ensure_uv_if_needed(platform);
 
     let mut reports = Vec::new();
     for (i, step) in platform.steps.iter().enumerate() {
@@ -440,6 +693,31 @@ pub fn run_install(manifest: &AgentManifest) -> Result<Vec<StepReport>> {
             ),
         });
     }
+
+    // Automatically ensure the installed binary's directory is on the current
+    // process PATH and persisted in the user's shell configuration / OS PATH.
+    if let Some(bin_path) = &after.binary_path {
+        if let Some(bin_dir) = std::path::Path::new(bin_path).parent() {
+            let modified = ensure_dir_on_user_path(bin_dir);
+            let msg = if modified.is_empty() {
+                format!("PATH verified ({})", bin_dir.display())
+            } else {
+                format!(
+                    "added {} to PATH ({})",
+                    bin_dir.display(),
+                    modified.join(", ")
+                )
+            };
+            reports.push(StepReport {
+                label: format!("configure PATH ({})", bin_dir.display()),
+                success: true,
+                exit_code: Some(0),
+                stdout_tail: msg,
+                stderr_tail: String::new(),
+            });
+        }
+    }
+
     Ok(reports)
 }
 
@@ -507,6 +785,40 @@ fn run_shell(cmd: &[String], label: &str) -> Result<StepReport> {
     })?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // On Unix, a system-wide Node installation (`/usr/local/lib/node_modules`)
+    // often rejects `npm install -g <pkg>` with EACCES when run without sudo.
+    // Automatically retry with `NPM_CONFIG_PREFIX=$HOME/.local` so the binary
+    // installs into `~/.local/bin` and `ensure_dir_on_user_path` wires it up.
+    #[cfg(unix)]
+    if !output.status.success()
+        && bin == "npm"
+        && cmd.iter().any(|a| a == "-g" || a == "--global")
+        && (stderr.contains("EACCES") || stderr.to_ascii_lowercase().contains("permission denied"))
+    {
+        if let Some(home) = dirs_next::home_dir() {
+            let user_prefix = home.join(".local");
+            let _ = std::fs::create_dir_all(user_prefix.join("bin"));
+            let mut retry = spawn_command(&resolved);
+            retry.env("PATH", enriched_path());
+            retry.env("NPM_CONFIG_PREFIX", &user_prefix);
+            for a in &cmd[1..] {
+                retry.arg(a);
+            }
+            if let Ok(retry_out) = retry.output() {
+                let r_stdout = String::from_utf8_lossy(&retry_out.stdout).to_string();
+                let r_stderr = String::from_utf8_lossy(&retry_out.stderr).to_string();
+                return Ok(StepReport {
+                    label: format!("{label} (user prefix ~/.local)"),
+                    success: retry_out.status.success(),
+                    exit_code: retry_out.status.code(),
+                    stdout_tail: tail(&r_stdout, 2000),
+                    stderr_tail: tail(&r_stderr, 2000),
+                });
+            }
+        }
+    }
+
     Ok(StepReport {
         label: label.to_string(),
         success: output.status.success(),
@@ -675,5 +987,32 @@ mod path_fallback_tests {
         if let Some(p) = extra_path_dirs().iter().find_map(|d| check_dir(d, "npm")) {
             assert!(std::path::Path::new(&p).exists(), "resolved npm gone: {p}");
         }
+    }
+
+    #[test]
+    fn ensure_dir_on_user_path_updates_rc_files_idempotently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let local_bin = home.join(".local").join("bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        std::fs::write(home.join(".bashrc"), "# existing bashrc\n").unwrap();
+
+        let modified = ensure_dir_on_user_path_in_home(&local_bin, home, Some("/bin/zsh"));
+        assert!(!modified.is_empty(), "expected zshrc/bashrc to be updated");
+
+        let zshrc_text = std::fs::read_to_string(home.join(".zshrc")).unwrap();
+        assert!(
+            zshrc_text.contains("$HOME/.local/bin"),
+            "zshrc should export $HOME/.local/bin: {zshrc_text}"
+        );
+        let bashrc_text = std::fs::read_to_string(home.join(".bashrc")).unwrap();
+        assert!(
+            bashrc_text.contains("# existing bashrc") && bashrc_text.contains("$HOME/.local/bin"),
+            "bashrc should preserve user content and add PATH: {bashrc_text}"
+        );
+
+        // Second call must be a no-op (idempotent).
+        let second = ensure_dir_on_user_path_in_home(&local_bin, home, Some("/bin/zsh"));
+        assert!(second.is_empty(), "second call should not duplicate PATH entry: {second:?}");
     }
 }

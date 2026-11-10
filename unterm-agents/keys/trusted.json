@@ -21,7 +21,7 @@
     },
     {
       "key_id": "unterm-2026-5",
-      "public_key_b64": "ZNe50C4x7j7h2QNm3TuVKU1rPW3oKGAYj7G40fxi1IQ=",
+      "public_key_b64": "Yi2UxJ47ropRaRJXu3QKA3OtzQ8zWYrZFNqEyTENikA=",
       "expires_at": null,
       "note": "Generated to re-sign the baked fallback after adding Antigravity CLI (agy), Qwen Code CLI (qwen-code), and China Coding Plan provider modes."
     }

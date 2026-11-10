@@ -116,6 +116,12 @@ pub struct SetupAiCommand {
     /// windsurf, opencode, kimi, qwen.
     #[arg(long = "client")]
     pub clients: Vec<String>,
+
+    /// Install missing CLI agents (and add their binary directories to PATH)
+    /// before wiring MCP and context files. Combine with `--client <id>` to
+    /// install and wire a specific agent in one step.
+    #[arg(long)]
+    pub install: bool,
 }
 
 /// On-disk MCP config shape an agent expects. Mirrors the launcher's
@@ -280,6 +286,7 @@ pub fn run(cmd: SetupAiCommand, json_out: bool) -> Result<()> {
         )
     };
 
+    let manifest_set = unterm_agents::fetch_manifests().ok();
     let mut reports = Vec::new();
     for c in clients() {
         if let Some(f) = &filter {
@@ -287,7 +294,29 @@ pub fn run(cmd: SetupAiCommand, json_out: bool) -> Result<()> {
                 continue;
             }
         }
-        let detected = c.detect.iter().any(|p| home.join(p).exists());
+        let mut detected = c.detect.iter().any(|p| home.join(p).exists());
+        if !detected && !cmd.remove {
+            if let Some(m) = manifest_set.as_ref().and_then(|set| set.find(c.id)) {
+                let det = unterm_agents::installer::detect(&m.detect);
+                if det.ok {
+                    detected = true;
+                    if !cmd.dry_run {
+                        if let Some(bin) = &det.binary_path {
+                            if let Some(dir) = Path::new(bin).parent() {
+                                let _ = unterm_agents::installer::ensure_dir_on_user_path(dir);
+                            }
+                        }
+                    }
+                } else if cmd.install && !cmd.dry_run {
+                    if !json_out {
+                        println!("  ⏳ Installing {} ({})...", c.label, m.id);
+                    }
+                    if unterm_agents::installer::run_install(m).is_ok() {
+                        detected = true;
+                    }
+                }
+            }
+        }
         if !detected {
             reports.push(ClientReport {
                 id: c.id,
@@ -1061,6 +1090,7 @@ mod tests {
             dry_run: true,
             no_hooks: false,
             clients: Vec::new(),
+            install: false,
         };
         let reports = vec![ClientReport {
             id: "claude-code",

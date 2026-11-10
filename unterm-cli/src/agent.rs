@@ -121,13 +121,17 @@ pub enum AgentSubCommand {
         profile: Option<String>,
         #[arg(long)]
         cwd: Option<String>,
+        /// Automatically install the agent (and add its binary dir to PATH) if
+        /// it is not installed yet.
+        #[arg(long)]
+        install: bool,
     },
     /// Run an agent task non-interactively and wait for it to finish.
     ///
-    /// Supported today: `codex-cli` (`codex exec`), `claude-code`
-    /// (`claude -p`), `gemini-cli` (`gemini -p`), and `opencode`
-    /// (`opencode run`). The command reuses the same profile, auth, launch
-    /// flags, and MCP autowiring as `agent launch`.
+    /// Supported today: `agy` (`agy -p`), `codex-cli` (`codex exec`), `claude-code`
+    /// (`claude -p`), `gemini-cli` (`gemini -p`), `opencode` (`opencode run`),
+    /// `kimi-code` (`kimi -p`), `qwen-code` (`qwen -p`), and `trae-agent` (`trae-cli run`).
+    /// The command reuses the same profile, auth, launch flags, and MCP autowiring as `agent launch`.
     Run {
         id: String,
         #[arg(long)]
@@ -141,6 +145,10 @@ pub enum AgentSubCommand {
         /// Print the exact command that would run, with sensitive env redacted.
         #[arg(long)]
         dry_run: bool,
+        /// Automatically install the agent (and add its binary dir to PATH) if
+        /// it is not installed yet.
+        #[arg(long)]
+        install: bool,
         #[arg(trailing_var_arg = true)]
         prompt: Vec<String>,
     },
@@ -237,15 +245,19 @@ pub fn run(cmd: AgentCommand, json_out: bool) -> Result<()> {
         AgentSubCommand::Plan { id, profile, cwd } => {
             run_plan(&id, profile.as_deref(), cwd.as_deref(), json_out)
         }
-        AgentSubCommand::Launch { id, profile, cwd } => {
-            run_launch(&id, profile.as_deref(), cwd.as_deref())
-        }
+        AgentSubCommand::Launch {
+            id,
+            profile,
+            cwd,
+            install,
+        } => run_launch(&id, profile.as_deref(), cwd.as_deref(), install),
         AgentSubCommand::Run {
             id,
             profile,
             cwd,
             stdin,
             dry_run,
+            install,
             prompt,
         } => run_headless(
             &id,
@@ -253,6 +265,7 @@ pub fn run(cmd: AgentCommand, json_out: bool) -> Result<()> {
             cwd.as_deref(),
             stdin,
             dry_run,
+            install,
             &prompt,
             json_out,
         ),
@@ -705,6 +718,9 @@ fn run_install(id: &str, _no_check_requires: bool, json_out: bool) -> Result<()>
                 r.label,
                 r.exit_code
             );
+            if r.label.starts_with("configure PATH") && !r.stdout_tail.is_empty() {
+                println!("       {}", r.stdout_tail);
+            }
         }
         println!("\nInstalled {} ({})", manifest.name, manifest.id);
     }
@@ -1050,8 +1066,70 @@ fn checkpoint_before_agent_launch(cwd: Option<&str>, agent: &str) -> Result<()> 
     Ok(())
 }
 
-fn run_launch(id: &str, profile: Option<&str>, cwd: Option<&str>) -> Result<()> {
+/// Ensure the agent binary is installed and its directory is on the user's PATH.
+/// If the binary is missing and `auto_install` is true (or the user confirms on
+/// an interactive terminal), runs `installer::run_install(manifest)` automatically.
+fn ensure_installed_and_on_path(manifest: &AgentManifest, auto_install: bool) -> Result<()> {
+    let det = installer::detect(&manifest.detect);
+    if det.ok {
+        if let Some(bin_path) = &det.binary_path {
+            if let Some(bin_dir) = std::path::Path::new(bin_path).parent() {
+                let _ = installer::ensure_dir_on_user_path(bin_dir);
+            }
+        }
+        return Ok(());
+    }
+
+    let should_install = if auto_install {
+        true
+    } else if std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stderr())
+    {
+        use std::io::Write;
+        eprint!(
+            "{} ({}) is not installed. Install it now and configure PATH? [Y/n]: ",
+            manifest.name, manifest.id
+        );
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_ok() {
+            let trimmed = line.trim().to_ascii_lowercase();
+            trimmed.is_empty() || trimmed == "y" || trimmed == "yes"
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !should_install {
+        return Err(anyhow!(
+            "{} ({}) is not installed. Run `unterm-cli agent install {}` or pass `--install` to install it and configure PATH automatically.",
+            manifest.name,
+            manifest.id,
+            manifest.id
+        ));
+    }
+
+    eprintln!("Installing {} ({})...", manifest.name, manifest.id);
+    let reports = installer::run_install(manifest).map_err(|e| anyhow!(e.to_string()))?;
+    for r in &reports {
+        eprintln!(
+            "  [{}] {}",
+            if r.success { "ok" } else { "fail" },
+            if !r.stdout_tail.is_empty() && r.label.starts_with("configure PATH") {
+                &r.stdout_tail
+            } else {
+                &r.label
+            }
+        );
+    }
+    Ok(())
+}
+
+fn run_launch(id: &str, profile: Option<&str>, cwd: Option<&str>, auto_install: bool) -> Result<()> {
     let (_, manifest) = lookup(id)?;
+    ensure_installed_and_on_path(&manifest, auto_install)?;
     let profile_id = profile_or_default(profile)?;
     let mut state =
         SettingsState::load(&profile_id, &manifest.id).map_err(|e| anyhow!(e.to_string()))?;
@@ -1097,14 +1175,14 @@ fn build_plan_for_run(
     id: &str,
     profile: Option<&str>,
     cwd: Option<&str>,
-) -> Result<unterm_agents::launcher::LaunchPlan> {
+) -> Result<(AgentManifest, unterm_agents::launcher::LaunchPlan)> {
     let (_, manifest) = lookup(id)?;
     let profile_id = profile_or_default(profile)?;
     let mut state =
         SettingsState::load(&profile_id, &manifest.id).map_err(|e| anyhow!(e.to_string()))?;
     state.merge_defaults(&manifest.settings_schema);
     let wire = mcp_wire_info();
-    unterm_agents::launcher::build_launch_plan(&unterm_agents::launcher::LaunchInputs {
+    let plan = unterm_agents::launcher::build_launch_plan(&unterm_agents::launcher::LaunchInputs {
         manifest: &manifest,
         profile_id: &profile_id,
         settings: &state,
@@ -1112,7 +1190,8 @@ fn build_plan_for_run(
         project_root: cwd,
         mcp: wire.as_ref(),
     })
-    .map_err(|e| anyhow!(e.to_string()))
+    .map_err(|e| anyhow!(e.to_string()))?;
+    Ok((manifest, plan))
 }
 
 fn headless_args(id: &str, mut base_args: Vec<String>, prompt: &str) -> Result<Vec<String>> {
@@ -1169,6 +1248,7 @@ fn run_headless(
     cwd: Option<&str>,
     read_stdin: bool,
     dry_run: bool,
+    auto_install: bool,
     prompt_parts: &[String],
     json_out: bool,
 ) -> Result<()> {
@@ -1188,7 +1268,12 @@ fn run_headless(
             "agent run needs a prompt argument, or pass --stdin and pipe one in"
         ));
     }
-    let plan = build_plan_for_run(id, profile, cwd)?;
+    let (manifest, mut plan) = build_plan_for_run(id, profile, cwd)?;
+    if !dry_run {
+        ensure_installed_and_on_path(&manifest, auto_install)?;
+        // Rebuild plan in case installation just placed the binary in ~/.local/bin.
+        (_, plan) = build_plan_for_run(id, profile, cwd)?;
+    }
     let args = headless_args(id, plan.args.clone(), &prompt)?;
 
     if dry_run {
