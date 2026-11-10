@@ -165,8 +165,24 @@ impl TaskStore {
         title: &str,
         detail: serde_json::Value,
     ) -> Result<Task> {
+        self.create_task_as(TaskId::new(), kind, title, detail)
+    }
+
+    /// A task under an id the caller already chose.
+    ///
+    /// For a local-first client that names the task before it reaches the
+    /// store (offline, or optimistically), so the two never disagree about
+    /// which task is which. Taking an id that exists is an error, not an
+    /// overwrite.
+    pub fn create_task_as(
+        &self,
+        id: TaskId,
+        kind: &str,
+        title: &str,
+        detail: serde_json::Value,
+    ) -> Result<Task> {
         let task = Task {
-            id: TaskId::new(),
+            id,
             kind: kind.to_string(),
             title: title.to_string(),
             state: State::Pending,
@@ -248,6 +264,12 @@ impl TaskStore {
     /// Start another attempt at a task. Attempts number from 1 and never
     /// reuse a number, so "the third try" always means the same run.
     pub fn start_run(&self, task_id: &TaskId) -> Result<Run> {
+        self.start_run_as(task_id, RunId::new())
+    }
+
+    /// [`Self::start_run`] under an id the caller already chose (see
+    /// [`Self::create_task_as`]).
+    pub fn start_run_as(&self, task_id: &TaskId, id: RunId) -> Result<Run> {
         self.with(|connection| {
             let transaction = connection.transaction()?;
             let attempt: i64 = transaction.query_row(
@@ -256,7 +278,7 @@ impl TaskStore {
                 |row| row.get(0),
             )?;
             let run = Run {
-                id: RunId::new(),
+                id,
                 task_id: task_id.clone(),
                 attempt,
                 state: State::Running,
@@ -758,6 +780,17 @@ impl TaskStore {
             connection.execute(
                 "UPDATE tasks SET detail = ?2, updated_at = ?3 WHERE id = ?1",
                 params![id.as_str(), detail.to_string(), now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Rename a task. Like detail, not a state transition.
+    pub fn set_task_title(&self, id: &TaskId, title: &str) -> Result<()> {
+        self.with(|connection| {
+            connection.execute(
+                "UPDATE tasks SET title = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id.as_str(), title, now()],
             )?;
             Ok(())
         })
@@ -2081,6 +2114,28 @@ mod tests {
         let task = store.create_task("agent", "write the tests").unwrap();
         let run = store.start_run(&task.id).unwrap();
         (task, run)
+    }
+
+    #[test]
+    fn a_client_can_name_its_task_and_runs_before_the_store_sees_them() {
+        let store = store();
+        let id = TaskId::parse("tsk_named_by_the_console").unwrap();
+        let task = store
+            .create_task_as(id.clone(), "console", "weekly report", serde_json::json!({"a": 1}))
+            .unwrap();
+        assert_eq!(task.id, id);
+        assert!(
+            store.create_task_as(id.clone(), "console", "again", serde_json::json!({})).is_err(),
+            "an existing id is refused, not overwritten"
+        );
+        store.set_task_title(&id, "monthly report").unwrap();
+        assert_eq!(store.task(&id).unwrap().unwrap().title, "monthly report");
+
+        let run_id = RunId::parse("run_named_too").unwrap();
+        let run = store.start_run_as(&id, run_id.clone()).unwrap();
+        assert_eq!((run.id, run.attempt), (run_id.clone(), 1));
+        assert!(store.start_run_as(&id, run_id).is_err());
+        assert_eq!(store.start_run(&id).unwrap().attempt, 2, "named and unnamed runs share one count");
     }
 
     #[test]
