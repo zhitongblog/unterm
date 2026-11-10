@@ -28,12 +28,14 @@ fn baked_envelope_verifies_and_lists_known_agents() {
     // update both the manifest folder and this test.
     let ids: Vec<&str> = envelope.manifests.iter().map(|m| m.id.as_str()).collect();
     let must = [
+        "agy",
         "claude-code",
         "codex-cli",
         "gemini-cli",
         "opencode",
         "aider",
         "kimi-code",
+        "qwen-code",
         "trae-agent",
     ];
     for id in must {

@@ -1,9 +1,441 @@
 {
   "envelope_version": 1,
-  "issued_at": "2026-06-28T04:15:00Z",
-  "expires_at": "2036-06-25T04:15:00Z",
+  "issued_at": "2026-11-10T04:22:24Z",
+  "expires_at": "2036-11-07T04:22:24Z",
   "min_unterm_version": "0.17.0",
   "manifests": [
+    {
+      "id": "agy",
+      "version": 1,
+      "name": "Antigravity CLI (agy)",
+      "vendor": "Google DeepMind",
+      "category": "first-party",
+      "popularity_rank": 2,
+      "icon_url": "https://unterm.app/agents/agy.svg",
+      "homepage": "https://antigravity.google",
+      "tagline_i18n": {
+        "en": "Google DeepMind's Antigravity agentic coding CLI",
+        "zh-CN": "Google DeepMind 推出的 Antigravity 智能编码 CLI"
+      },
+      "description_i18n": {
+        "en": "Google DeepMind's Antigravity CLI (`agy`) — multi-model agentic coding (Gemini 4 Argon / 3.8 Flash, Claude Opus/Sonnet 5.5), subagents, skills, hooks, and MCP.",
+        "zh-CN": "Google DeepMind 推出的 Antigravity 智能编程 CLI（`agy`）——支持多模型（Gemini 4 Argon / 3.8 Flash、Claude Opus/Sonnet 5.5）、子 Agent、Skills、Hooks 与 MCP。"
+      },
+      "license": "Proprietary",
+      "platforms": [
+        "macos",
+        "linux"
+      ],
+      "detect": {
+        "command": "agy",
+        "version_args": [
+          "--version"
+        ],
+        "version_regex": "([0-9.]+)",
+        "min_version": null
+      },
+      "install": {
+        "macos": {
+          "steps": [
+            {
+              "type": "shell",
+              "cmd": [
+                "agy",
+                "update"
+              ]
+            }
+          ]
+        },
+        "linux": {
+          "steps": [
+            {
+              "type": "shell",
+              "cmd": [
+                "agy",
+                "update"
+              ]
+            }
+          ]
+        },
+        "windows": null,
+        "requires": [],
+        "update": {
+          "cmd": [
+            "agy",
+            "update"
+          ]
+        },
+        "uninstall": null
+      },
+      "auth": {
+        "primary": {
+          "kind": "oauth_browser",
+          "trigger": {
+            "cmd": [
+              "agy",
+              "login"
+            ]
+          },
+          "ready_marker": "Logged in",
+          "timeout_s": 180
+        },
+        "fallback": {
+          "kind": "api_key_env",
+          "env_var": "GEMINI_API_KEY",
+          "key_console_url": "https://aistudio.google.com/app/apikey",
+          "validate": null
+        }
+      },
+      "launch": {
+        "exec": "agy",
+        "args": [],
+        "args_when_cwd_set": [
+          "--add-dir",
+          "{{CWD}}"
+        ],
+        "respects_unterm_split": true,
+        "flag_catalog": [
+          {
+            "id": "continue",
+            "arg": "-c",
+            "label_i18n": {
+              "en": "Continue last conversation",
+              "zh-CN": "继续上次对话"
+            },
+            "description_i18n": {
+              "en": "Continue the most recent conversation in the current directory",
+              "zh-CN": "继续当前目录最近一次对话"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "model",
+            "arg": "--model {value}",
+            "label_i18n": {
+              "en": "Model",
+              "zh-CN": "指定模型"
+            },
+            "description_i18n": {
+              "en": "Set the model (e.g. gemini-4-argon-high, claude-opus-5-5-high)",
+              "zh-CN": "指定模型（如 gemini-4-argon-high、claude-opus-5-5-high）"
+            },
+            "kind": "value",
+            "choices": [],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "mode",
+            "arg": "--mode {value}",
+            "label_i18n": {
+              "en": "Permission mode",
+              "zh-CN": "权限模式"
+            },
+            "description_i18n": {
+              "en": "Permission mode to start in (accept-edits, auto, plan)",
+              "zh-CN": "启动时的权限模式（accept-edits、auto、plan）"
+            },
+            "kind": "choice",
+            "choices": [
+              "accept-edits",
+              "auto",
+              "plan"
+            ],
+            "risk": "caution",
+            "default_on": false
+          },
+          {
+            "id": "effort",
+            "arg": "--effort {value}",
+            "label_i18n": {
+              "en": "Thinking effort",
+              "zh-CN": "思考深度"
+            },
+            "description_i18n": {
+              "en": "Reasoning effort level for the session",
+              "zh-CN": "设置模型推理深度等级"
+            },
+            "kind": "choice",
+            "choices": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "sandbox",
+            "arg": "--sandbox",
+            "label_i18n": {
+              "en": "Sandbox",
+              "zh-CN": "沙箱"
+            },
+            "description_i18n": {
+              "en": "Run shell commands inside the Antigravity sandbox",
+              "zh-CN": "在 Antigravity 沙箱中执行命令"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "remote-control",
+            "arg": "--remote-control",
+            "label_i18n": {
+              "en": "Remote Control mode",
+              "zh-CN": "远程控制模式"
+            },
+            "description_i18n": {
+              "en": "Start in Remote Control mode",
+              "zh-CN": "以远程控制模式启动"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "caution",
+            "default_on": false
+          },
+          {
+            "id": "skip-perms",
+            "arg": "--dangerously-skip-permissions",
+            "label_i18n": {
+              "en": "Skip all permissions ⚠",
+              "zh-CN": "跳过所有权限 ⚠"
+            },
+            "description_i18n": {
+              "en": "Bypass all permission checks — bypasses Unterm's audit",
+              "zh-CN": "跳过所有权限检查——绕过 Unterm 审计"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "danger",
+            "default_on": false
+          }
+        ]
+      },
+      "mcp": {
+        "client_supports_mcp": true,
+        "auto_register_unterm": {
+          "config_path": "{{HOME}}/.gemini/config/mcp_config.json",
+          "format": "generic_mcp_json",
+          "server_name": "unterm",
+          "transport": "stdio",
+          "scopes_default": [
+            "read"
+          ],
+          "scopes_optional": [
+            "write"
+          ]
+        }
+      },
+      "profile_defaults": {
+        "isolate_env": true,
+        "inherit_env": [
+          "PATH",
+          "HOME",
+          "LANG",
+          "TERM",
+          "SHELL",
+          "USER"
+        ],
+        "shell": null,
+        "history_file": null,
+        "starting_cwd": "project_root_or_home",
+        "audit_default": "on"
+      },
+      "auth_modes": [
+        {
+          "id": "subscription",
+          "recommended": true,
+          "label_i18n": {
+            "en": "Google Antigravity account (OAuth) — default",
+            "zh-CN": "Google Antigravity 账号 (OAuth) — 默认"
+          },
+          "description_i18n": {
+            "en": "Sign in via `agy login` with your Google / Antigravity account.",
+            "zh-CN": "通过 `agy login` 使用 Google / Antigravity 账号登录。"
+          },
+          "oauth_trigger": {
+            "cmd": [
+              "agy",
+              "login"
+            ]
+          },
+          "oauth_ready_marker": "Logged in",
+          "oauth_timeout_s": 180,
+          "console_url": null,
+          "reveals_settings": []
+        },
+        {
+          "id": "byo_key",
+          "recommended": false,
+          "label_i18n": {
+            "en": "Bring your own Gemini API key",
+            "zh-CN": "自带 Gemini API key"
+          },
+          "description_i18n": {
+            "en": "Use a GEMINI_API_KEY from Google AI Studio.",
+            "zh-CN": "使用 Google AI Studio 签发的 GEMINI_API_KEY。"
+          },
+          "oauth_trigger": null,
+          "oauth_ready_marker": null,
+          "oauth_timeout_s": 180,
+          "console_url": "https://aistudio.google.com/app/apikey",
+          "reveals_settings": [
+            "api_key"
+          ]
+        }
+      ],
+      "settings_schema": [
+        {
+          "key": "model",
+          "type": "enum",
+          "category": "model",
+          "default": "gemini-4-argon-high",
+          "required": false,
+          "sensitive": false,
+          "label_i18n": {
+            "en": "Default model",
+            "zh-CN": "默认模型"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": true,
+          "values": [
+            {
+              "value": "gemini-4-argon-high",
+              "label": "Gemini 4 Argon (High)"
+            },
+            {
+              "value": "gemini-4-argon-medium",
+              "label": "Gemini 4 Argon (Medium)"
+            },
+            {
+              "value": "gemini-4-argon-low",
+              "label": "Gemini 4 Argon (Low)"
+            },
+            {
+              "value": "gemini-3.8-flash-high",
+              "label": "Gemini 3.8 Flash (High)"
+            },
+            {
+              "value": "gemini-3.8-flash-medium",
+              "label": "Gemini 3.8 Flash (Medium)"
+            },
+            {
+              "value": "claude-opus-5-5-high",
+              "label": "Claude Opus 5.5 (High)"
+            },
+            {
+              "value": "claude-opus-5-5-medium",
+              "label": "Claude Opus 5.5 (Medium)"
+            },
+            {
+              "value": "claude-sonnet-5-5-high",
+              "label": "Claude Sonnet 5.5 (High)"
+            },
+            {
+              "value": "claude-sonnet-5-5-medium",
+              "label": "Claude Sonnet 5.5 (Medium)"
+            },
+            {
+              "value": "gpt-oss-120b-medium",
+              "label": "GPT-OSS 120B (Medium)"
+            }
+          ],
+          "min": null,
+          "max": null,
+          "secret_namespace": null,
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "system_prompt",
+          "type": "text_long",
+          "category": "behavior",
+          "default": "",
+          "required": false,
+          "sensitive": false,
+          "label_i18n": {
+            "en": "System instructions (GEMINI.md)",
+            "zh-CN": "系统指令（GEMINI.md）"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": null,
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "GEMINI_API_KEY",
+            "zh-CN": "GEMINI_API_KEY"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "google",
+          "since_manifest_version": null,
+          "depends_on": null
+        }
+      ],
+      "settings_storage": {
+        "files": [
+          {
+            "path": "{{HOME}}/.gemini/antigravity-cli/settings.json",
+            "format": "json",
+            "merge": "preserve_unknown_keys",
+            "atomic_write": true,
+            "key_map": {
+              "model": ".model"
+            },
+            "single_key": null
+          },
+          {
+            "path": "{{HOME}}/.gemini/GEMINI.md",
+            "format": "raw_text",
+            "merge": "preserve_unknown_keys",
+            "atomic_write": true,
+            "key_map": {},
+            "single_key": "system_prompt"
+          }
+        ],
+        "env_at_launch": {
+          "GEMINI_API_KEY": {
+            "from": "secret:google",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          }
+        },
+        "live_reload": false,
+        "validate_after_write": null
+      },
+      "telemetry_notice": {
+        "vendor_dials_home": true,
+        "privacy_url": "https://policies.google.com/privacy",
+        "opt_out_env": null
+      }
+    },
     {
       "id": "aider",
       "version": 2,
@@ -485,7 +917,7 @@
     },
     {
       "id": "claude-code",
-      "version": 3,
+      "version": 4,
       "name": "Claude Code",
       "vendor": "Anthropic",
       "category": "first-party",
@@ -798,6 +1230,28 @@
           "console_url": null,
           "reveals_settings": [
             "base_url_override",
+            "api_key",
+            "custom_model"
+          ]
+        },
+        {
+          "id": "cn_coding_plan",
+          "recommended": false,
+          "label_i18n": {
+            "en": "China Coding Plan (GLM / Kimi / DeepSeek / Bailian / Doubao / MiniMax)",
+            "zh-CN": "国内大模型 Coding Plan（智谱 GLM / Kimi / DeepSeek / 阿里百炼 / 字节豆包 / MiniMax）"
+          },
+          "description_i18n": {
+            "en": "Run Claude Code against domestic Anthropic-compatible endpoints: Zhipu BigModel (`https://open.bigmodel.cn/api/anthropic`), Kimi (`https://api.moonshot.cn/anthropic`), DeepSeek (`https://api.deepseek.com/anthropic`), Alibaba Bailian (`https://coding.dashscope.aliyuncs.com/apps/anthropic`), Volcengine Ark, or MiniMax (`https://api.minimaxi.com/anthropic`).",
+            "zh-CN": "将 Claude Code 接入国内 Anthropic 兼容套餐端点：智谱 GLM Coding Plan (`https://open.bigmodel.cn/api/anthropic`)、Kimi (`https://api.moonshot.cn/anthropic`)、DeepSeek (`https://api.deepseek.com/anthropic`)、阿里云百炼 (`https://coding.dashscope.aliyuncs.com/apps/anthropic`)、火山方舟豆包或 MiniMax (`https://api.minimaxi.com/anthropic`)。"
+          },
+          "oauth_trigger": null,
+          "oauth_ready_marker": null,
+          "oauth_timeout_s": 180,
+          "console_url": "https://open.bigmodel.cn/",
+          "reveals_settings": [
+            "base_url_override",
+            "custom_model",
             "api_key"
           ]
         }
@@ -984,7 +1438,7 @@
             "zh-CN": "端点 base URL"
           },
           "description_i18n": {},
-          "placeholder": "https://openrouter.ai/api/v1   ·   https://bedrock.us-east-1.amazonaws.com   ·   https://your-proxy/v1",
+          "placeholder": "https://open.bigmodel.cn/api/anthropic · https://api.deepseek.com/anthropic · https://api.moonshot.cn/anthropic · https://coding.dashscope.aliyuncs.com/apps/anthropic",
           "restart_required": false,
           "values": [],
           "min": null,
@@ -1011,6 +1465,30 @@
           "min": null,
           "max": null,
           "secret_namespace": "anthropic",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "custom_model",
+          "type": "string",
+          "category": "model",
+          "default": "",
+          "required": false,
+          "sensitive": false,
+          "label_i18n": {
+            "en": "Custom / Coding Plan model (ANTHROPIC_MODEL)",
+            "zh-CN": "自定义 / Coding Plan 模型名 (ANTHROPIC_MODEL)"
+          },
+          "description_i18n": {
+            "en": "Optional model override for domestic Coding Plan or custom gateway (e.g. glm-4.7, deepseek-chat, kimi-k2-0905-preview, qwen3-coder-plus, MiniMax-M2.5)",
+            "zh-CN": "用于国内 Coding Plan 或自定义网关的模型名（如 glm-4.7、deepseek-chat、kimi-k2-0905-preview、qwen3-coder-plus、MiniMax-M2.5）"
+          },
+          "placeholder": "glm-4.7 · deepseek-chat · kimi-k2-0905-preview · qwen3-coder-plus",
+          "restart_required": true,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": null,
           "since_manifest_version": null,
           "depends_on": null
         }
@@ -1046,14 +1524,24 @@
             "from": "secret:anthropic",
             "only_if_auth_mode": [
               "byo_key",
-              "custom_endpoint"
+              "custom_endpoint",
+              "cn_coding_plan"
             ]
           },
           "ANTHROPIC_BASE_URL": {
             "from_setting": "base_url_override",
             "skip_if_empty": true,
             "only_if_auth_mode": [
-              "custom_endpoint"
+              "custom_endpoint",
+              "cn_coding_plan"
+            ]
+          },
+          "ANTHROPIC_MODEL": {
+            "from_setting": "custom_model",
+            "skip_if_empty": true,
+            "only_if_auth_mode": [
+              "custom_endpoint",
+              "cn_coding_plan"
             ]
           }
         },
@@ -2162,7 +2650,7 @@
     },
     {
       "id": "kimi-code",
-      "version": 2,
+      "version": 3,
       "name": "Kimi Code CLI",
       "vendor": "Moonshot AI",
       "category": "first-party",
@@ -2291,7 +2779,18 @@
       },
       "mcp": {
         "client_supports_mcp": true,
-        "auto_register_unterm": null
+        "auto_register_unterm": {
+          "config_path": "{{HOME}}/.kimi/mcp.json",
+          "format": "generic_mcp_json",
+          "server_name": "unterm",
+          "transport": "stdio",
+          "scopes_default": [
+            "read"
+          ],
+          "scopes_optional": [
+            "write"
+          ]
+        }
       },
       "profile_defaults": {
         "isolate_env": true,
@@ -2389,7 +2888,7 @@
     },
     {
       "id": "opencode",
-      "version": 2,
+      "version": 3,
       "name": "OpenCode",
       "vendor": "SST",
       "category": "first-party",
@@ -2585,7 +3084,12 @@
             "anthropic_api_key",
             "openai_api_key",
             "google_api_key",
-            "openrouter_api_key"
+            "openrouter_api_key",
+            "deepseek_api_key",
+            "dashscope_api_key",
+            "zhipu_api_key",
+            "moonshot_api_key",
+            "ark_api_key"
           ]
         },
         {
@@ -2651,6 +3155,26 @@
             {
               "value": "ollama",
               "label": null
+            },
+            {
+              "value": "dashscope",
+              "label": "Alibaba Bailian / DashScope (Qwen)"
+            },
+            {
+              "value": "zhipu",
+              "label": "Zhipu AI / BigModel (GLM)"
+            },
+            {
+              "value": "moonshot",
+              "label": "Moonshot AI (Kimi)"
+            },
+            {
+              "value": "volcengine",
+              "label": "Volcengine Ark (Doubao)"
+            },
+            {
+              "value": "siliconflow",
+              "label": "SiliconFlow"
             }
           ],
           "min": null,
@@ -2833,6 +3357,111 @@
           "secret_namespace": null,
           "since_manifest_version": null,
           "depends_on": null
+        },
+        {
+          "key": "deepseek_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "DeepSeek API key",
+            "zh-CN": "DeepSeek API key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "deepseek",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "dashscope_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "DashScope / Bailian API key",
+            "zh-CN": "阿里云百炼 DashScope API key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "dashscope",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "zhipu_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "Zhipu / GLM API key",
+            "zh-CN": "智谱 GLM API key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "zhipu",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "moonshot_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "Moonshot / Kimi API key",
+            "zh-CN": "Moonshot / Kimi API key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "moonshot",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "ark_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "Volcengine Ark (Doubao) API key",
+            "zh-CN": "火山方舟豆包 ARK_API_KEY"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "volcengine",
+          "since_manifest_version": null,
+          "depends_on": null
         }
       ],
       "settings_storage": {
@@ -2867,8 +3496,32 @@
               "byo_key"
             ]
           },
+          "ARK_API_KEY": {
+            "from": "secret:volcengine",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
+          "DASHSCOPE_API_KEY": {
+            "from": "secret:dashscope",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
+          "DEEPSEEK_API_KEY": {
+            "from": "secret:deepseek",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
           "GEMINI_API_KEY": {
             "from": "secret:google",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
+          "MOONSHOT_API_KEY": {
+            "from": "secret:moonshot",
             "only_if_auth_mode": [
               "byo_key"
             ]
@@ -2891,6 +3544,12 @@
             "only_if_auth_mode": [
               "byo_key"
             ]
+          },
+          "ZHIPU_API_KEY": {
+            "from": "secret:zhipu",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
           }
         },
         "live_reload": true,
@@ -2903,8 +3562,494 @@
       }
     },
     {
-      "id": "trae-agent",
+      "id": "qwen-code",
       "version": 1,
+      "name": "Qwen Code CLI",
+      "vendor": "Alibaba Qwen",
+      "category": "first-party",
+      "popularity_rank": 5,
+      "icon_url": "https://unterm.app/agents/qwen-code.svg",
+      "homepage": "https://github.com/QwenLM/qwen-code",
+      "tagline_i18n": {
+        "en": "Alibaba Qwen's official terminal coding agent",
+        "zh-CN": "阿里通义千问官方终端编码 agent"
+      },
+      "description_i18n": {
+        "en": "Alibaba Qwen's official terminal coding agent (`qwen`) — supports Qwen3-Coder, Qwen OAuth free quota, Alibaba Cloud Bailian Coding Plan, and domestic OpenAI-compatible endpoints.",
+        "zh-CN": "阿里通义千问官方终端编程 Agent（`qwen`）——支持 Qwen3-Coder、Qwen OAuth 免费额度、阿里云百炼 Coding Plan 以及任意兼容 OpenAI 的国内大模型端点。"
+      },
+      "license": "Apache-2.0",
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "detect": {
+        "command": "qwen",
+        "version_args": [
+          "--version"
+        ],
+        "version_regex": "([0-9.]+)",
+        "min_version": null
+      },
+      "install": {
+        "macos": {
+          "steps": [
+            {
+              "type": "shell",
+              "cmd": [
+                "npm",
+                "install",
+                "-g",
+                "@qwen-code/qwen-code"
+              ]
+            }
+          ]
+        },
+        "linux": {
+          "steps": [
+            {
+              "type": "shell",
+              "cmd": [
+                "npm",
+                "install",
+                "-g",
+                "@qwen-code/qwen-code"
+              ]
+            }
+          ]
+        },
+        "windows": {
+          "steps": [
+            {
+              "type": "shell",
+              "cmd": [
+                "npm",
+                "install",
+                "-g",
+                "@qwen-code/qwen-code"
+              ]
+            }
+          ]
+        },
+        "requires": [
+          {
+            "binary": "node",
+            "min": "20",
+            "install_hint_url": "https://nodejs.org"
+          }
+        ],
+        "update": {
+          "cmd": [
+            "npm",
+            "update",
+            "-g",
+            "@qwen-code/qwen-code"
+          ]
+        },
+        "uninstall": {
+          "cmd": [
+            "npm",
+            "uninstall",
+            "-g",
+            "@qwen-code/qwen-code"
+          ]
+        }
+      },
+      "auth": {
+        "primary": {
+          "kind": "api_key_env",
+          "env_var": "DASHSCOPE_API_KEY",
+          "key_console_url": "https://bailian.console.aliyun.com/",
+          "validate": null
+        },
+        "fallback": {
+          "kind": "api_key_env",
+          "env_var": "OPENAI_API_KEY",
+          "key_console_url": "https://bailian.console.aliyun.com/",
+          "validate": null
+        }
+      },
+      "launch": {
+        "exec": "qwen",
+        "args": [],
+        "args_when_cwd_set": [],
+        "respects_unterm_split": true,
+        "flag_catalog": [
+          {
+            "id": "continue",
+            "arg": "--continue",
+            "label_i18n": {
+              "en": "Continue last session",
+              "zh-CN": "继续上次会话"
+            },
+            "description_i18n": {
+              "en": "Resume the most recent conversation in this project",
+              "zh-CN": "继续当前项目最近一次对话"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "model",
+            "arg": "--model {value}",
+            "label_i18n": {
+              "en": "Model",
+              "zh-CN": "指定模型"
+            },
+            "description_i18n": {
+              "en": "Override the model (e.g. qwen3-coder-plus, deepseek-chat, glm-4.7)",
+              "zh-CN": "指定模型（如 qwen3-coder-plus、deepseek-chat、glm-4.7）"
+            },
+            "kind": "value",
+            "choices": [],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "approval-mode",
+            "arg": "--approval-mode {value}",
+            "label_i18n": {
+              "en": "Approval mode",
+              "zh-CN": "审批模式"
+            },
+            "description_i18n": {
+              "en": "Tool approval mode (default, auto_edit, plan, yolo)",
+              "zh-CN": "工具调用审批模式（default、auto_edit、plan、yolo）"
+            },
+            "kind": "choice",
+            "choices": [
+              "default",
+              "auto_edit",
+              "plan",
+              "yolo"
+            ],
+            "risk": "caution",
+            "default_on": false
+          },
+          {
+            "id": "sandbox",
+            "arg": "--sandbox",
+            "label_i18n": {
+              "en": "Sandbox",
+              "zh-CN": "启用沙箱"
+            },
+            "description_i18n": {
+              "en": "Run shell commands inside a sandbox",
+              "zh-CN": "在沙箱内执行终端命令"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "safe",
+            "default_on": false
+          },
+          {
+            "id": "yolo",
+            "arg": "--yolo",
+            "label_i18n": {
+              "en": "YOLO (auto-accept all) ⚠",
+              "zh-CN": "YOLO(自动接受全部) ⚠"
+            },
+            "description_i18n": {
+              "en": "Auto-accept every action — bypasses Unterm's audit",
+              "zh-CN": "自动接受所有操作——绕过 Unterm 审计"
+            },
+            "kind": "toggle",
+            "choices": [],
+            "risk": "danger",
+            "default_on": false
+          }
+        ]
+      },
+      "mcp": {
+        "client_supports_mcp": true,
+        "auto_register_unterm": {
+          "config_path": "{{HOME}}/.qwen/settings.json",
+          "format": "generic_mcp_json",
+          "server_name": "unterm",
+          "transport": "stdio",
+          "scopes_default": [
+            "read"
+          ],
+          "scopes_optional": [
+            "write"
+          ]
+        }
+      },
+      "profile_defaults": {
+        "isolate_env": true,
+        "inherit_env": [
+          "PATH",
+          "HOME",
+          "LANG",
+          "TERM",
+          "SHELL"
+        ],
+        "shell": null,
+        "history_file": null,
+        "starting_cwd": "project_root_or_home",
+        "audit_default": "on"
+      },
+      "auth_modes": [
+        {
+          "id": "qwen_oauth",
+          "recommended": true,
+          "label_i18n": {
+            "en": "Qwen OAuth (free quota) — default",
+            "zh-CN": "Qwen OAuth 账号登录（含免费额度）— 默认"
+          },
+          "description_i18n": {
+            "en": "Run `qwen` and type `/auth` to sign in with Qwen OAuth (includes free daily requests).",
+            "zh-CN": "运行 `qwen` 后输入 `/auth` 使用通义千问 OAuth 登录（自带每日免费额度）。"
+          },
+          "oauth_trigger": null,
+          "oauth_ready_marker": null,
+          "oauth_timeout_s": 180,
+          "console_url": "https://chat.qwen.ai",
+          "reveals_settings": []
+        },
+        {
+          "id": "bailian_coding_plan",
+          "recommended": false,
+          "label_i18n": {
+            "en": "Alibaba Cloud Bailian / DashScope API key (or Coding Plan)",
+            "zh-CN": "阿里云百炼 DashScope API Key / Coding Plan 套餐"
+          },
+          "description_i18n": {
+            "en": "Use Alibaba Cloud Bailian (DashScope) API key or Bailian Coding Plan endpoint (`https://dashscope.aliyuncs.com/compatible-mode/v1` or `https://coding.dashscope.aliyuncs.com/v1`).",
+            "zh-CN": "使用阿里云百炼 DashScope API Key 或百炼 Coding Plan 专属端点（`https://dashscope.aliyuncs.com/compatible-mode/v1` 或 `https://coding.dashscope.aliyuncs.com/v1`）。"
+          },
+          "oauth_trigger": null,
+          "oauth_ready_marker": null,
+          "oauth_timeout_s": 180,
+          "console_url": "https://bailian.console.aliyun.com/",
+          "reveals_settings": [
+            "dashscope_api_key",
+            "base_url_override"
+          ]
+        },
+        {
+          "id": "custom_openai",
+          "recommended": false,
+          "label_i18n": {
+            "en": "Domestic / OpenAI-compatible endpoint (DeepSeek, GLM, Kimi, SiliconFlow)",
+            "zh-CN": "国内大模型 / OpenAI 兼容端点（DeepSeek、智谱 GLM、Kimi、硅基流动）"
+          },
+          "description_i18n": {
+            "en": "Connect Qwen Code to any OpenAI-compatible provider via OPENAI_BASE_URL + OPENAI_API_KEY.",
+            "zh-CN": "通过 OPENAI_BASE_URL 与 OPENAI_API_KEY 接入任意兼容 OpenAI 协议的国内大模型服务。"
+          },
+          "oauth_trigger": null,
+          "oauth_ready_marker": null,
+          "oauth_timeout_s": 180,
+          "console_url": null,
+          "reveals_settings": [
+            "base_url_override",
+            "openai_api_key"
+          ]
+        }
+      ],
+      "settings_schema": [
+        {
+          "key": "model",
+          "type": "enum",
+          "category": "model",
+          "default": "qwen3-coder-plus",
+          "required": false,
+          "sensitive": false,
+          "label_i18n": {
+            "en": "Default model",
+            "zh-CN": "默认模型"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": true,
+          "values": [
+            {
+              "value": "qwen3-coder-plus",
+              "label": "Qwen3 Coder Plus"
+            },
+            {
+              "value": "qwen3-coder-flash",
+              "label": "Qwen3 Coder Flash"
+            },
+            {
+              "value": "qwen3-max",
+              "label": "Qwen3 Max"
+            },
+            {
+              "value": "deepseek-chat",
+              "label": "DeepSeek V3 / V3.2"
+            },
+            {
+              "value": "deepseek-reasoner",
+              "label": "DeepSeek R1"
+            },
+            {
+              "value": "glm-4.7",
+              "label": "Zhipu GLM-4.7"
+            },
+            {
+              "value": "kimi-k2-0905-preview",
+              "label": "Kimi K2"
+            }
+          ],
+          "min": null,
+          "max": null,
+          "secret_namespace": null,
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "system_prompt",
+          "type": "text_long",
+          "category": "behavior",
+          "default": "",
+          "required": false,
+          "sensitive": false,
+          "label_i18n": {
+            "en": "System instructions (QWEN.md)",
+            "zh-CN": "系统指令（QWEN.md）"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": null,
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "base_url_override",
+          "type": "string",
+          "category": "auth",
+          "default": "",
+          "required": false,
+          "sensitive": false,
+          "label_i18n": {
+            "en": "Endpoint base URL (OPENAI_BASE_URL)",
+            "zh-CN": "端点 Base URL (OPENAI_BASE_URL)"
+          },
+          "description_i18n": {},
+          "placeholder": "https://dashscope.aliyuncs.com/compatible-mode/v1 · https://coding.dashscope.aliyuncs.com/v1 · https://api.deepseek.com/v1",
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": null,
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "dashscope_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "DashScope / Bailian API key",
+            "zh-CN": "阿里云百炼 DashScope API Key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "dashscope",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "openai_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "OpenAI-compatible API key",
+            "zh-CN": "OpenAI 兼容端点 API Key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "openai",
+          "since_manifest_version": null,
+          "depends_on": null
+        }
+      ],
+      "settings_storage": {
+        "files": [
+          {
+            "path": "{{HOME}}/.qwen/settings.json",
+            "format": "json",
+            "merge": "preserve_unknown_keys",
+            "atomic_write": true,
+            "key_map": {
+              "model": ".model"
+            },
+            "single_key": null
+          },
+          {
+            "path": "{{HOME}}/.qwen/QWEN.md",
+            "format": "raw_text",
+            "merge": "preserve_unknown_keys",
+            "atomic_write": true,
+            "key_map": {},
+            "single_key": "system_prompt"
+          }
+        ],
+        "env_at_launch": {
+          "DASHSCOPE_API_KEY": {
+            "from": "secret:dashscope",
+            "only_if_auth_mode": [
+              "bailian_coding_plan"
+            ]
+          },
+          "OPENAI_API_KEY": {
+            "from": "secret:openai",
+            "only_if_auth_mode": [
+              "custom_openai"
+            ]
+          },
+          "OPENAI_BASE_URL": {
+            "from_setting": "base_url_override",
+            "skip_if_empty": true,
+            "only_if_auth_mode": [
+              "bailian_coding_plan",
+              "custom_openai"
+            ]
+          },
+          "OPENAI_MODEL": {
+            "from_setting": "model",
+            "skip_if_empty": true,
+            "only_if_auth_mode": [
+              "bailian_coding_plan",
+              "custom_openai"
+            ]
+          }
+        },
+        "live_reload": false,
+        "validate_after_write": null
+      },
+      "telemetry_notice": {
+        "vendor_dials_home": true,
+        "privacy_url": "https://github.com/QwenLM/qwen-code",
+        "opt_out_env": null
+      }
+    },
+    {
+      "id": "trae-agent",
+      "version": 2,
       "name": "Trae Agent",
       "vendor": "ByteDance",
       "category": "experimental",
@@ -3107,7 +4252,10 @@
             "openai_api_key",
             "anthropic_api_key",
             "google_api_key",
-            "openrouter_api_key"
+            "openrouter_api_key",
+            "ark_api_key",
+            "deepseek_api_key",
+            "dashscope_api_key"
           ]
         }
       ],
@@ -3183,6 +4331,69 @@
           "secret_namespace": "openrouter",
           "since_manifest_version": null,
           "depends_on": null
+        },
+        {
+          "key": "ark_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "Volcengine Ark / Doubao API key",
+            "zh-CN": "火山方舟豆包 ARK_API_KEY"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "volcengine",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "deepseek_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "DeepSeek API key",
+            "zh-CN": "DeepSeek API key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "deepseek",
+          "since_manifest_version": null,
+          "depends_on": null
+        },
+        {
+          "key": "dashscope_api_key",
+          "type": "secret",
+          "category": "auth",
+          "default": null,
+          "required": false,
+          "sensitive": true,
+          "label_i18n": {
+            "en": "Alibaba Bailian / DashScope API key",
+            "zh-CN": "阿里云百炼 DashScope API key"
+          },
+          "description_i18n": {},
+          "placeholder": null,
+          "restart_required": false,
+          "values": [],
+          "min": null,
+          "max": null,
+          "secret_namespace": "dashscope",
+          "since_manifest_version": null,
+          "depends_on": null
         }
       ],
       "settings_storage": {
@@ -3190,6 +4401,24 @@
         "env_at_launch": {
           "ANTHROPIC_API_KEY": {
             "from": "secret:anthropic",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
+          "ARK_API_KEY": {
+            "from": "secret:volcengine",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
+          "DASHSCOPE_API_KEY": {
+            "from": "secret:dashscope",
+            "only_if_auth_mode": [
+              "byo_key"
+            ]
+          },
+          "DEEPSEEK_API_KEY": {
+            "from": "secret:deepseek",
             "only_if_auth_mode": [
               "byo_key"
             ]
@@ -3225,7 +4454,7 @@
   ],
   "signature": {
     "alg": "ed25519",
-    "key_id": "unterm-2026-4",
-    "sig": "m7ssUt6+ah3HeKsEB/WkOKmDyy5T1SMIVTsqYOVDs6Jo/5aQMolfk0pSErzWUvTq5F8yJiempl1KIjTfXMk8BQ=="
+    "key_id": "unterm-2026-5",
+    "sig": "PFHwgYXRGva/GjW0cRKw/J4Co8L4n10kjKZMi5RvuZ5wY960Ap1CjZwbYNCvxJMmKd4RhOE1Jat+rgqxOSFvBw=="
   }
 }

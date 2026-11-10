@@ -18,6 +18,12 @@
       "public_key_b64": "Oh76UY5LWRAt7MaiDsDEB6OAezqd/9Dg+BsMgLIgRXo=",
       "expires_at": null,
       "note": "Generated 2026-06-28 to re-sign the baked fallback after aligning Kimi Code install steps with the official no-Node installer."
+    },
+    {
+      "key_id": "unterm-2026-5",
+      "public_key_b64": "ZNe50C4x7j7h2QNm3TuVKU1rPW3oKGAYj7G40fxi1IQ=",
+      "expires_at": null,
+      "note": "Generated to re-sign the baked fallback after adding Antigravity CLI (agy), Qwen Code CLI (qwen-code), and China Coding Plan provider modes."
     }
   ]
 }

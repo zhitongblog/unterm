@@ -370,10 +370,17 @@ fn run_cockpit_signal(
         super::client::set_target_instance(Some(&id));
     }
     // A hook must never break the agent that invokes it: when no Unterm
-    // GUI is reachable, exit 0 silently instead of erroring.
+    // GUI is reachable, exit 0 silently instead of erroring. When `--json`
+    // is passed (e.g. Antigravity CLI hooks), always emit `{}` so the caller's
+    // JSON stdout parser succeeds.
     let mut client = match McpClient::connect() {
         Ok(c) => c,
-        Err(_) => return Ok(()),
+        Err(_) => {
+            if json_out {
+                println!("{{}}");
+            }
+            return Ok(());
+        }
     };
     let pane_id = pane
         .map(|s| s.to_string())
@@ -395,7 +402,12 @@ fn run_cockpit_signal(
         }
         // Same never-break-the-hook rule for server-side rejection
         // (e.g. the pane died between the event and the report).
-        Err(_) => Ok(()),
+        Err(_) => {
+            if json_out {
+                println!("{{}}");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1105,17 +1117,22 @@ fn build_plan_for_run(
 
 fn headless_args(id: &str, mut base_args: Vec<String>, prompt: &str) -> Result<Vec<String>> {
     match id {
-        "claude-code" => {
+        "claude-code" | "claude" => {
             base_args.push("-p".to_string());
             base_args.push(prompt.to_string());
             Ok(base_args)
         }
-        "codex-cli" => {
+        "agy" | "antigravity" | "antigravity-cli" => {
+            base_args.push("-p".to_string());
+            base_args.push(prompt.to_string());
+            Ok(base_args)
+        }
+        "codex-cli" | "codex" => {
             base_args.push("exec".to_string());
             base_args.push(prompt.to_string());
             Ok(base_args)
         }
-        "gemini-cli" => {
+        "gemini-cli" | "gemini" => {
             base_args.push("-p".to_string());
             base_args.push(prompt.to_string());
             Ok(base_args)
@@ -1125,18 +1142,23 @@ fn headless_args(id: &str, mut base_args: Vec<String>, prompt: &str) -> Result<V
             base_args.push(prompt.to_string());
             Ok(base_args)
         }
-        "kimi-code" => {
+        "kimi-code" | "kimi" => {
             base_args.push("-p".to_string());
             base_args.push(prompt.to_string());
             Ok(base_args)
         }
-        "trae-agent" => {
+        "qwen-code" | "qwen" => {
+            base_args.push("-p".to_string());
+            base_args.push(prompt.to_string());
+            Ok(base_args)
+        }
+        "trae-agent" | "trae" | "trae-cli" => {
             base_args.push("run".to_string());
             base_args.push(prompt.to_string());
             Ok(base_args)
         }
         other => Err(anyhow!(
-            "agent run currently supports codex-cli, claude-code, gemini-cli, opencode, kimi-code, and trae-agent, not {other}"
+            "agent run currently supports agy, codex-cli, claude-code, gemini-cli, opencode, kimi-code, qwen-code, and trae-agent, not {other}"
         )),
     }
 }
@@ -1352,8 +1374,16 @@ mod tests {
             vec!["--model", "openai/gpt-5", "run", prompt]
         );
         assert_eq!(
+            headless_args("agy", vec!["--model".into(), "gemini-4-argon-medium".into()], prompt).unwrap(),
+            vec!["--model", "gemini-4-argon-medium", "-p", prompt]
+        );
+        assert_eq!(
             headless_args("kimi-code", vec!["--continue".into()], prompt).unwrap(),
             vec!["--continue", "-p", prompt]
+        );
+        assert_eq!(
+            headless_args("qwen-code", vec!["--yolo".into()], prompt).unwrap(),
+            vec!["--yolo", "-p", prompt]
         );
         assert_eq!(
             headless_args("trae-agent", vec!["--model".into(), "gpt-5".into()], prompt).unwrap(),

@@ -40,8 +40,17 @@ pub fn crews(installed: &[&str]) -> Vec<Crew> {
         crews.push(crew("claude \u{00D7}2", vec!["claude", "claude"]));
         crews.push(crew("claude \u{00D7}3", vec!["claude", "claude", "claude"]));
     }
+    if has("agy") {
+        crews.push(crew("agy \u{00D7}2", vec!["agy", "agy"]));
+    }
+    if has("claude") && has("agy") {
+        crews.push(crew("claude + agy", vec!["claude", "agy"]));
+    }
     if has("claude") && has("codex") {
         crews.push(crew("claude + codex", vec!["claude", "codex"]));
+    }
+    if has("agy") && has("codex") {
+        crews.push(crew("agy + codex", vec!["agy", "codex"]));
     }
     if has("claude") && has("codex") && has("gemini") {
         crews.push(crew(

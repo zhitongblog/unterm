@@ -51,7 +51,20 @@ pub struct ManifestSet {
 
 impl ManifestSet {
     pub fn find(&self, agent_id: &str) -> Option<&AgentManifest> {
-        self.envelope.manifests.iter().find(|m| m.id == agent_id)
+        let canonical = match agent_id.trim().to_ascii_lowercase().as_str() {
+            "antigravity" | "antigravity-cli" => "agy",
+            "claude" => "claude-code",
+            "codex" => "codex-cli",
+            "gemini" => "gemini-cli",
+            "kimi" => "kimi-code",
+            "qwen" => "qwen-code",
+            "trae" | "trae-cli" | "trae_agent" => "trae-agent",
+            _ => agent_id,
+        };
+        self.envelope
+            .manifests
+            .iter()
+            .find(|m| m.id == canonical || m.id == agent_id)
     }
 
     pub fn for_current_platform(&self) -> Vec<&AgentManifest> {

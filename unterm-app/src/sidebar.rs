@@ -358,7 +358,13 @@ pub fn agent_icon(lower_title: &str) -> Option<char> {
         '\u{263E}'
     } else if has("cursor agent") {
         '\u{27A4}'
-    } else if has("trae") || has("zcode") || has("agy") || has("antigravity") {
+    } else if has("trae")
+        || has("zcode")
+        || has("codegeex")
+        || has("qwen")
+        || has("agy")
+        || has("antigravity")
+    {
         // Known agents with no sign of their own: the generic robot
         // still says "an agent lives here", which is the point.
         ROBOT
@@ -772,6 +778,10 @@ pub fn task_from_title(title: &str, agent: Option<&str>, program: &str) -> Optio
         || lower == "claude code"
         || lower == "antigravity"
         || lower == "agy"
+        || lower == "kimi"
+        || lower == "kimi code"
+        || lower == "qwen"
+        || lower == "qwen code"
         || is_a_shell_name(trimmed)
         || is_prompt_title(title)
         || looks_like_a_path(title.trim())

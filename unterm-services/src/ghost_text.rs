@@ -678,6 +678,24 @@ const BUILTIN_AGENT_FLAGS: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "qwen",
+        &[
+            "--model {value}",
+            "--prompt {value}",
+            "-p {value}",
+            "--prompt-interactive {value}",
+            "-i {value}",
+            "--sandbox",
+            "--yolo",
+            "--all-files",
+            "--approval-mode {value}",
+            "--continue",
+            "--resume {value}",
+            "--help",
+            "--version",
+        ],
+    ),
+    (
         "aider",
         &[
             "--model {value}",

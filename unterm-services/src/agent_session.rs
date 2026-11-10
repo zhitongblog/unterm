@@ -529,6 +529,7 @@ mod tests {
             (&["sh", "-c", "codex exec --json -"], "codex"),
             (&["C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd", "-p"], "claude"),
             (&["/opt/homebrew/bin/claude", "-p"], "claude"),
+            (&["/opt/homebrew/bin/agy", "-p"], "agy"),
         ];
         for (command, expected) in cases {
             assert_eq!(

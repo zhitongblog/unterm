@@ -53,6 +53,9 @@ pub fn apply_all(cli: &str, remove: bool, dry_run: bool) -> Vec<HookReport> {
     if home.join(".claude").exists() || home.join(".claude.json").exists() {
         reports.push(apply_claude(&home, cli, remove, dry_run));
     }
+    if home.join(".gemini/antigravity-cli").exists() || home.join(".gemini/config").exists() {
+        reports.push(apply_agy(&home, cli, remove, dry_run));
+    }
     if home.join(".codex").exists() {
         reports.push(apply_codex(&home, cli, remove, dry_run));
     }
@@ -351,6 +354,83 @@ fn apply_aider(home: &Path, cli: &str, remove: bool, dry_run: bool) -> HookRepor
     }
 }
 
+// --- Antigravity CLI (agy) ---------------------------------------------
+
+fn agy_signal_cmd(cli: &str, event: &str) -> String {
+    // Antigravity CLI hooks require valid JSON on stdout (`{}`). Passing
+    // `--json` to `unterm-cli agent signal` ensures JSON output whether or
+    // not an Unterm GUI/Core instance is reachable.
+    let cli = cli.replace('\\', "/");
+    format!("\"{cli}\" --json agent signal --agent agy --event {event}")
+}
+
+fn apply_agy(home: &Path, cli: &str, remove: bool, dry_run: bool) -> HookReport {
+    let path = home.join(".gemini").join("config").join("hooks.json");
+    let report = |action: String| HookReport {
+        client: "agy",
+        path: path.display().to_string(),
+        action,
+    };
+    let mut root: Value = match std::fs::read_to_string(&path) {
+        Ok(s) if !s.trim().is_empty() => match serde_json::from_str(&s) {
+            Ok(v) => v,
+            Err(e) => return report(format!("skipped(unparseable json: {e})")),
+        },
+        _ => json!({}),
+    };
+    let Some(obj) = root.as_object_mut() else {
+        return report("skipped(hooks.json is not an object)".into());
+    };
+
+    const HOOK_GROUP: &str = "unterm-cockpit";
+    if remove {
+        if obj.remove(HOOK_GROUP).is_none() {
+            return report("unchanged".into());
+        }
+    } else {
+        let working_cmd = agy_signal_cmd(cli, "working");
+        let done_cmd = agy_signal_cmd(cli, "done");
+        let expected = json!({
+            "hooks": {
+                "PreInvocation": [
+                    {
+                        "hooks": [
+                            { "type": "command", "command": working_cmd, "timeout": 5 }
+                        ]
+                    }
+                ],
+                "Stop": [
+                    {
+                        "hooks": [
+                            { "type": "command", "command": done_cmd, "timeout": 5 }
+                        ]
+                    }
+                ]
+            }
+        });
+        if obj.get(HOOK_GROUP) == Some(&expected) {
+            return report("unchanged".into());
+        }
+        obj.insert(HOOK_GROUP.to_string(), expected);
+    }
+
+    if dry_run {
+        return report("would write".into());
+    }
+    if path.exists() {
+        backup_once(&path);
+    } else if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match serde_json::to_string_pretty(&root)
+        .map_err(|e| e.to_string())
+        .and_then(|s| std::fs::write(&path, s + "\n").map_err(|e| e.to_string()))
+    {
+        Ok(()) => report("written".into()),
+        Err(e) => report(format!("error({e})")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +551,42 @@ mod tests {
         let text = std::fs::read_to_string(home.join(".aider.conf.yml")).unwrap();
         assert!(text.contains("dark-mode: true"));
         assert!(!text.contains("notifications-command"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn agy_hooks_merge_and_remove() {
+        let home = tmp_home("agy");
+        std::fs::create_dir_all(home.join(".gemini/config")).unwrap();
+        std::fs::write(
+            home.join(".gemini/config/hooks.json"),
+            r#"{"user-hook":{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}}"#,
+        )
+        .unwrap();
+
+        let r = apply_agy(&home, "unterm-cli", false, false);
+        assert_eq!(r.action, "written");
+        let v: Value = serde_json::from_str(
+            &std::fs::read_to_string(home.join(".gemini/config/hooks.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(v.get("user-hook").is_some(), "preserved user hook group");
+        let pre = v["unterm-cockpit"]["hooks"]["PreInvocation"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(pre.contains("--json agent signal --agent agy --event working"));
+
+        let r = apply_agy(&home, "unterm-cli", false, false);
+        assert_eq!(r.action, "unchanged");
+
+        let r = apply_agy(&home, "unterm-cli", true, false);
+        assert_eq!(r.action, "written");
+        let v: Value = serde_json::from_str(
+            &std::fs::read_to_string(home.join(".gemini/config/hooks.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(v.get("unterm-cockpit").is_none());
+        assert!(v.get("user-hook").is_some());
         let _ = std::fs::remove_dir_all(&home);
     }
 }

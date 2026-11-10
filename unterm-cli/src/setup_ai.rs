@@ -112,8 +112,8 @@ pub struct SetupAiCommand {
     pub no_hooks: bool,
 
     /// Limit to specific client ids (repeatable). Default: every client
-    /// detected on this machine. Ids: claude-code, codex, gemini, cursor,
-    /// windsurf, opencode.
+    /// detected on this machine. Ids: claude-code, agy, codex, gemini, cursor,
+    /// windsurf, opencode, kimi, qwen.
     #[arg(long = "client")]
     pub clients: Vec<String>,
 }
@@ -123,7 +123,8 @@ pub struct SetupAiCommand {
 #[derive(Clone, Copy, PartialEq)]
 enum McpFormat {
     /// Top-level `mcpServers` map, each entry `{type:"stdio", command, args}`.
-    /// Claude Code (`~/.claude.json`), Gemini, Cursor, Windsurf.
+    /// Claude Code (`~/.claude.json`), Antigravity CLI (`~/.gemini/config/mcp_config.json`),
+    /// Gemini, Kimi Code, Qwen Code, Cursor, Windsurf.
     JsonServers,
     /// Top-level `mcp` map, each entry `{type:"local", enabled, command:[…]}`.
     /// OpenCode.
@@ -155,6 +156,14 @@ fn clients() -> Vec<AiClient> {
             context_path: Some(".claude/CLAUDE.md"),
         },
         AiClient {
+            id: "agy",
+            label: "Antigravity CLI",
+            detect: &[".gemini/antigravity-cli", ".gemini/config"],
+            mcp_path: ".gemini/config/mcp_config.json",
+            mcp_format: McpFormat::JsonServers,
+            context_path: Some(".gemini/GEMINI.md"),
+        },
+        AiClient {
             id: "codex",
             label: "Codex CLI",
             detect: &[".codex"],
@@ -169,6 +178,22 @@ fn clients() -> Vec<AiClient> {
             mcp_path: ".gemini/settings.json",
             mcp_format: McpFormat::JsonServers,
             context_path: Some(".gemini/GEMINI.md"),
+        },
+        AiClient {
+            id: "kimi",
+            label: "Kimi Code",
+            detect: &[".kimi"],
+            mcp_path: ".kimi/mcp.json",
+            mcp_format: McpFormat::JsonServers,
+            context_path: Some(".kimi/KIMI.md"),
+        },
+        AiClient {
+            id: "qwen",
+            label: "Qwen Code",
+            detect: &[".qwen"],
+            mcp_path: ".qwen/settings.json",
+            mcp_format: McpFormat::JsonServers,
+            context_path: Some(".qwen/QWEN.md"),
         },
         AiClient {
             id: "cursor",
@@ -239,7 +264,20 @@ pub fn run(cmd: SetupAiCommand, json_out: bool) -> Result<()> {
     let filter: Option<Vec<String>> = if cmd.clients.is_empty() {
         None
     } else {
-        Some(cmd.clients.iter().map(|s| s.to_lowercase()).collect())
+        Some(
+            cmd.clients
+                .iter()
+                .map(|s| match s.trim().to_ascii_lowercase().as_str() {
+                    "antigravity" | "antigravity-cli" => "agy".to_string(),
+                    "claude" => "claude-code".to_string(),
+                    "codex-cli" => "codex".to_string(),
+                    "gemini-cli" => "gemini".to_string(),
+                    "kimi-code" => "kimi".to_string(),
+                    "qwen-code" => "qwen".to_string(),
+                    other => other.to_string(),
+                })
+                .collect(),
+        )
     };
 
     let mut reports = Vec::new();

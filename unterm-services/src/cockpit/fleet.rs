@@ -131,9 +131,14 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
 pub fn agent_command(agent: &str, task: &str) -> String {
     let quoted = quote_for_shell(task);
     match agent {
-        "claude" => format!("claude {quoted}"),
-        "codex" => format!("codex {quoted}"),
-        "gemini" => format!("gemini -i {quoted}"),
+        "claude" | "claude-code" => format!("claude {quoted}"),
+        "agy" | "antigravity" | "antigravity-cli" => format!("agy -i {quoted}"),
+        "codex" | "codex-cli" => format!("codex {quoted}"),
+        "gemini" | "gemini-cli" => format!("gemini -i {quoted}"),
+        "qwen" | "qwen-code" => format!("qwen -i {quoted}"),
+        "kimi" | "kimi-code" => format!("kimi -p {quoted}"),
+        "opencode" => format!("opencode --prompt {quoted}"),
+        "trae" | "trae-cli" | "trae-agent" => format!("trae-cli run {quoted}"),
         "aider" => format!("aider --message {quoted}"),
         other => format!("{other} {quoted}"),
     }
@@ -260,11 +265,21 @@ pub fn precheck(cwd: &Path) -> std::result::Result<(), &'static str> {
 
 /// Which of the built-in agents are actually on PATH.
 pub fn installed_agents() -> Vec<&'static str> {
-    ["claude", "codex", "gemini", "aider"]
-        .iter()
-        .copied()
-        .filter(|bin| binary_on_path(bin))
-        .collect()
+    [
+        "claude",
+        "agy",
+        "codex",
+        "gemini",
+        "kimi",
+        "qwen",
+        "opencode",
+        "aider",
+        "trae-cli",
+    ]
+    .iter()
+    .copied()
+    .filter(|bin| binary_on_path(bin))
+    .collect()
 }
 
 fn binary_on_path(bin: &str) -> bool {
@@ -612,7 +627,10 @@ mod tests {
         #[cfg(not(windows))]
         assert_eq!(cmd, "claude 'fix it'\\''s bug'");
         assert!(agent_command("codex", "t").starts_with("codex "));
+        assert!(agent_command("agy", "t").starts_with("agy -i "));
         assert!(agent_command("gemini", "t").starts_with("gemini -i "));
+        assert!(agent_command("qwen", "t").starts_with("qwen -i "));
+        assert!(agent_command("kimi", "t").starts_with("kimi -p "));
         assert!(agent_command("aider", "t").starts_with("aider --message "));
     }
 
