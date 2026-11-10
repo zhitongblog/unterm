@@ -193,6 +193,8 @@ struct Live {
     turn: TurnTracker,
     /// Where the agent works: the workspace a standing rule is scoped to.
     cwd: Option<String>,
+    /// A governed session's grant, revoked when it closes.
+    grant: Option<String>,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -324,7 +326,7 @@ pub fn start(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, false)
+    start_with(command, cwd, env, prompt, adapter, context, false, false)
 }
 
 /// Start an agent that is *driven*, not just watched.
@@ -351,7 +353,27 @@ pub fn start_hosted(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, true)
+    start_with(command, cwd, env, prompt, adapter, context, true, false)
+}
+
+/// A hosted session whose agent works through Unterm, with a grant.
+///
+/// The caller switches the agent's own shell off and mounts Unterm's MCP
+/// (the console's `governed` preset does both for Claude Code); this adds
+/// the other half: a grant in `UNTERM_HOSTED_GRANT`, which the MCP bridge
+/// the agent spawns presents at login, so Unterm's PTY write gate does not
+/// ask a second time about calls this session's host already approved.
+/// The grant is revoked when the session closes. See
+/// `crate::hosted_grant` for why this cannot become self-approval.
+pub fn start_governed(
+    command: &[String],
+    cwd: Option<&str>,
+    env: &[(String, String)],
+    prompt: Option<&str>,
+    adapter: Option<&str>,
+    context: TaskContext,
+) -> Result<String> {
+    start_with(command, cwd, env, prompt, adapter, context, true, true)
 }
 
 fn start_with(
@@ -362,6 +384,7 @@ fn start_with(
     adapter: Option<&str>,
     context: TaskContext,
     hosted: bool,
+    governed: bool,
 ) -> Result<String> {
     let (adapter_id, mut adapter) = adapter_for(command, adapter)?;
     let host: Option<Arc<dyn HostProtocol>> = if hosted {
@@ -421,13 +444,28 @@ fn start_with(
     }
 
     let id = format!("ags_{}", uuid::Uuid::new_v4().simple());
+    let grant = if governed {
+        let token = crate::hosted_grant::issue(&id)?;
+        spec = spec.env(crate::hosted_grant::ENV, &token);
+        Some(token)
+    } else {
+        None
+    };
     let pending: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     let turn = TurnTracker::default();
     let tap: Option<runtime::Tap> = host.as_ref().map(|host| {
         let host = Arc::clone(host);
         Box::new(move |line: &str| host.observe(line)) as runtime::Tap
     });
-    let mut running = runtime::spawn_tapped(&spec, adapter, tap)?;
+    let mut running = match runtime::spawn_tapped(&spec, adapter, tap) {
+        Ok(running) => running,
+        Err(e) => {
+            if let Some(token) = &grant {
+                crate::hosted_grant::revoke(token);
+            }
+            return Err(e);
+        }
+    };
     let stream = running.events();
     let events: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -525,6 +563,7 @@ fn start_with(
             pending,
             turn,
             cwd: cwd.map(str::to_string),
+            grant,
         },
     );
     Ok(id)
@@ -916,7 +955,13 @@ pub fn close(id: &str) -> Result<Value> {
         pending,
         turn,
         cwd: _,
+        grant,
     } = live;
+    // First thing: from here on nothing this session's agent sends through
+    // Unterm counts as already approved.
+    if let Some(token) = &grant {
+        crate::hosted_grant::revoke(token);
+    }
 
     // A question nobody answered is a refusal, said out loud: the CLI would
     // otherwise wait on it forever, and `wait` below with it.
@@ -1934,6 +1979,46 @@ read -r rest || exit 0
     fn replay_after_close(id: &str) -> (Vec<Value>, usize) {
         close(id).unwrap();
         replay_of(id)
+    }
+
+    /// Says what grant it was given, then takes turns like Claude.
+    const GOVERNED_CLAUDE: &str = r#"
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+read -r prompt
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"grant=%s"}]}}\n' "$UNTERM_HOSTED_GRANT"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
+read -r rest || exit 0
+"#;
+
+    #[test]
+    fn a_governed_session_hands_its_agent_a_grant_that_dies_with_it() {
+        let _dir = isolate();
+        let id = start_governed(
+            &a_codex_like_agent(GOVERNED_CLAUDE),
+            None,
+            &[],
+            Some("hi"),
+            Some("claude"),
+            TaskContext::default(),
+        )
+        .unwrap();
+        let events = wait_for(&id, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("grant="))));
+        let said = events
+            .iter()
+            .find_map(|e| e["text"].as_str().and_then(|t| t.strip_prefix("grant=")))
+            .expect("the agent saw its grant")
+            .to_string();
+        assert!(said.starts_with("hg_"), "{said}");
+        let grant = crate::hosted_grant::verify(&said).expect("live while the session is");
+        assert_eq!(grant.session_id, id);
+        close(&id).unwrap();
+        assert!(crate::hosted_grant::verify(&said).is_none(), "revoked at close");
+
+        // A plain hosted session gets none.
+        let plain = start_hosted(&a_codex_like_agent(GOVERNED_CLAUDE), None, &[], Some("hi"), Some("claude"), TaskContext::default()).unwrap();
+        let events = wait_for(&plain, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("grant="))));
+        assert!(events.iter().any(|e| e["text"] == "grant="), "{events:#?}");
+        close(&plain).unwrap();
     }
 
     #[test]

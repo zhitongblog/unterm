@@ -16,6 +16,7 @@ pub mod diagnostics;
 pub mod env_names;
 pub mod evidence;
 pub mod gateway;
+pub mod hosted_grant;
 pub mod ghost_text;
 pub mod i18n;
 pub mod install;

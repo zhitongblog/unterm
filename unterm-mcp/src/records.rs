@@ -404,7 +404,9 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 })
                 .unwrap_or_default();
             let context = task_context(params);
-            let start = if params.get("hosted").and_then(Value::as_bool).unwrap_or(false) {
+            let start = if params.get("governed").and_then(Value::as_bool).unwrap_or(false) {
+                unterm_services::agent_session::start_governed
+            } else if params.get("hosted").and_then(Value::as_bool).unwrap_or(false) {
                 unterm_services::agent_session::start_hosted
             } else {
                 unterm_services::agent_session::start

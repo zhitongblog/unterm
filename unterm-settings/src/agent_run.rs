@@ -47,6 +47,76 @@ fn hosted_args(agent_id: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// Where `unterm-cli` is: next to this binary (an installed Unterm), one
+/// level up (a cargo `examples/` build), or `UNTERM_CLI`.
+fn unterm_cli_path() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("UNTERM_CLI").map(std::path::PathBuf::from) {
+        return path.is_file().then_some(path);
+    }
+    let exe = std::env::current_exe().ok()?;
+    let name = if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" };
+    exe.ancestors()
+        .skip(1)
+        .take(2)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Unzoo Browser's MCP service, when it is installed (or `UNZOO_SERVICE`).
+fn unzoo_service_path() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("UNZOO_SERVICE").map(std::path::PathBuf::from) {
+        return path.is_file().then_some(path);
+    }
+    let candidates: &[&str] = if cfg!(windows) {
+        &[r"C:\Program Files\Unzoo Browser\services\unzoo-service.exe"]
+    } else {
+        &[]
+    };
+    candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
+}
+
+const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shell tools \
+(Bash, PowerShell) and WebFetch are switched off. Run every command through the unterm MCP \
+server: open a terminal with its session.create tool when you need one, run commands with \
+exec.run_wait and read their output from the result. For anything in a web browser use the \
+unzoo MCP tools. Each tool call is shown to the user for approval before it runs.";
+
+/// The governed preset for Claude Code: hosted, its own shell and fetch
+/// switched off, Unterm's MCP (and Unzoo Browser's, when installed) mounted
+/// in their place, and a note saying so. Every command it runs then goes
+/// through Unterm -- `AGENTS.md`'s first rule -- and every one is a question
+/// in the inbox first.
+fn governed_args(agent_id: &str) -> Result<Vec<String>, String> {
+    if agent_id != "claude-code" {
+        return Err(format!(
+            "{agent_id} has no governed mode yet: only Claude Code can have its own shell switched off and Unterm mounted in its place"
+        ));
+    }
+    let cli = unterm_cli_path()
+        .ok_or("governed mode needs unterm-cli next to this Unterm (or UNTERM_CLI) to mount Unterm's MCP")?;
+    let mut servers = serde_json::Map::new();
+    servers.insert(
+        "unterm".into(),
+        json!({"type": "stdio", "command": cli.display().to_string(), "args": ["mcp-stdio"]}),
+    );
+    if let Some(unzoo) = unzoo_service_path() {
+        servers.insert(
+            "unzoo".into(),
+            json!({"type": "stdio", "command": unzoo.display().to_string(),
+                   "args": ["--mcp", "stdio", "--client", "claude-code"]}),
+        );
+    }
+    Ok(vec![
+        "-p".into(),
+        "--disallowedTools".into(),
+        "Bash,PowerShell,WebFetch".into(),
+        "--mcp-config".into(),
+        json!({"mcpServers": servers}).to_string(),
+        "--append-system-prompt".into(),
+        GOVERNED_PROMPT.into(),
+    ])
+}
+
 /// The adapter a run of this agent is read with. Said back to the console
 /// so it knows which vocabulary the events came from.
 fn adapter_of(agent_id: &str) -> &'static str {
@@ -76,7 +146,16 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
     let Some(prompt) = string_field(&body, "prompt") else {
         return Response::err(400, "Bad Request", "prompt is required");
     };
-    let hosted = body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
+    let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
+    let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
+    let governed_args = if governed {
+        match governed_args(agent_id) {
+            Ok(args) => Some(args),
+            Err(why) => return Response::err(400, "Bad Request", &why),
+        }
+    } else {
+        None
+    };
     let args = if hosted { hosted_args(agent_id) } else { headless_args(agent_id) };
     let Some(args) = args else {
         return Response::err(
@@ -116,13 +195,19 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
     };
 
     let mut command = vec![json!(binary)];
-    command.extend(args.iter().map(|arg| json!(arg)));
+    match &governed_args {
+        Some(governed) => command.extend(governed.iter().map(|arg| json!(arg))),
+        None => command.extend(args.iter().map(|arg| json!(arg))),
+    }
 
     let mut params = serde_json::Map::new();
     params.insert("command".into(), Value::Array(command));
     params.insert("prompt".into(), json!(prompt));
     if hosted {
         params.insert("hosted".into(), json!(true));
+    }
+    if governed {
+        params.insert("governed".into(), json!(true));
     }
     // Where the agent works: the workspace the console has open. Only an
     // existing directory -- it decides where the agent reads and writes, not
@@ -147,6 +232,7 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
             "agent": agent_id,
             "adapter": adapter_of(agent_id),
             "hosted": hosted,
+            "governed": governed,
             "session": value,
         })),
         Err(e) => Response::err(400, "Bad Request", &e.to_string()),
@@ -324,6 +410,30 @@ mod tests {
         }
         assert!(hosted_args("gemini-cli").is_none());
         assert!(hosted_args("aider").is_none());
+    }
+
+    #[test]
+    fn the_governed_preset_switches_the_shell_off_and_mounts_unterm() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        std::fs::write(&cli, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        let args = governed_args("claude-code").unwrap();
+        let at = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        let off = at("--disallowedTools").unwrap();
+        for tool in ["Bash", "PowerShell", "WebFetch"] {
+            assert!(off.split(',').any(|t| t == tool), "{tool} must be off: {off}");
+        }
+        let config: Value = serde_json::from_str(&at("--mcp-config").unwrap()).unwrap();
+        assert_eq!(config["mcpServers"]["unterm"]["command"], cli.display().to_string());
+        assert_eq!(config["mcpServers"]["unterm"]["args"], json!(["mcp-stdio"]));
+        assert!(at("--append-system-prompt").unwrap().contains("exec.run_wait"));
+        assert!(args.contains(&"-p".to_string()));
+        // Only Claude Code can have its shell switched off today.
+        assert!(governed_args("codex-cli").is_err());
+        std::env::set_var("UNTERM_CLI", dir.path().join("missing"));
+        assert!(governed_args("claude-code").is_err(), "no unterm-cli, no governed mode");
+        std::env::remove_var("UNTERM_CLI");
     }
 
     #[test]
