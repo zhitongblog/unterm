@@ -6112,7 +6112,7 @@ checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "unterm-agents"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -6138,7 +6138,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-app"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6182,7 +6182,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-brain"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "libc",
@@ -6194,7 +6194,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-cli"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6225,7 +6225,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-core"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6265,7 +6265,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-gateway"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "serde",
  "serde_json",
@@ -6320,7 +6320,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-profile"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6337,7 +6337,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-protocol"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "dirs-next",
  "serde",
@@ -6347,7 +6347,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-providers"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6408,7 +6408,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-settings"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6441,7 +6441,7 @@ dependencies = [
 
 [[package]]
 name = "unterm-tasks"
-version = "0.71.24"
+version = "0.71.25"
 dependencies = [
  "anyhow",
  "chrono",

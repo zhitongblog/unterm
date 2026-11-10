@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.71.25 — 2026-11-11
+
+### Added
+
+- **Hosted & governed agent sessions (`agent_session.*`), resumption & standing approval policies (#50–#61).**
+  - Adds structured `unterm-brain` adapters for Gemini CLI, OpenCode, and Antigravity (`agy`), emitting `contracts/v0` (`brain_event.v0`) events (#50).
+  - Drives headless and multi-turn **hosted sessions** across Claude Code (`stream-json` + `--permission-prompt-tool stdio`), Codex (`codex app-server`), OpenCode (`opencode acp`), and Antigravity (`agy acp`), routing every tool permission prompt into `approval.requested` events and the Console inbox (`agent_session.decide` / `agent_session.approvals`, #51–#54).
+  - Adds standing approval rules (`agent_policy`, #55, #59, #60) that unify shell tool names across CLIs and enforce safe command prefix boundaries (never crossing single `&`, compound operators, or quoted subshells).
+  - Adds **governed sessions** (`governed: true`, #56) with `UNTERM_HOSTED_GRANT` so agents execute commands exclusively through Unterm's MCP server without double-prompting already-approved calls, and supports resuming conversations after process exit (`agent_session.resume`, #57, #58).
+- **Runtime-managed console tasks, Core-hosted Settings/Console server & custom product branding (#62–#67).**
+  - Supports caller-supplied task and run IDs plus task renaming in `unterm-tasks` (#62), and moves Console task storage, execution, scheduling, and runtime termination reason codes into the Unterm runtime (`/api/console/tasks/*`, #63, #66).
+  - Hosts the Settings UI, Console UI, and REST API directly from `unterm-core` so attached windows reuse Core's server (#64), enables CORS for packaged desktop origins (`tauri://localhost`, #65), and allows host launchers to customize the terminal window product name via `UNTERM_PRODUCT_NAME` (#67).
+
 ## v0.71.24 — 2026-11-10
 
 ### Added
