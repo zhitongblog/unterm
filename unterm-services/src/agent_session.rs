@@ -1363,6 +1363,76 @@ printf '%s\n' 'not json at all'
         assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
     }
 
+    /// The real `codex exec --json` (0.167): one turn that runs a command,
+    /// read through the session layer. Skipped unless `UNTERM_LIVE_CODEX=1`;
+    /// needs a signed-in codex (`codex login`) and spends a few tokens.
+    #[test]
+    fn live_codex_session_speaks_the_contract() {
+        if std::env::var("UNTERM_LIVE_CODEX").as_deref() != Ok("1") {
+            eprintln!("skipped: set UNTERM_LIVE_CODEX=1 to run against the real codex CLI");
+            return;
+        }
+        let dir = isolate();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("alpha.txt"), "a").unwrap();
+        std::fs::write(work.join("beta.txt"), "b").unwrap();
+
+        // npm installs codex as a .cmd shim on Windows.
+        let mut command: Vec<String> = Vec::new();
+        if cfg!(windows) {
+            command.extend(["cmd".to_string(), "/c".to_string()]);
+        }
+        // `exec` runs with approval policy `never`. Where Codex's own
+        // sandbox is not set up (live, Windows 11, 0.167) that rejects every
+        // command -- "blocked by policy" -- and a rejected command never
+        // appears in `--json` at all. This test is about reading a turn,
+        // not about Codex's sandbox: it runs one `ls` in a throwaway
+        // directory, as the OpenCode test does with `--auto`. Asking first
+        // is what the hosted session is for.
+        command.extend(
+            ["codex", "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "-"]
+                .iter()
+                .map(|s| s.to_string()),
+        );
+        let id = start(
+            &command,
+            Some(work.to_str().unwrap()),
+            &[],
+            Some("Run a shell command to list the files in the current directory, then reply with only the number of files."),
+            None,
+            TaskContext::default(),
+        )
+        .unwrap();
+        let ending = close(&id).unwrap();
+        let (events, _) = replay_of(&id);
+        if let Ok(path) = std::env::var("UNTERM_CONTRACT_DUMP") {
+            std::fs::write(&path, serde_json::to_string_pretty(&events).unwrap()).unwrap();
+        }
+
+        let names: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+        eprintln!("events: {names:?}");
+        assert_eq!(ending["adapter"], "codex", "picked through cmd /c: {ending}");
+        assert_eq!(ending["state"], "finished", "{ending}");
+        for expected in [
+            "turn.started", "tool_call.requested", "tool_call.result",
+            "output.delta", "usage.updated", "turn.completed",
+        ] {
+            assert!(names.contains(&expected), "missing {expected}: {names:?}");
+        }
+        let usage = events.iter().find(|e| e["event"] == "usage.updated").unwrap();
+        eprintln!("usage: {usage}");
+        // Codex says what it is about to do before it does it ("I'll count
+        // the files."); the answer is its last message.
+        let answer = events
+            .iter()
+            .filter(|e| e["event"] == "output.delta" && e["stream"] == "assistant")
+            .filter_map(|e| e["text"].as_str())
+            .last()
+            .unwrap_or_default();
+        assert_eq!(answer.trim(), "2", "two files, the model said: {answer:?}");
+    }
+
     // The events vector is moved into `close`; for assertions the audit trail
     // is the same sequence, correlated the same way, and it is what a caller
     // would read afterwards anyway.

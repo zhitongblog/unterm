@@ -242,6 +242,8 @@ impl BrainAdapter for CodexAdapter {
                         .map(str::to_string),
                 });
             }
+            // Older shapes, kept as they were read: unverified against a
+            // live CLI, so not re-interpreted on a guess.
             "usage" | "token_count" => {
                 events.push(BrainEvent::Usage(usage_from(&value)));
             }
@@ -249,7 +251,7 @@ impl BrainAdapter for CodexAdapter {
                 self.turn_open = false;
                 // The current CLI reports a turn's cost with its end.
                 if let Some(usage) = value.get("usage").filter(|usage| usage.is_object()) {
-                    events.push(BrainEvent::Usage(usage_from(usage)));
+                    events.push(BrainEvent::Usage(codex_usage(usage)));
                 }
                 events.push(BrainEvent::TurnEnded {
                     reason: StopReason::Completed,
@@ -1074,6 +1076,17 @@ impl BrainAdapter for GenericAdapter {
     }
 }
 
+/// Codex counts like the OpenAI API: `input_tokens` is the whole prompt,
+/// cache hits included, and `cached_input_tokens` is the part of it that
+/// was a hit. [`Usage`] keeps the two apart, so the fresh part is the
+/// difference. Read as-is, a live `codex exec` turn (0.167) reported 15636
+/// input *and* 12672 cached for a 15636-token prompt.
+fn codex_usage(value: &Value) -> Usage {
+    let mut usage = usage_from(value);
+    usage.input_tokens = usage.input_tokens.saturating_sub(usage.cached_input_tokens);
+    usage
+}
+
 fn usage_from(value: &Value) -> Usage {
     Usage {
         // Claude reports tokens written to the prompt cache apart from
@@ -1701,7 +1714,8 @@ mod tests {
         );
         assert!(events.iter().any(|event| matches!(
             event,
-            BrainEvent::Usage(Usage { input_tokens: 24763, cached_input_tokens: 24448, output_tokens: 122 })
+            // 24763 prompt tokens, 24448 of them cache hits: 315 fresh.
+            BrainEvent::Usage(Usage { input_tokens: 315, cached_input_tokens: 24448, output_tokens: 122 })
         )));
         assert_eq!(adapter.external_id(), Some("th_1"));
     }
