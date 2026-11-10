@@ -58,6 +58,10 @@ pub fn api_list(query: &str) -> Response {
                 "binary_path": detect.binary_path,
                 "mcp_supported": m.mcp.as_ref().map(|x| x.client_supports_mcp).unwrap_or(false),
                 "headless_supported": supports_headless(&m.id),
+                // What the console's task runs can use: hosted (every tool
+                // call asks first), and governed on top of that.
+                "hosted_supported": super::agent_run::supports_hosted(&m.id),
+                "governed_supported": super::agent_run::supports_governed(&m.id),
                 "headless_default_prompt": headless_default_prompt_value(&m.id),
             })
         })

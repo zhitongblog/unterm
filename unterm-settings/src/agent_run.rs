@@ -47,6 +47,19 @@ fn hosted_args(agent_id: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// Whether the console can run this agent hosted (every tool call a
+/// question in its inbox). Listed with the agents so the console offers
+/// only the ones it can drive.
+pub(crate) fn supports_hosted(agent_id: &str) -> bool {
+    hosted_args(agent_id).is_some()
+}
+
+/// Whether this agent has a governed preset: its own shell off, Unterm's in
+/// its place. Only Claude Code, for now -- see [`governed_args`].
+pub(crate) fn supports_governed(agent_id: &str) -> bool {
+    agent_id == "claude-code"
+}
+
 /// Where `unterm-cli` is: next to this binary (an installed Unterm), one
 /// level up (a cargo `examples/` build), or `UNTERM_CLI`.
 fn unterm_cli_path() -> Option<std::path::PathBuf> {
@@ -87,7 +100,7 @@ unzoo MCP tools. Each tool call is shown to the user for approval before it runs
 /// through Unterm -- `AGENTS.md`'s first rule -- and every one is a question
 /// in the inbox first.
 fn governed_args(agent_id: &str) -> Result<Vec<String>, String> {
-    if agent_id != "claude-code" {
+    if !supports_governed(agent_id) {
         return Err(format!(
             "{agent_id} has no governed mode yet: only Claude Code can have its own shell switched off and Unterm mounted in its place"
         ));
@@ -438,6 +451,11 @@ mod tests {
         }
         assert!(hosted_args("gemini-cli").is_none());
         assert!(hosted_args("aider").is_none());
+        // What the agent list tells the console agrees with what start does.
+        assert!(supports_hosted("codex-cli") && !supports_hosted("aider"));
+        assert!(supports_governed("claude-code"));
+        assert!(!supports_governed("codex-cli"));
+        assert!(governed_args("codex-cli").is_err());
     }
 
     #[test]
