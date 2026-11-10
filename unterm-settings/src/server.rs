@@ -505,6 +505,10 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         // The inbox: open permission questions of hosted runs, and answers.
         ("GET", "/api/agent/approvals") => super::agent_run::api_approvals(),
         ("POST", "/api/agent/decide") => super::agent_run::api_decide(handler, &req.body),
+        // Standing answers. Console-only: no MCP method adds a rule.
+        ("GET", "/api/agent/policy") => super::agent_run::api_policy_list(),
+        ("POST", "/api/agent/policy") => super::agent_run::api_policy_add(&req.body),
+        ("POST", "/api/agent/policy/remove") => super::agent_run::api_policy_remove(&req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),

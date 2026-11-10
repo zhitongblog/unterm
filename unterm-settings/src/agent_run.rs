@@ -208,6 +208,9 @@ fn decide_params(body: &Value) -> Result<serde_json::Map<String, Value>, &'stati
     params.insert("session_id".into(), json!(session_id));
     params.insert("request_id".into(), json!(request_id));
     params.insert("allow".into(), json!(allow));
+    if allow && body.get("remember").and_then(Value::as_bool) == Some(true) {
+        params.insert("remember".into(), json!(true));
+    }
     if !allow {
         if let Some(message) = string_field(body, "message") {
             params.insert("message".into(), json!(message));
@@ -230,6 +233,46 @@ pub fn api_decide(handler: &McpHandler, body: &[u8]) -> Response {
     match handler.handle(&ctx, "agent_session.decide", &Value::Object(params)) {
         Ok(value) => Response::ok_json(value),
         Err(e) => Response::err(400, "Bad Request", &e.to_string()),
+    }
+}
+
+/// GET /api/agent/policy — the standing rules, and where they are kept.
+pub fn api_policy_list() -> Response {
+    match unterm_services::agent_policy::list() {
+        Ok(rules) => Response::ok_json(json!({
+            "rules": rules,
+            "store": unterm_services::agent_policy::store_file().map(|p| p.display().to_string()),
+        })),
+        Err(e) => Response::err(500, "Internal Server Error", &e.to_string()),
+    }
+}
+
+/// POST /api/agent/policy — add a rule: `{tool, command_prefix?, workspace?,
+/// decision: "allow"|"deny", note?}`.
+///
+/// Only here, behind the console's token: there is no MCP method for it,
+/// because an agent that could add allow rules would approve itself.
+pub fn api_policy_add(body: &[u8]) -> Response {
+    let draft: unterm_services::agent_policy::Draft = match serde_json::from_slice(body) {
+        Ok(draft) => draft,
+        Err(e) => return Response::err(400, "Bad Request", &format!("a rule needs tool and decision: {e}")),
+    };
+    match unterm_services::agent_policy::add(draft, "console") {
+        Ok(rule) => Response::ok_json(json!({"rule": rule})),
+        Err(e) => Response::err(400, "Bad Request", &e.to_string()),
+    }
+}
+
+/// POST /api/agent/policy/remove — `{id}`.
+pub fn api_policy_remove(body: &[u8]) -> Response {
+    let body = parse_body(body);
+    let Some(id) = string_field(&body, "id") else {
+        return Response::err(400, "Bad Request", "id is required");
+    };
+    match unterm_services::agent_policy::remove(id) {
+        Ok(true) => Response::ok_json(json!({"removed": id})),
+        Ok(false) => Response::err(404, "Not Found", &format!("no rule {id}")),
+        Err(e) => Response::err(500, "Internal Server Error", &e.to_string()),
     }
 }
 
@@ -293,6 +336,11 @@ mod tests {
         // Allowing carries nothing else: no message, no interrupt.
         let allow = decide_params(&json!({"session_id": "a", "request_id": "r", "allow": true, "interrupt": true})).unwrap();
         assert!(allow.get("interrupt").is_none());
+        // remember belongs to an allow; a refusal is never kept as a yes.
+        let kept = decide_params(&json!({"session_id": "a", "request_id": "r", "allow": true, "remember": true})).unwrap();
+        assert_eq!(kept.get("remember"), Some(&json!(true)));
+        let refused = decide_params(&json!({"session_id": "a", "request_id": "r", "allow": false, "remember": true})).unwrap();
+        assert!(refused.get("remember").is_none());
         // A missing allow is refused, never read as yes.
         assert!(decide_params(&json!({"session_id": "a", "request_id": "r"})).is_err());
         assert!(decide_params(&json!({"session_id": "a", "request_id": "r", "allow": "yes"})).is_err());

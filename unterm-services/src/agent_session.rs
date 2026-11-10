@@ -51,6 +51,11 @@ const EVENT_SCHEMA_VERSION: &str = "brain_event.v0";
 /// that publishes the contract, so it is the one that mints what the
 /// contract requires and the CLI never supplied.
 fn new_turn_id() -> String {
+    format!("turn_{}", ulid())
+}
+
+/// A ULID (26 Crockford base32 characters, time-ordered).
+pub(crate) fn ulid() -> String {
     const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     let millis = chrono::Utc::now().timestamp_millis().max(0) as u128 & ((1u128 << 48) - 1);
     let random = uuid::Uuid::new_v4().as_u128() & ((1u128 << 80) - 1);
@@ -60,7 +65,7 @@ fn new_turn_id() -> String {
         *slot = ALPHABET[(value & 31) as usize];
         value >>= 5;
     }
-    format!("turn_{}", std::str::from_utf8(&out).expect("ascii"))
+    std::str::from_utf8(&out).expect("ascii").to_string()
 }
 
 /// Which turn the events on this session belong to.
@@ -186,6 +191,8 @@ struct Live {
     /// the input that was asked about (allowing echoes it back unchanged).
     pending: Arc<Mutex<HashMap<String, Value>>>,
     turn: TurnTracker,
+    /// Where the agent works: the workspace a standing rule is scoped to.
+    cwd: Option<String>,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -455,17 +462,52 @@ fn start_with(
             let id = id.clone();
             let pending = Arc::clone(&pending);
             let turn = turn.clone();
+            let host = host.clone();
+            let writer = running.stdin_writer();
+            let cwd = cwd.map(str::to_string);
             move || {
                 for event in stream {
-                    if let BrainEvent::PermissionRequested { request_id, input, .. } = &event {
-                        // Recorded before the event is published, so a caller
-                        // that answers the moment it sees the question finds
-                        // it pending.
-                        pending.lock().unwrap().insert(request_id.clone(), input.clone());
+                    let mut ruled = None;
+                    if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
+                        // A standing rule answers without asking anyone; the
+                        // question and its answer are both on the record.
+                        if let (Some(host), Some(rule)) = (
+                            &host,
+                            crate::agent_policy::evaluate(cwd.as_deref(), tool, input),
+                        ) {
+                            ruled = Some((request_id.clone(), host.clone(), rule, input.clone()));
+                        } else {
+                            // Recorded before the event is published, so a
+                            // caller that answers the moment it sees the
+                            // question finds it pending.
+                            pending.lock().unwrap().insert(request_id.clone(), input.clone());
+                        }
                     }
                     let mut described = describe(&event);
                     turn.stamp(&event, &mut described);
                     push(&events, &context, &id, described);
+                    if let Some((request_id, host, rule, input)) = ruled {
+                        let decision = match rule.decision {
+                            crate::agent_policy::RuleDecision::Allow => Decision::Allow,
+                            crate::agent_policy::RuleDecision::Deny => Decision::Deny {
+                                message: format!(
+                                    "refused by a standing rule of this workspace ({}){}",
+                                    rule.id,
+                                    rule.note.as_deref().map(|n| format!(": {n}")).unwrap_or_default()
+                                ),
+                                // A standing no is final: stop the turn rather
+                                // than let the agent ask again another way.
+                                interrupt: true,
+                            },
+                        };
+                        for line in host.permission_reply(&request_id, &decision, &input) {
+                            let _ = writer.write_line(&line);
+                        }
+                        let mut resolved = resolution(&request_id, &decision, "policy");
+                        resolved["approval"]["rule_id"] = json!(rule.id);
+                        turn.stamp_now(&mut resolved);
+                        push(&events, &context, &id, resolved);
+                    }
                 }
             }
         })
@@ -482,6 +524,7 @@ fn start_with(
             host,
             pending,
             turn,
+            cwd: cwd.map(str::to_string),
         },
     );
     Ok(id)
@@ -663,6 +706,60 @@ pub fn decide(
     message: Option<&str>,
     interrupt: bool,
 ) -> Result<Value> {
+    decide_and_remember(id, request_id, allow, message, interrupt, false)
+}
+
+/// [`decide`], and with `remember` (allow only) also keep the answer as a
+/// standing rule: this tool, this exact command, in this session's
+/// workspace -- so the same question is not asked again there. The result
+/// says what was remembered, or why not (a compound command never is); the
+/// decision itself stands either way.
+pub fn decide_and_remember(
+    id: &str,
+    request_id: &str,
+    allow: bool,
+    message: Option<&str>,
+    interrupt: bool,
+    remember: bool,
+) -> Result<Value> {
+    let asked_tool = if remember && allow {
+        let sessions = sessions().lock().unwrap();
+        sessions.get(id).and_then(|live| {
+            live.events
+                .lock()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|e| e["event"] == "approval.requested" && e["approval"]["request_id"] == request_id)
+                .and_then(|e| e["approval"]["tool_call"]["tool"].as_str().map(str::to_string))
+                .map(|tool| (tool, live.cwd.clone()))
+        })
+    } else {
+        None
+    };
+    let pending_input = {
+        let sessions = sessions().lock().unwrap();
+        sessions
+            .get(id)
+            .and_then(|live| live.pending.lock().unwrap().get(request_id).cloned())
+    };
+    let mut resolved = decide_inner(id, request_id, allow, message, interrupt)?;
+    if let (Some((tool, cwd)), Some(input)) = (asked_tool, pending_input) {
+        match crate::agent_policy::remember(cwd.as_deref(), &tool, &input) {
+            Ok(rule) => resolved["remembered"] = serde_json::to_value(rule)?,
+            Err(e) => resolved["remember_error"] = json!(e.to_string()),
+        }
+    }
+    Ok(resolved)
+}
+
+fn decide_inner(
+    id: &str,
+    request_id: &str,
+    allow: bool,
+    message: Option<&str>,
+    interrupt: bool,
+) -> Result<Value> {
     let sessions = sessions().lock().unwrap();
     let live = sessions
         .get(id)
@@ -711,7 +808,6 @@ fn resolution(request_id: &str, decision: &Decision, decided_by: &str) -> Value 
     json!({"event": "approval.resolved", "approval": approval})
 }
 
-/// Approvals still waiting, for a caller that reconnected and lost track.
 /// Every question a live session is waiting on, across all sessions: the
 /// inbox.
 ///
@@ -745,6 +841,7 @@ pub fn pending_requests() -> Vec<Value> {
     out
 }
 
+/// Approvals still waiting, for a caller that reconnected and lost track.
 pub fn pending_approvals(id: &str) -> Result<Vec<String>> {
     let sessions = sessions().lock().unwrap();
     let live = sessions
@@ -818,6 +915,7 @@ pub fn close(id: &str) -> Result<Value> {
         host,
         pending,
         turn,
+        cwd: _,
     } = live;
 
     // A question nobody answered is a refusal, said out loud: the CLI would
@@ -1767,6 +1865,75 @@ read -r rest || exit 0
         decide(&id, "r1", true, None, false).unwrap();
         assert!(pending_requests().iter().all(|e| e["session_id"] != id.as_str()));
         close(&id).unwrap();
+    }
+
+    fn a_rule(tool: &str, prefix: Option<&str>, decision: crate::agent_policy::RuleDecision) -> String {
+        crate::agent_policy::add(
+            crate::agent_policy::Draft {
+                tool: tool.into(),
+                command_prefix: prefix.map(str::to_string),
+                decision: Some(decision),
+                ..Default::default()
+            },
+            "test",
+        )
+        .unwrap()
+        .id
+    }
+
+    #[test]
+    fn a_standing_allow_answers_without_asking_anyone() {
+        let _dir = isolate();
+        let rule = a_rule("bash", None, crate::agent_policy::RuleDecision::Allow);
+        let id = hosted_fake();
+        let events = wait_for(&id, |e| said(e, "allowed"));
+        assert!(said(&events, "allowed"), "the tool ran: {events:#?}");
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decided_by"], "policy", "{resolved}");
+        assert_eq!(resolved["approval"]["rule_id"], rule.as_str());
+        assert_eq!(resolved["approval"]["decision"], "allow_once");
+        assert!(resolved["turn_id"].is_string(), "{resolved}");
+        // The question is on the record, and nobody's inbox holds it.
+        assert!(events.iter().any(|e| e["event"] == "approval.requested"));
+        assert!(pending_approvals(&id).unwrap().is_empty());
+        assert!(pending_requests().iter().all(|e| e["session_id"] != id.as_str()));
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn a_standing_deny_refuses_and_stops_the_turn() {
+        let _dir = isolate();
+        let rule = a_rule("*", Some("echo"), crate::agent_policy::RuleDecision::Deny);
+        let id = hosted_fake();
+        let events = wait_for(&id, |e| said(e, "denied"));
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decided_by"], "policy");
+        assert_eq!(resolved["approval"]["decision"], "deny");
+        assert_eq!(resolved["approval"]["interrupt"], true);
+        assert!(resolved["approval"]["message"].as_str().unwrap().contains(&rule), "{resolved}");
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn remember_keeps_a_plain_command_and_refuses_a_compound_one() {
+        let _dir = isolate();
+        let id = hosted_fake();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        // The fake asks for `echo hi > out.txt`: a redirection, so a standing
+        // yes would cover more than this one write. Allowed, not remembered.
+        let answer = decide_and_remember(&id, "r1", true, None, false, true).unwrap();
+        assert_eq!(answer["approval"]["decision"], "allow_once");
+        assert!(answer["remember_error"].as_str().unwrap().contains("compound"), "{answer}");
+        assert!(crate::agent_policy::list().unwrap().is_empty());
+        // The event on the record is the plain resolution.
+        let (events, _) = replay_after_close(&id);
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").unwrap();
+        assert!(resolved.get("remember_error").is_none(), "{resolved}");
+    }
+
+    fn replay_after_close(id: &str) -> (Vec<Value>, usize) {
+        close(id).unwrap();
+        replay_of(id)
     }
 
     #[test]

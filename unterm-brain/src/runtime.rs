@@ -202,6 +202,23 @@ fn base_command(spec: &Spec) -> Command {
 /// can only be sent once the session it belongs to has been created.
 pub type Tap = Box<dyn FnMut(&str) -> Vec<String> + Send>;
 
+/// Writes lines to a running brain's stdin; see [`Running::stdin_writer`].
+#[derive(Clone)]
+pub struct StdinWriter(Arc<Mutex<Option<ChildStdin>>>);
+
+impl StdinWriter {
+    pub fn write_line(&self, line: &str) -> anyhow::Result<()> {
+        let mut guard = self.0.lock().unwrap();
+        let stdin = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("this brain's stdin is not open"))?;
+        stdin.write_all(line.as_bytes())?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(())
+    }
+}
+
 /// Start a brain and begin reading it.
 pub fn spawn(spec: &Spec, adapter: Box<dyn BrainAdapter>) -> anyhow::Result<Running> {
     spawn_tapped(spec, adapter, None)
@@ -375,6 +392,12 @@ impl Running {
         stdin.write_all(b"\n")?;
         stdin.flush()?;
         Ok(())
+    }
+
+    /// A handle to this brain's stdin for another thread -- the one reading
+    /// its events, when an answer is decided there (a standing rule).
+    pub fn stdin_writer(&self) -> StdinWriter {
+        StdinWriter(Arc::clone(&self.stdin))
     }
 
     /// Whether stdin is still open for [`write_line`](Self::write_line).

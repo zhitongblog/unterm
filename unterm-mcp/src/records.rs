@@ -457,12 +457,13 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 .get("allow")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| anyhow!("Missing 'allow'"))?;
-            unterm_services::agent_session::decide(
+            unterm_services::agent_session::decide_and_remember(
                 &text(params, "session_id")?,
                 &text(params, "request_id")?,
                 allow,
                 params.get("message").and_then(Value::as_str),
                 params.get("interrupt").and_then(Value::as_bool).unwrap_or(false),
+                params.get("remember").and_then(Value::as_bool).unwrap_or(false),
             )
         }
         "agent_session.close" => {
