@@ -20,6 +20,7 @@ set -eu
 REPO="zhitongblog/unterm"
 DRY_RUN=0
 UNTERM_VERSION=${UNTERM_VERSION:-}
+UNTERM_MIRROR=${UNTERM_MIRROR:-}
 
 # Color helpers — only when stderr is a TTY, so piping to a log stays clean.
 if [ -t 2 ]; then
@@ -42,9 +43,11 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --version=*) UNTERM_VERSION="${arg#--version=}" ;;
+    --mirror=*) UNTERM_MIRROR="${arg#--mirror=}" ;;
+    --cn) UNTERM_MIRROR="atomgit" ;;
     -h|--help)
       cat <<EOF
-Usage: install.sh [--dry-run] [--version=vX.Y.Z]
+Usage: install.sh [--dry-run] [--version=vX.Y.Z] [--mirror=atomgit|github] [--cn]
 EOF
       exit 0 ;;
     *) die "unknown argument: $arg" ;;
@@ -74,26 +77,55 @@ fi
 # --- Resolve target tag ---------------------------------------------------
 if [ -z "$UNTERM_VERSION" ]; then
   say "looking up latest Unterm release..."
-  # The API returns a JSON blob; grab the `tag_name` value with a tolerant
-  # regex so we don't drag in jq as a dependency.
-  api="https://api.github.com/repos/$REPO/releases/latest"
-  UNTERM_VERSION=$(fetch_stdout "$api" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  if [ "$UNTERM_MIRROR" = "atomgit" ]; then
+    UNTERM_VERSION=$(fetch_stdout "https://api.gitcode.com/api/v5/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  fi
+  if [ -z "$UNTERM_VERSION" ]; then
+    # The API returns a JSON blob; grab the `tag_name` value with a tolerant
+    # regex so we don't drag in jq as a dependency.
+    api="https://api.github.com/repos/$REPO/releases/latest"
+    UNTERM_VERSION=$(fetch_stdout "$api" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+  fi
   if [ -z "$UNTERM_VERSION" ]; then
     # 60 anonymous API requests an hour per address, shared by an office or
     # a VPN: the release page's redirect names the tag without the API.
     warn "GitHub API unavailable; reading the release page instead"
     if command -v curl >/dev/null 2>&1; then
-      loc=$(curl -fsSI "https://github.com/$REPO/releases/latest" | tr -d '\r' | sed -n 's/^[Ll]ocation: *//p' | head -1)
+      loc=$(curl -fsSI "https://github.com/$REPO/releases/latest" 2>/dev/null | tr -d '\r' | sed -n 's/^[Ll]ocation: *//p' | head -1 || true)
     else
-      loc=$(wget -S --max-redirect=0 -O /dev/null "https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | head -1)
+      loc=$(wget -S --max-redirect=0 -O /dev/null "https://github.com/$REPO/releases/latest" 2>&1 | sed -n 's/^ *[Ll]ocation: *//p' | head -1 || true)
     fi
     UNTERM_VERSION=${loc##*/tag/}
     case "$UNTERM_VERSION" in v*) ;; *) UNTERM_VERSION="" ;; esac
   fi
-  [ -n "$UNTERM_VERSION" ] || die "couldn't resolve the latest release from GitHub"
+  if [ -z "$UNTERM_VERSION" ]; then
+    warn "GitHub unreachable; falling back to AtomGit mirror..."
+    UNTERM_VERSION=$(fetch_stdout "https://api.gitcode.com/api/v5/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$UNTERM_VERSION" ] && UNTERM_MIRROR="atomgit"
+  fi
+  [ -n "$UNTERM_VERSION" ] || die "couldn't resolve the latest release from GitHub or AtomGit"
 fi
 ok "Unterm $UNTERM_VERSION"
-DL_BASE="https://github.com/$REPO/releases/download/$UNTERM_VERSION"
+if [ "$UNTERM_MIRROR" = "atomgit" ]; then
+  DL_BASE="https://atomgit.com/$REPO/releases/download/$UNTERM_VERSION"
+else
+  DL_BASE="https://github.com/$REPO/releases/download/$UNTERM_VERSION"
+fi
+ATOMGIT_DL_BASE="https://atomgit.com/$REPO/releases/download/$UNTERM_VERSION"
+
+fetch_asset() {
+  asset_name="$1"
+  dest_path="$2"
+  if fetch "$DL_BASE/$asset_name" "$dest_path" 2>/dev/null; then
+    return 0
+  fi
+  if [ "$DL_BASE" != "$ATOMGIT_DL_BASE" ]; then
+    warn "GitHub download failed; retrying from AtomGit mirror..."
+    fetch "$ATOMGIT_DL_BASE/$asset_name" "$dest_path"
+  else
+    return 1
+  fi
+}
 
 # --- macOS ----------------------------------------------------------------
 if [ "$os" = "darwin" ]; then
@@ -103,7 +135,7 @@ if [ "$os" = "darwin" ]; then
   trap 'rm -rf "$tmp"' EXIT
 
   say "downloading $asset (~120 MB)"
-  run "fetch '$url' '$tmp/$asset'"
+  run "fetch_asset '$asset' '$tmp/$asset'"
 
   mountpoint="$tmp/mnt"
   say "mounting"
@@ -147,7 +179,7 @@ if [ "$os" = "linux" ]; then
     trap 'rm -rf "$tmp"' EXIT
 
     say "downloading $asset"
-    run "fetch '$url' '$tmp/$asset'"
+    run "fetch_asset '$asset' '$tmp/$asset'"
 
     say "installing (apt may ask for sudo to resolve deps)"
     if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
@@ -171,7 +203,7 @@ if [ "$os" = "linux" ]; then
   mkdir -p "$dest_dir"
 
   say "downloading $asset"
-  run "fetch '$url' '$dest'"
+  run "fetch_asset '$asset' '$dest'"
   run "chmod +x '$dest'"
 
   ok "installed to $dest"

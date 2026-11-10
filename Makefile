@@ -1,4 +1,4 @@
-.PHONY: all fmt build check test release-mac clean-release-artifacts
+.PHONY: all fmt build check test release-mac release-atomgit clean-release-artifacts
 
 all: build
 
@@ -27,6 +27,10 @@ fmt:
 # Override the keychain notary profile with `make release-mac NOTARY_PROFILE=Foo`.
 release-mac:
 	bash ci/release-mac.sh
+
+# Sync the GitHub release for the tag at HEAD (or TAG=vX.Y.Z) to AtomGit.
+release-atomgit:
+	bash ci/release-to-atomgit.sh "$${TAG:-$$(git describe --tags --exact-match HEAD)}"
 
 # Remove local packages produced while testing releases. This intentionally
 # leaves target/, dist/, and installer/out/ alone because they are broader

@@ -17,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 
 $repo    = 'zhitongblog/unterm'
 $version = $env:UNTERM_VERSION
+$mirror  = $env:UNTERM_MIRROR
 
 function Say  ($m) { Write-Host "» $m" -ForegroundColor Blue }
 function Ok   ($m) { Write-Host "✓ $m" -ForegroundColor Green }
@@ -26,25 +27,40 @@ function Die  ($m) { Write-Host "✗ $m" -ForegroundColor Red; exit 1 }
 # --- Resolve target tag ----------------------------------------------------
 if (-not $version) {
   Say 'looking up latest Unterm release...'
-  $api = "https://api.github.com/repos/$repo/releases/latest"
-  try {
-    $version = (Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent'='unterm-installer' }).tag_name
-  } catch {
-    # The API allows 60 anonymous requests an hour per address, and an office
-    # or a VPN shares one. The release page's redirect names the tag too.
-    Warn "GitHub API unavailable ($($_.Exception.Message)); reading the release page instead"
+  if ($mirror -eq 'atomgit') {
     try {
-      $page = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
-      $location = $page.Headers.Location
+      $version = (Invoke-RestMethod -Uri "https://api.gitcode.com/api/v5/repos/$repo/releases/latest" -Headers @{ 'User-Agent'='unterm-installer' }).tag_name
+    } catch {}
+  }
+  if (-not $version) {
+    $api = "https://api.github.com/repos/$repo/releases/latest"
+    try {
+      $version = (Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent'='unterm-installer' }).tag_name
     } catch {
-      # PowerShell 7 throws on the 302 and carries an HttpResponseMessage;
-      # Windows PowerShell 5.1 carries an HttpWebResponse.
-      $response = $_.Exception.Response
-      if ($response -and $response.Headers.Location) { $location = $response.Headers.Location }
-      elseif ($response) { $location = $response.Headers['Location'] }
+      # The API allows 60 anonymous requests an hour per address, and an office
+      # or a VPN shares one. The release page's redirect names the tag too.
+      Warn "GitHub API unavailable ($($_.Exception.Message)); reading the release page instead"
+      try {
+        $page = Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
+        $location = $page.Headers.Location
+      } catch {
+        # PowerShell 7 throws on the 302 and carries an HttpResponseMessage;
+        # Windows PowerShell 5.1 carries an HttpWebResponse.
+        $response = $_.Exception.Response
+        if ($response -and $response.Headers.Location) { $location = $response.Headers.Location }
+        elseif ($response) { $location = $response.Headers['Location'] }
+      }
+      if ($location) { $version = ($location.ToString() -split '/tag/')[-1] }
+      if (-not $version) {
+        Warn 'GitHub unreachable; falling back to AtomGit mirror...'
+        try {
+          $version = (Invoke-RestMethod -Uri "https://api.gitcode.com/api/v5/repos/$repo/releases/latest" -Headers @{ 'User-Agent'='unterm-installer' }).tag_name
+          $mirror  = 'atomgit'
+        } catch {
+          Die "couldn't resolve the latest release from GitHub or AtomGit ($_)"
+        }
+      }
     }
-    if ($location) { $version = ($location.ToString() -split '/tag/')[-1] }
-    if (-not $version) { Die "couldn't resolve the latest release from GitHub ($_)" }
   }
 }
 if (-not $version) { Die 'tag_name was empty in API response' }
@@ -64,7 +80,9 @@ if ($nativeArch -eq 'ARM64') { $msiArch = 'arm64' } else { $msiArch = 'x64' }
 # but keep it on the GitHub-style download URL component.
 $verNoV = $version -replace '^v',''
 $asset  = "Unterm-$verNoV-$msiArch.msi"
-$url    = "https://github.com/$repo/releases/download/$version/$asset"
+$ghUrl  = "https://github.com/$repo/releases/download/$version/$asset"
+$cnUrl  = "https://atomgit.com/$repo/releases/download/$version/$asset"
+$url    = if ($mirror -eq 'atomgit') { $cnUrl } else { $ghUrl }
 $dest   = Join-Path $env:TEMP $asset
 
 Say "downloading $asset"
@@ -73,7 +91,16 @@ try {
   # but we want broad compat.
   $oldProgress = $ProgressPreference
   $ProgressPreference = 'Continue'
-  Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+  try {
+    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+  } catch {
+    if ($url -ne $cnUrl) {
+      Warn 'GitHub download failed; retrying from AtomGit mirror...'
+      Invoke-WebRequest -Uri $cnUrl -OutFile $dest -UseBasicParsing
+    } else {
+      throw
+    }
+  }
   $ProgressPreference = $oldProgress
 } catch {
   Die "download failed: $_"

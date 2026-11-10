@@ -4,7 +4,7 @@
 // Everything else lives on /features and /guide.
 
 import { formatCount, type Stats } from "../lib/stats";
-import { resolveRelease, dlBaseUrl } from "../lib/release";
+import { resolveRelease, dlBaseUrl, atomgitRepoUrl } from "../lib/release";
 import enUS from "../i18n/en-US.json";
 import { COMPETITORS } from "../data/competitors";
 
@@ -17,7 +17,10 @@ interface Props {
 const { dict, pathPrefix, stats } = Astro.props as Props;
 const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
 const release = resolveRelease(stats);
-const u = release.urls;
+const isZhCN = pathPrefix === "/zh-CN";
+const u = isZhCN ? release.atomgitUrls : release.urls;
+const gu = release.urls;
+const cu = release.atomgitUrls;
 
 // The star count, on the GitHub button. Rendered even when the build could
 // not reach GitHub, hidden until the page's live refresh fills it in.
@@ -121,7 +124,7 @@ unterm-cli agent inbox`;
     <p class="mt-6 text-lg sm:text-xl text-notion-muted max-w-2xl mx-auto leading-relaxed text-balance">{t("home.hero.sub")}</p>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
       <!-- /api/download picks the right file for the visitor's platform at the edge. -->
-      <a href={`/api/download?v=${release.tag}`}
+      <a href={`/api/download?v=${release.tag}${isZhCN ? "&mirror=atomgit" : ""}`}
          class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-notion-green hover:bg-notion-teal text-zinc-950 font-semibold transition shadow-lg shadow-amber-500/20">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
         <span>{t("hero.cta.download")}</span>
@@ -142,6 +145,7 @@ unterm-cli agent inbox`;
       )}
       {t("home.hero.free")}
       <span class="text-zinc-700 mx-1.5">·</span><a href={pathPrefix + "/#install"} class="hover:text-notion-ink underline decoration-dotted underline-offset-4">{t("hero.cta.other")}</a>
+      <span class="text-zinc-700 mx-1.5">·</span><a href={release.atomgitReleaseUrl} target="_blank" rel="noopener" class="text-notion-teal hover:underline">{t("install.atomgit_mirror")}</a>
     </p>
   </div>
   <div class="relative max-w-6xl mx-auto px-4 sm:px-6 pb-20">
@@ -342,11 +346,14 @@ unterm-cli agent inbox`;
     </div>
     <p class="mt-6 text-center text-xs text-notion-faint">{t("install.or_manual")}</p>
     <div class="mt-4 grid sm:grid-cols-3 gap-4">
-      <a href={u.dmg} class="group block bg-notion-surface/60 hover:bg-notion-surface border border-notion-border hover:border-notion-borderStrong rounded-xl p-5 transition">
+      <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5 flex flex-col">
         <div class="flex items-center justify-between"><div class="font-semibold">{t("install.macos.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.macos.size")}</span></div>
-        <div class="text-sm text-notion-muted mt-1">{t("install.macos.detail")}</div>
-        <div class="mt-3 text-xs text-notion-green group-hover:text-notion-teal font-mono">.dmg →</div>
-      </a>
+        <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.macos.detail")}</div>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs font-mono">
+          <a href={u.dmg} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.dmg →</a>
+          <a href={isZhCN ? gu.dmg : cu.dmg} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "GitHub .dmg" : "AtomGit (CN) .dmg"}</a>
+        </div>
+      </div>
       <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5 flex flex-col">
         <div class="flex items-center justify-between"><div class="font-semibold">{t("install.windows.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.windows.size")}</span></div>
         <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.windows.detail")}</div>
@@ -370,6 +377,8 @@ unterm-cli agent inbox`;
     </div>
     <p class="mt-6 text-center text-xs text-notion-faint">
       <a href={`${dlBaseUrl}/latest`} class="hover:text-notion-ink">{release.tag} · {release.date}</a>
+      <span class="mx-1.5 text-zinc-700">·</span><a href={release.atomgitReleaseUrl} target="_blank" rel="noopener" class="text-notion-teal hover:underline">{t("install.atomgit_mirror")}</a>
+      <span class="mx-1.5 text-zinc-700">·</span><a href={atomgitRepoUrl} target="_blank" rel="noopener" class="hover:text-notion-ink">AtomGit</a>
       <span class="mx-1.5 text-zinc-700">·</span><a href="/changelog" class="hover:text-notion-ink">Changelog</a>
     </p>
   </div>

@@ -2,9 +2,11 @@
 
 **The terminal AI agents can drive.**
 
-[![GitHub stars](https://img.shields.io/github/stars/zhitongblog/unterm?style=social)](https://github.com/zhitongblog/unterm/stargazers) [![Latest release](https://img.shields.io/github/v/release/zhitongblog/unterm)](https://github.com/zhitongblog/unterm/releases/latest)
+[![GitHub stars](https://img.shields.io/github/stars/zhitongblog/unterm?style=social)](https://github.com/zhitongblog/unterm/stargazers) [![AtomGit](https://atomgit.com/zhitongblog/unterm/star/badge.svg)](https://atomgit.com/zhitongblog/unterm) [![Latest release](https://img.shields.io/github/v/release/zhitongblog/unterm)](https://github.com/zhitongblog/unterm/releases/latest) [![AtomGit 镜像](https://img.shields.io/badge/中国镜像-atomgit.com%2Fzhitongblog%2Funterm-e60012.svg)](https://atomgit.com/zhitongblog/unterm)
 
-If Unterm is useful to you, a ⭐ on GitHub helps other people find it.
+[**Download the latest release**](https://github.com/zhitongblog/unterm/releases/latest) · 🪞 [**AtomGit 国内高速下载 (China Mirror)**](https://atomgit.com/zhitongblog/unterm/releases) · [**Website**](https://unterm.app) · [**Docs**](https://unterm.app/docs/)
+
+If Unterm is useful to you, a ⭐ on GitHub or [AtomGit](https://atomgit.com/zhitongblog/unterm) helps other people find it.
 
 ![Agent Cockpit: three agents working, the Inbox surfaces the one that needs you, Enter jumps to it](assets/demo/agent-cockpit.gif)
 
@@ -68,9 +70,15 @@ Full docs: [unterm.app/docs/agent-cockpit](https://unterm.app/docs/agent-cockpit
 
 ## Install
 
-Pre-built artifacts are published on GitHub Releases:
+Pre-built artifacts are published on GitHub Releases and mirrored on AtomGit (for fast direct downloads in mainland China):
 
-https://github.com/zhitongblog/unterm/releases
+- **Global (GitHub Releases)**: https://github.com/zhitongblog/unterm/releases
+- **中国大陆高速下载 (AtomGit 镜像 / G-Star)**: https://atomgit.com/zhitongblog/unterm/releases
+  - **macOS (Universal arm64+x86_64)**: `https://atomgit.com/zhitongblog/unterm/releases/download/<version>/Unterm-macos-<version>.dmg`
+  - **Windows x64**: `https://atomgit.com/zhitongblog/unterm/releases/download/<version>/Unterm-<semver>-x64.msi` · `Unterm-windows-x64-<version>.zip`
+  - **Windows ARM64**: `https://atomgit.com/zhitongblog/unterm/releases/download/<version>/Unterm-<semver>-arm64.msi` · `Unterm-windows-arm64-<version>.zip`
+  - **Linux x86_64**: `https://atomgit.com/zhitongblog/unterm/releases/download/<version>/unterm-<version>.deb` · `Unterm-<version>-x86_64.AppImage`
+  - **Linux ARM64**: `https://atomgit.com/zhitongblog/unterm/releases/download/<version>/unterm-<version>.arm64.deb` · `Unterm-<version>-aarch64.AppImage`
 
 | Platform | Artifact                                                    |
 | -------- | ----------------------------------------------------------- |
@@ -430,11 +438,23 @@ macOS sits out of CI by design — see above.
 
 ## Repository
 
-This repository is the main Unterm project:
-
-https://github.com/zhitongblog/unterm
+- **GitHub**: https://github.com/zhitongblog/unterm
+- **AtomGit (China Mirror)**: https://atomgit.com/zhitongblog/unterm
 
 Unterm includes modified WezTerm components. Upstream WezTerm remains a separate project by Wez Furlong and contributors.
+
+### Open-source hosting & G-Star Program
+
+<p>
+  <a href="https://atomgit.com/zhitongblog/unterm" target="_blank" rel="noopener">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://docs.atomgit.com/img/logo-AtomGit-dark.svg" />
+      <img src="https://docs.atomgit.com/img/logo-AtomGit-light.svg" alt="AtomGit" height="28" />
+    </picture>
+  </a>
+</p>
+
+Special thanks to **[AtomGit (G-Star Program)](https://atomgit.com/zhitongblog/unterm)** for hosting Unterm's official mirror and high-speed release packages in mainland China.
 
 ## Ambassadors
 
@@ -442,4 +462,4 @@ Unterm is built by a very small team, so most people find it because another dev
 
 ---
 
-If Unterm saves you time, [star it on GitHub](https://github.com/zhitongblog/unterm) — it is the main way other people discover it.
+If Unterm saves you time, [star it on GitHub](https://github.com/zhitongblog/unterm) or [AtomGit](https://atomgit.com/zhitongblog/unterm) — it is the main way other people discover it.

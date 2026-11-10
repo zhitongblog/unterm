@@ -83,7 +83,10 @@ const defaultJsonLd: unknown[] = [
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     author: { "@type": "Person", name: "Alex Lee" },
     publisher: { "@type": "Organization", name: "Unzoo", url: "https://unterm.app/" },
-    sameAs: ["https://github.com/zhitongblog/unterm"],
+    sameAs: [
+      "https://github.com/zhitongblog/unterm",
+      "https://atomgit.com/zhitongblog/unterm",
+    ],
     featureList: [
       "Local Model Context Protocol (MCP) server with 152 methods",
       "Agent Cockpit: real-time per-pane agent state tracking, inbox, and jump-to-pane",
@@ -239,6 +242,7 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
           </div>
           <div class="flex flex-wrap items-center gap-5 text-sm text-notion-faint">
             <a href="https://github.com/zhitongblog/unterm" target="_blank" rel="noopener" class="hover:text-notion-ink">GitHub</a>
+            <a href="https://atomgit.com/zhitongblog/unterm" target="_blank" rel="noopener" class="hover:text-notion-ink">AtomGit</a>
             <a href="https://github.com/zhitongblog/unterm/releases" target="_blank" rel="noopener" class="hover:text-notion-ink">{t("footer.releases")}</a>
             <a href="/changelog" class="hover:text-notion-ink">{t("footer.changelog")}</a>
             <a href="/docs/agent-integration" class="hover:text-notion-ink">{t("footer.docs")}</a>
@@ -293,7 +297,7 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
           const link = event.target.closest && event.target.closest("a[href]");
           if (!link || seen()) return;
           const href = link.getAttribute("href") || "";
-          if (!/\/api\/download|\/releases\/(latest\/)?download\//.test(href)) return;
+          if (!/\/api\/download|\/releases\/(latest\/)?download\/|atomgit\.com\/[^/]+\/unterm\/releases/.test(href)) return;
           remember();
           setTimeout(() => { bar.hidden = false; }, 600);
         });

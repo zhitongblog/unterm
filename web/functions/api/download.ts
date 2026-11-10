@@ -21,6 +21,7 @@
 interface Env {}
 
 const BASE = "https://github.com/zhitongblog/unterm/releases";
+const ATOMGIT_BASE = "https://atomgit.com/zhitongblog/unterm/releases";
 
 /// What the browser's client hints say about the CPU, when it sent them.
 /// `"arm"` for Windows on ARM: Chromium's User-Agent there is frozen at
@@ -30,7 +31,12 @@ function hintedArch(req: Request): string | null {
   return arch ? arch.replace(/"/g, "").toLowerCase() : null;
 }
 
-function targetForUA(ua: string, v: string, arch: string | null = null): string {
+function targetForUA(
+  ua: string,
+  v: string,
+  arch: string | null = null,
+  useAtomgit = false
+): string {
   // Construct the filenames the way Page.astro does — keep them in sync
   // here OR the click 404s. (See web/src/components/Page.astro for the
   // canonical formulas — DMG / AppImage / win.zip use the tag verbatim,
@@ -38,42 +44,56 @@ function targetForUA(ua: string, v: string, arch: string | null = null): string 
   const tag = v;
   const bare = v.replace(/^v/, "");
   const semver = bare.split(".").length === 2 ? `${bare}.0` : bare;
-  const latest = `${BASE}/latest/download`;
+  const dlPrefix = useAtomgit
+    ? `${ATOMGIT_BASE}/download/${tag}`
+    : `${BASE}/latest/download`;
+  const pageFallback = useAtomgit
+    ? `${ATOMGIT_BASE}/tag/${tag}`
+    : `${BASE}/latest`;
 
   // Order matters: iOS / iPadOS UAs contain "Mac"; match Apple mobile first.
   if (/iPhone|iPad|iPod/i.test(ua)) {
     // No iOS build; send mobile visitors to the release page so they can
     // share a link from a phone without seeing a desktop DMG hit Downloads.
-    return `${BASE}/latest`;
+    return pageFallback;
   }
   if (/Windows|Win64|Win32|WOW64/i.test(ua)) {
     // Windows on ARM: the UA carries "ARM64" (Edge/Chrome on Snapdragon /
     // Surface) or a bare "ARM;". Serve the native arm64 MSI; everything else
     // gets x64 (which also runs on ARM via emulation, so it's a safe default).
     if (arch === "arm" || /ARM64|aarch64|ARM;/i.test(ua)) {
-      return `${latest}/Unterm-${semver}-arm64.msi`;
+      return `${dlPrefix}/Unterm-${semver}-arm64.msi`;
     }
-    return `${latest}/Unterm-${semver}-x64.msi`;
+    return `${dlPrefix}/Unterm-${semver}-x64.msi`;
   }
   if (/Mac OS X|Macintosh/i.test(ua)) {
-    return `${latest}/Unterm-macos-${tag}.dmg`;
+    return `${dlPrefix}/Unterm-macos-${tag}.dmg`;
   }
   if (/Linux|X11|Ubuntu|Debian|Fedora/i.test(ua)) {
-    return `${latest}/Unterm-${tag}-x86_64.AppImage`;
+    return `${dlPrefix}/Unterm-${tag}-x86_64.AppImage`;
   }
   // Unknown / bot / very old UA — land on the releases page.
-  return `${BASE}/latest`;
+  return pageFallback;
 }
 
 export const onRequestGet: PagesFunction<Env> = (ctx) => {
   const url = new URL(ctx.request.url);
   const v = url.searchParams.get("v");
+  const mirror = url.searchParams.get("mirror");
+  const cfCountry = (ctx.request as any).cf?.country;
+  const useAtomgit =
+    mirror === "atomgit" ||
+    url.searchParams.get("cn") === "1" ||
+    (mirror !== "github" && cfCountry === "CN");
   if (!v) {
-    return Response.redirect(`${BASE}/latest`, 302);
+    return Response.redirect(
+      useAtomgit ? ATOMGIT_BASE : `${BASE}/latest`,
+      302
+    );
   }
   const ua = ctx.request.headers.get("user-agent") || "";
   const arch = hintedArch(ctx.request);
-  const response = Response.redirect(targetForUA(ua, v, arch), 302);
+  const response = Response.redirect(targetForUA(ua, v, arch, useAtomgit), 302);
   // Ask Chromium for the architecture. `Critical-CH` makes a browser that
   // did not send it retry this request once with it, before following the
   // redirect -- the only way the very first click can know it is on ARM.

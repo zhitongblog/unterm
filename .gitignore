@@ -1,4 +1,5 @@
 /.tag
+/.env.local
 .DS_Store
 dhat-heap.json
 # Local probe / smoke-test scripts kept around between sessions

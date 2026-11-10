@@ -151,6 +151,7 @@
   "install.unix_detail": "Detects OS + arch, downloads the right artifact for the latest release. macOS gets the signed + notarized DMG into <code class=\"text-zinc-300\">/Applications</code>. Linux uses <code class=\"text-zinc-300\">apt</code> when available, falls back to the AppImage in <code class=\"text-zinc-300\">~/.local/bin</code>.",
   "install.win_detail": "Pulls the latest MSI for your machine (x64 or arm64) from GitHub Releases and runs <code class=\"text-zinc-300\">msiexec</code> with a basic UI. UAC will prompt for elevation.",
   "install.or_manual": "Or grab the artifact directly:",
+  "install.atomgit_mirror": "🪞 Faster from mainland China: AtomGit Mirror (G-Star) →",
   "install.macos.title": "macOS",
   "install.macos.detail": "Universal arm64 + x86_64 .dmg, signed + notarized.",
   "install.macos.size": "50 MB",

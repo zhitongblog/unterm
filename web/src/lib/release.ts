@@ -38,6 +38,8 @@ export const changelogEntries: ChangelogEntry[] = changelog
   });
 
 export const dlBaseUrl = "https://github.com/zhitongblog/unterm/releases";
+export const atomgitRepoUrl = "https://atomgit.com/zhitongblog/unterm";
+export const atomgitDlBaseUrl = "https://atomgit.com/zhitongblog/unterm/releases";
 
 export function resolveRelease(stats: Stats) {
   const published = stats.tags === null ? null : new Set(stats.tags);
@@ -54,9 +56,11 @@ export function resolveRelease(stats: Stats) {
     return r.split(".").length === 2 ? `${r}.0` : r;
   })();
   const latest = `${dlBaseUrl}/latest/download`;
+  const atomgitDl = `${atomgitDlBaseUrl}/download/${tag}`;
   return {
     tag,
     date: entry.date,
+    atomgitReleaseUrl: `${atomgitDlBaseUrl}/tag/${tag}`,
     urls: {
       dmg: `${latest}/Unterm-macos-${tag}.dmg`,
       deb: `${latest}/unterm-${tag}.deb`,
@@ -67,6 +71,17 @@ export function resolveRelease(stats: Stats) {
       msiArm: `${latest}/Unterm-${semver}-arm64.msi`,
       winZip: `${latest}/Unterm-windows-x64-${tag}.zip`,
       winZipArm: `${latest}/Unterm-windows-arm64-${tag}.zip`,
+    },
+    atomgitUrls: {
+      dmg: `${atomgitDl}/Unterm-macos-${tag}.dmg`,
+      deb: `${atomgitDl}/unterm-${tag}.deb`,
+      debArm: `${atomgitDl}/unterm-${tag}.arm64.deb`,
+      appimage: `${atomgitDl}/Unterm-${tag}-x86_64.AppImage`,
+      appimageArm: `${atomgitDl}/Unterm-${tag}-aarch64.AppImage`,
+      msi: `${atomgitDl}/Unterm-${semver}-x64.msi`,
+      msiArm: `${atomgitDl}/Unterm-${semver}-arm64.msi`,
+      winZip: `${atomgitDl}/Unterm-windows-x64-${tag}.zip`,
+      winZipArm: `${atomgitDl}/Unterm-windows-arm64-${tag}.zip`,
     },
   };
 }
