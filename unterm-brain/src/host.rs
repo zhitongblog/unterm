@@ -58,6 +58,15 @@ pub trait HostProtocol: Send + Sync {
         Ok(with_args(command, self.hosted_args()))
     }
 
+    /// Continue the conversation `external_id` (the CLI's own id for it)
+    /// instead of starting a new one: the command to run, and whatever the
+    /// host must remember to do so. An error when this protocol cannot
+    /// resume here -- never a fresh conversation that looks like the old one.
+    fn resume(&self, command: Vec<String>, external_id: &str) -> anyhow::Result<Vec<String>> {
+        let _ = (command, external_id);
+        Err(anyhow::anyhow!("a hosted {} session cannot resume a conversation yet", self.id()))
+    }
+
     /// Environment the mode needs. The caller's own values win.
     fn hosted_env(&self) -> Vec<(String, String)> {
         Vec::new()
@@ -109,6 +118,19 @@ impl HostProtocol for ClaudeHost {
 
     fn user_message(&self, text: &str) -> Vec<String> {
         vec![json!({"type": "user", "message": {"role": "user", "content": text}}).to_string()]
+    }
+
+    /// `--resume <session_id>`: Claude Code reloads the conversation and
+    /// takes the next stream-json message as its next turn.
+    fn resume(&self, mut command: Vec<String>, external_id: &str) -> anyhow::Result<Vec<String>> {
+        if external_id.trim().is_empty() {
+            anyhow::bail!("no conversation id to resume");
+        }
+        if !command.iter().any(|word| word == "--resume" || word.starts_with("--resume=")) {
+            command.push("--resume".into());
+            command.push(external_id.to_string());
+        }
+        Ok(command)
     }
 
     fn permission_reply(&self, request_id: &str, decision: &Decision, input: &Value) -> Vec<String> {
@@ -244,6 +266,20 @@ mod tests {
 
         let user: Value = serde_json::from_str(&one(host.user_message("hello"))).unwrap();
         assert_eq!(user, json!({"type": "user", "message": {"role": "user", "content": "hello"}}));
+    }
+
+    #[test]
+    fn claude_resumes_with_its_session_id_and_acp_refuses() {
+        let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            ClaudeHost.resume(words(&["claude", "-p"]), "s1").unwrap(),
+            words(&["claude", "-p", "--resume", "s1"])
+        );
+        assert!(ClaudeHost.resume(words(&["claude"]), "").is_err());
+        // ACP's session/load replays the whole history as updates: not
+        // offered until that can be told apart from a new turn.
+        assert!(host_for("opencode").unwrap().resume(words(&["opencode", "acp"]), "ses_1").is_err());
+        assert!(host_for("agy").unwrap().resume(words(&["agy", "acp"]), "c2aa").is_err());
     }
 
     #[test]

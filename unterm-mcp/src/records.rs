@@ -45,6 +45,7 @@ pub const METHODS: &[&str] = &[
     "agent_session.status",
     "agent_session.close",
     "agent_session.decide",
+    "agent_session.resume",
     "terminal.manifest",
     "terminal.health",
     "terminal.capabilities",
@@ -470,6 +471,29 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
         }
         "agent_session.close" => {
             unterm_services::agent_session::close(&text(params, "session_id")?)
+        }
+        "agent_session.resume" => {
+            let env: Vec<(String, String)> = params
+                .get("env")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(key, value)| {
+                            value.as_str().map(|value| (key.clone(), value.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // The task ids the caller gives win; otherwise the old session's.
+            let context = task_context(params);
+            let given = context.task_id.is_some() || context.run_id.is_some() || context.step_id.is_some();
+            let id = unterm_services::agent_session::resume(
+                &text(params, "session_id")?,
+                params.get("prompt").and_then(Value::as_str),
+                &env,
+                given.then_some(context),
+            )?;
+            Ok(json!({"session_id": id, "resumed_from": text(params, "session_id")?}))
         }
 
         // ---- Unterm as a governable provider ---------------------------

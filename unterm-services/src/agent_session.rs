@@ -326,7 +326,7 @@ pub fn start(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, false, false)
+    start_with(command, cwd, env, prompt, adapter, context, false, false, None)
 }
 
 /// Start an agent that is *driven*, not just watched.
@@ -353,7 +353,7 @@ pub fn start_hosted(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, true, false)
+    start_with(command, cwd, env, prompt, adapter, context, true, false, None)
 }
 
 /// A hosted session whose agent works through Unterm, with a grant.
@@ -373,7 +373,99 @@ pub fn start_governed(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, true, true)
+    start_with(command, cwd, env, prompt, adapter, context, true, true, None)
+}
+
+/// What it takes to continue a hosted session after the process that ran
+/// it is gone: written as soon as the CLI names its conversation, so a Core
+/// or app that dies mid-session still leaves it behind.
+///
+/// Kept beside the task database rather than in it. A new column would mean
+/// a schema migration, and an older Unterm refuses a database newer than it
+/// understands -- the copy installed on the same machine would stop opening
+/// its own records. The caller's environment is deliberately not kept: it
+/// may hold secrets, and a resume is given its environment afresh.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ResumeRecord {
+    pub session_id: String,
+    pub adapter: String,
+    /// The CLI's own id for the conversation.
+    pub external_id: String,
+    /// The command as the caller gave it, before the host rewrote it.
+    pub command: Vec<String>,
+    pub cwd: Option<String>,
+    pub governed: bool,
+    pub task_id: Option<String>,
+    pub run_id: Option<String>,
+    pub step_id: Option<String>,
+    pub written_at: String,
+}
+
+fn resume_path(session_id: &str) -> Result<std::path::PathBuf> {
+    if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(anyhow!("not a session id: {session_id:?}"));
+    }
+    Ok(unterm_protocol::state_path("agent_resume")
+        .ok_or_else(|| anyhow!("could not resolve the state directory"))?
+        .join(format!("{session_id}.json")))
+}
+
+fn write_resume_record(record: &ResumeRecord) -> Result<()> {
+    let path = resume_path(&record.session_id)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, serde_json::to_vec_pretty(record)?)?;
+    std::fs::rename(&temp, &path)?;
+    Ok(())
+}
+
+/// The resume record of a hosted session, if its CLI named a conversation.
+pub fn resume_record(session_id: &str) -> Result<Option<ResumeRecord>> {
+    match std::fs::read(resume_path(session_id)?) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Continue a hosted session's conversation in a new session: the same CLI,
+/// command, workspace and (unless `context` says otherwise) task ids, with
+/// the CLI told to pick up its own conversation -- Claude Code with
+/// `--resume`, Codex's app server with `thread/resume`. A governed session
+/// comes back governed, with a fresh grant.
+///
+/// An error rather than a fresh conversation when there is nothing to
+/// continue (the CLI never named one) or the protocol cannot: a new
+/// conversation that looks like the old one loses exactly what the caller
+/// asked to keep.
+pub fn resume(
+    previous_id: &str,
+    prompt: Option<&str>,
+    env: &[(String, String)],
+    context: Option<TaskContext>,
+) -> Result<String> {
+    let record = resume_record(previous_id)?.ok_or_else(|| {
+        anyhow!("session {previous_id} cannot be resumed: it was not hosted, or its agent never named a conversation")
+    })?;
+    let context = context.unwrap_or_else(|| TaskContext {
+        task_id: record.task_id.clone(),
+        run_id: record.run_id.clone(),
+        step_id: record.step_id.clone(),
+        ..TaskContext::default()
+    });
+    start_with(
+        &record.command,
+        record.cwd.as_deref(),
+        env,
+        prompt,
+        Some(&record.adapter),
+        context,
+        true,
+        record.governed,
+        Some(&record.external_id),
+    )
 }
 
 fn start_with(
@@ -385,7 +477,9 @@ fn start_with(
     context: TaskContext,
     hosted: bool,
     governed: bool,
+    resume_from: Option<&str>,
 ) -> Result<String> {
+    let caller_command = command.to_vec();
     let (adapter_id, mut adapter) = adapter_for(command, adapter)?;
     let host: Option<Arc<dyn HostProtocol>> = if hosted {
         Some(Arc::from(host::host_for(adapter_id).ok_or_else(|| {
@@ -403,9 +497,18 @@ fn start_with(
             if let Some(hosted_adapter) = host.adapter() {
                 adapter = hosted_adapter;
             }
-            host.hosted_command(command)?
+            let command = host.hosted_command(command)?;
+            match resume_from {
+                Some(external_id) => host.resume(command, external_id)?,
+                None => command,
+            }
         }
-        None => command.to_vec(),
+        None => {
+            if resume_from.is_some() {
+                return Err(anyhow!("only a hosted session can be resumed here"));
+            }
+            command.to_vec()
+        }
     };
     let program = command
         .first()
@@ -503,8 +606,36 @@ fn start_with(
             let host = host.clone();
             let writer = running.stdin_writer();
             let cwd = cwd.map(str::to_string);
+            let watch = running.external_id_watch();
+            let mut resume_written: Option<String> = None;
+            let resume_base = host.as_ref().map(|_| ResumeRecord {
+                session_id: id.clone(),
+                adapter: adapter_id.to_string(),
+                external_id: String::new(),
+                command: caller_command.clone(),
+                cwd: cwd.clone(),
+                governed,
+                task_id: context.task_id.clone(),
+                run_id: context.run_id.clone(),
+                step_id: context.step_id.clone(),
+                written_at: String::new(),
+            });
             move || {
                 for event in stream {
+                    // The CLI has named its conversation: from now on this
+                    // session can be continued, even if this process dies.
+                    if let (Some(base), Some(external)) = (&resume_base, watch.get()) {
+                        if resume_written.as_deref() != Some(external.as_str()) {
+                            let record = ResumeRecord {
+                                external_id: external.clone(),
+                                written_at: chrono::Utc::now().to_rfc3339(),
+                                ..base.clone()
+                            };
+                            if write_resume_record(&record).is_ok() {
+                                resume_written = Some(external);
+                            }
+                        }
+                    }
                     let mut ruled = None;
                     if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
                         // A standing rule answers without asking anyone; the
@@ -2019,6 +2150,44 @@ read -r rest || exit 0
         let events = wait_for(&plain, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("grant="))));
         assert!(events.iter().any(|e| e["text"] == "grant="), "{events:#?}");
         close(&plain).unwrap();
+    }
+
+    /// Claude, saying which arguments it was started with.
+    const RESUMABLE_CLAUDE: &str = r#"
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+read -r prompt
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"args: %s"}]}}\n' "$*"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
+read -r rest || exit 0
+"#;
+
+    #[test]
+    fn a_hosted_session_can_be_continued_after_it_is_gone() {
+        let _dir = isolate();
+        let context = TaskContext { task_id: Some("task_resume".into()), ..TaskContext::default() };
+        let first = start_hosted(&a_codex_like_agent(RESUMABLE_CLAUDE), None, &[], Some("hi"), Some("claude"), context).unwrap();
+        wait_for(&first, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        close(&first).unwrap();
+
+        let record = resume_record(&first).unwrap().expect("the conversation was named");
+        assert_eq!(record.external_id, "s1");
+        assert_eq!(record.adapter, "claude");
+        assert_eq!(record.task_id.as_deref(), Some("task_resume"));
+        assert!(!record.command.iter().any(|w| w == "--input-format"), "the caller's command, not the rewritten one");
+
+        let second = resume(&first, Some("again"), &[], None).unwrap();
+        let events = wait_for(&second, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("args:"))));
+        let args = events.iter().find_map(|e| e["text"].as_str().filter(|t| t.starts_with("args:"))).unwrap();
+        assert!(args.contains("--resume s1"), "{args}");
+        assert!(events.iter().all(|e| e["task_id"] == "task_resume"), "the task ids come back too");
+        close(&second).unwrap();
+
+        // Nothing to continue: an error, never a fresh conversation.
+        assert!(resume("ags_nosuchsession", None, &[], None).is_err());
+        assert!(resume("../escape", None, &[], None).is_err());
+        let plain = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), TaskContext::default()).unwrap();
+        close(&plain).unwrap();
+        assert!(resume_record(&plain).unwrap().is_none(), "only hosted sessions are kept for resuming");
     }
 
     #[test]

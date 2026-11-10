@@ -322,6 +322,27 @@ pub fn api_decide(handler: &McpHandler, body: &[u8]) -> Response {
     }
 }
 
+/// POST /api/agent/resume — `{session_id, prompt?}`: continue a hosted
+/// session's conversation in a new session (see `agent_session.resume`).
+/// Only a session the console could have started can be resumed this way:
+/// the command comes from the earlier session's record, never the request.
+pub fn api_resume(handler: &McpHandler, body: &[u8]) -> Response {
+    let body = parse_body(body);
+    let Some(session_id) = string_field(&body, "session_id") else {
+        return Response::err(400, "Bad Request", "session_id is required");
+    };
+    let mut params = serde_json::Map::new();
+    params.insert("session_id".into(), json!(session_id));
+    if let Some(prompt) = string_field(&body, "prompt") {
+        params.insert("prompt".into(), json!(prompt));
+    }
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    match handler.handle(&ctx, "agent_session.resume", &Value::Object(params)) {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(400, "Bad Request", &e.to_string()),
+    }
+}
+
 /// GET /api/agent/policy — the standing rules, and where they are kept.
 pub fn api_policy_list() -> Response {
     match unterm_services::agent_policy::list() {

@@ -202,6 +202,16 @@ fn base_command(spec: &Spec) -> Command {
 /// can only be sent once the session it belongs to has been created.
 pub type Tap = Box<dyn FnMut(&str) -> Vec<String> + Send>;
 
+/// See [`Running::external_id_watch`].
+#[derive(Clone)]
+pub struct ExternalIdWatch(Arc<Mutex<Snapshot>>);
+
+impl ExternalIdWatch {
+    pub fn get(&self) -> Option<String> {
+        self.0.lock().unwrap().external_id.clone()
+    }
+}
+
 /// Writes lines to a running brain's stdin; see [`Running::stdin_writer`].
 #[derive(Clone)]
 pub struct StdinWriter(Arc<Mutex<Option<ChildStdin>>>);
@@ -377,6 +387,13 @@ impl Running {
     /// What has been seen so far. Safe to call while the brain is running.
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().unwrap().clone()
+    }
+
+    /// The CLI's own id for the conversation, as soon as the stream has
+    /// named it -- readable from another thread (the one reading events)
+    /// while this brain runs.
+    pub fn external_id_watch(&self) -> ExternalIdWatch {
+        ExternalIdWatch(Arc::clone(&self.snapshot))
     }
 
     /// Send one line to a brain whose stdin was kept open.

@@ -370,6 +370,8 @@ struct HostState {
     next_id: u64,
     cwd: String,
     initialize_id: Option<u64>,
+    /// A thread to continue rather than start.
+    resume: Option<String>,
     thread: Option<String>,
     queued: Vec<String>,
     /// Open questions: the id as Codex wrote it, the method, and the params.
@@ -423,6 +425,16 @@ impl HostProtocol for CodexAppHost {
         crate::host::with_subcommand(command, "codex", "app-server")
     }
 
+    /// The same command; the thread is continued with `thread/resume`
+    /// instead of `thread/start` once the server is initialized.
+    fn resume(&self, command: Vec<String>, external_id: &str) -> anyhow::Result<Vec<String>> {
+        if external_id.trim().is_empty() {
+            anyhow::bail!("no thread id to resume");
+        }
+        self.state.lock().unwrap().resume = Some(external_id.to_string());
+        Ok(command)
+    }
+
     /// Only `initialize`: the thread is started once it has been answered.
     fn opening(&self, cwd: Option<&str>) -> Vec<String> {
         let mut state = self.state.lock().unwrap();
@@ -466,11 +478,21 @@ impl HostProtocol for CodexAppHost {
                 if id.as_u64().is_some() && id.as_u64() == state.initialize_id {
                     state.initialize_id = None;
                     let cwd = state.cwd.clone();
-                    let start = Self::request(
-                        &mut state,
-                        "thread/start",
-                        json!({"cwd": cwd, "approvalPolicy": "untrusted", "sandbox": "workspace-write"}),
-                    )
+                    let start = match state.resume.clone() {
+                        // The history stays where it is: the caller has it
+                        // already, and replaying it would read as new events.
+                        Some(thread) => Self::request(
+                            &mut state,
+                            "thread/resume",
+                            json!({"threadId": thread, "cwd": cwd, "approvalPolicy": "untrusted",
+                                   "sandbox": "workspace-write", "excludeTurns": true}),
+                        ),
+                        None => Self::request(
+                            &mut state,
+                            "thread/start",
+                            json!({"cwd": cwd, "approvalPolicy": "untrusted", "sandbox": "workspace-write"}),
+                        ),
+                    }
                     .1;
                     return vec![json!({"jsonrpc": "2.0", "method": "initialized"}).to_string(), start];
                 }
@@ -791,6 +813,20 @@ mod tests {
         );
         assert_eq!(unknown[0]["id"], 4);
         assert_eq!(unknown[0]["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn a_resumed_codex_session_continues_its_thread() {
+        let host = CodexAppHost::new();
+        let words = vec!["codex".to_string(), "app-server".to_string()];
+        assert_eq!(host.resume(words.clone(), "th_9").unwrap(), words);
+        let opening = parsed(host.opening(Some("C:\\w")));
+        let after_init = parsed(host.observe(&json!({"id": opening[0]["id"], "result": {}}).to_string()));
+        assert_eq!(after_init[1]["method"], "thread/resume");
+        assert_eq!(after_init[1]["params"]["threadId"], "th_9");
+        assert_eq!(after_init[1]["params"]["approvalPolicy"], "untrusted");
+        assert_eq!(after_init[1]["params"]["excludeTurns"], true);
+        assert!(host.resume(words, " ").is_err());
     }
 
     #[test]
