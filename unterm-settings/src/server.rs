@@ -505,6 +505,11 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),
+        ("POST", "/api/agents/repair-path") => super::agents::api_repair_path(None),
+        ("POST", p) if p.starts_with("/api/agents/") && p.ends_with("/repair-path") => {
+            let id = &p["/api/agents/".len()..p.len() - "/repair-path".len()];
+            super::agents::api_repair_path(Some(id))
+        }
         ("GET", p) if p.starts_with("/api/agents/") && p.ends_with("/settings") => {
             let id = &p["/api/agents/".len()..p.len() - "/settings".len()];
             super::agents::api_settings_get(id, &req.query)

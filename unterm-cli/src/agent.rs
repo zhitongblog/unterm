@@ -67,6 +67,17 @@ pub enum AgentSubCommand {
     /// Run the uninstall command. Does NOT delete agent settings — use
     /// `unterm agent configure <id> --reset` if you want that.
     Uninstall { id: String },
+    /// Detect installed agent binary location(s) and repair user PATH
+    /// (.zshrc / .bashrc / .bash_profile / config.fish / Windows User Path).
+    #[command(visible_alias = "fix-path")]
+    RepairPath {
+        /// Optional agent ID (e.g. `agy`, `claude-code`). If omitted, repairs
+        /// PATH for all installed agents.
+        id: Option<String>,
+        /// If an agent ID is specified and not yet installed, install it first.
+        #[arg(long)]
+        install: bool,
+    },
     /// Authenticate. With no flags, runs the manifest's primary auth
     /// (typically `<bin> login`). Use `--api-key` to skip OAuth and store
     /// a raw key in the keychain.
@@ -228,6 +239,9 @@ pub fn run(cmd: AgentCommand, json_out: bool) -> Result<()> {
         } => run_install(&id, no_check_requires, json_out),
         AgentSubCommand::Update { id } => run_update(&id, json_out),
         AgentSubCommand::Uninstall { id } => run_uninstall(&id, json_out),
+        AgentSubCommand::RepairPath { id, install } => {
+            run_repair_path(id.as_deref(), install, json_out)
+        }
         AgentSubCommand::Auth {
             id,
             api_key_stdin,
@@ -597,6 +611,7 @@ fn run_list(only_installed: bool, json_out: bool) -> Result<()> {
                 "popularity_rank": m.popularity_rank,
                 "category": m.category,
                 "installed": detect.ok,
+                "on_path": detect.on_path,
                 "detected_version": detect.version,
                 "binary_path": detect.binary_path,
             })
@@ -612,19 +627,25 @@ fn run_list(only_installed: bool, json_out: bool) -> Result<()> {
         }));
     } else {
         println!(
-            "{:<14} {:<24} {:<12} {}",
-            "ID", "NAME", "INSTALLED", "VERSION"
+            "{:<14} {:<24} {:<12} {:<8} {}",
+            "ID", "NAME", "INSTALLED", "PATH", "VERSION"
         );
         for row in &rows {
+            let installed = row["installed"].as_bool().unwrap_or(false);
+            let on_path = row["on_path"].as_bool().unwrap_or(false);
+            let path_col = if !installed {
+                "-"
+            } else if on_path {
+                "ok"
+            } else {
+                "fix"
+            };
             println!(
-                "{:<14} {:<24} {:<12} {}",
+                "{:<14} {:<24} {:<12} {:<8} {}",
                 row["id"].as_str().unwrap_or(""),
                 row["name"].as_str().unwrap_or(""),
-                if row["installed"].as_bool().unwrap_or(false) {
-                    "yes"
-                } else {
-                    "no"
-                },
+                if installed { "yes" } else { "no" },
+                path_col,
                 row["detected_version"].as_str().unwrap_or("-"),
             );
         }
@@ -645,6 +666,7 @@ fn run_show(id: &str, json_out: bool) -> Result<()> {
             "manifest": manifest,
             "detect": serde_json::json!({
                 "ok": detect.ok,
+                "on_path": detect.on_path,
                 "version": detect.version,
                 "binary_path": detect.binary_path,
                 "stderr_sample": detect.stderr_sample,
@@ -665,6 +687,7 @@ fn run_show(id: &str, json_out: bool) -> Result<()> {
         }
         if let Some(p) = &detect.binary_path {
             println!("  binary path: {p}");
+            println!("  on PATH: {}", detect.on_path);
         }
         println!("\nSchema:");
         for s in &manifest.settings_schema {
@@ -752,6 +775,70 @@ fn run_uninstall(id: &str, json_out: bool) -> Result<()> {
         }));
     } else {
         println!("uninstall: {} (exit {:?})", report.label, report.exit_code);
+    }
+    Ok(())
+}
+
+fn run_repair_path(id: Option<&str>, install_if_missing: bool, json_out: bool) -> Result<()> {
+    let reports = if let Some(target_id) = id {
+        let (_, manifest) = lookup(target_id)?;
+        let initial = installer::detect(&manifest.detect);
+        if !initial.ok && install_if_missing {
+            installer::run_install(&manifest).map_err(|e| anyhow!(e.to_string()))?;
+        }
+        let report = installer::repair_agent_path(&manifest);
+        if report.binary_path.is_none() {
+            return Err(anyhow!(
+                "{} ({}) is not installed yet. Run `unterm-cli agent install {}` or pass `--install`.",
+                manifest.name,
+                manifest.id,
+                manifest.id
+            ));
+        }
+        vec![report]
+    } else {
+        let set = fetch_manifests().map_err(|e| anyhow!(e.to_string()))?;
+        let manifests: Vec<AgentManifest> =
+            set.for_current_platform().into_iter().cloned().collect();
+        installer::repair_all_agents_path(&manifests)
+            .into_iter()
+            .filter(|r| r.binary_path.is_some())
+            .collect()
+    };
+
+    if json_out {
+        print_json(&serde_json::json!({
+            "ok": true,
+            "reports": reports,
+        }));
+    } else if reports.is_empty() {
+        println!("no installed AI agents detected.");
+    } else {
+        println!(
+            "{:<14} {:<10} {:<36} {}",
+            "ID", "STATUS", "BIN_DIR", "UPDATED_FILES"
+        );
+        for r in &reports {
+            let status = if !r.updated_files.is_empty() || (!r.on_path_before && r.on_path_after) {
+                "repaired"
+            } else if r.on_path_after {
+                "ok"
+            } else {
+                "checked"
+            };
+            let files = if r.updated_files.is_empty() {
+                "-".to_string()
+            } else {
+                r.updated_files.join(", ")
+            };
+            println!(
+                "{:<14} {:<10} {:<36} {}",
+                r.id,
+                status,
+                r.bin_dir.as_deref().unwrap_or("-"),
+                files
+            );
+        }
     }
     Ok(())
 }

@@ -1310,6 +1310,12 @@
               <span class="text-xs text-notion-faint" x-text="t('web.agents.envelope.source') + ': ' + (agents.envelope?.envelope_source || '—')"></span>
               <button
                 class="rounded border border-notion-borderStrong px-3 py-1 text-xs text-notion-ink hover:bg-notion-sunken"
+                @click="repairAgentPath(null)"
+                :disabled="agents.busyId === '__all__'"
+                x-text="agents.busyId === '__all__' ? t('web.agents.btn.repairing_path') : t('web.agents.btn.repair_path')"
+              ></button>
+              <button
+                class="rounded border border-notion-borderStrong px-3 py-1 text-xs text-notion-ink hover:bg-notion-sunken"
                 @click="refreshAgents()"
                 x-text="t('web.agents.refresh')"
               ></button>
@@ -1359,6 +1365,11 @@
                         x-text="'v' + (a.detected_version || '?')"
                       ></span>
                       <span
+                        x-show="a.installed && a.on_path === false"
+                        class="rounded bg-amber-950/60 border border-amber-700/60 px-2 py-0.5 text-[10px] text-amber-300"
+                        x-text="t('web.agents.badge.path_missing')"
+                      ></span>
+                      <span
                         x-show="!a.installed"
                         class="rounded bg-notion-sunken px-2 py-0.5 text-[10px] text-notion-muted"
                         x-text="t('web.agents.badge.not_installed')"
@@ -1381,6 +1392,14 @@
                     x-show="a.installed"
                     @click="openAgent(a.id)"
                     x-text="t('web.agents.btn.configure')"
+                  ></button>
+                  <button
+                    class="rounded border px-2.5 py-1 text-xs hover:bg-notion-sunken"
+                    :class="a.on_path === false ? 'border-amber-600/70 text-amber-300 bg-amber-950/30' : 'border-notion-borderStrong text-notion-ink'"
+                    x-show="a.installed"
+                    @click="repairAgentPath(a.id)"
+                    :disabled="agents.busyId === a.id"
+                    x-text="agents.busyId === a.id ? t('web.agents.btn.repairing_path') : t('web.agents.btn.repair_path')"
                   ></button>
                   <button
                     class="rounded border border-notion-borderStrong px-2.5 py-1 text-xs text-notion-ink hover:bg-notion-sunken"
@@ -1433,6 +1452,7 @@
                 </p>
               </div>
               <div class="flex flex-wrap gap-2">
+                <button x-show="agents.detail?.detect?.ok" class="rounded border px-2.5 py-1 text-xs hover:bg-notion-sunken" :class="agents.detail?.detect?.on_path === false ? 'border-amber-600/70 text-amber-300 bg-amber-950/30' : 'border-notion-borderStrong'" @click="repairAgentPath(agents.detail.manifest.id)" x-text="t('web.agents.btn.repair_path')"></button>
                 <button class="rounded border border-notion-borderStrong px-2.5 py-1 text-xs hover:bg-notion-sunken" @click="importAgent(agents.detail.manifest.id)" x-text="t('web.agents.btn.import')"></button>
                 <button class="rounded border border-notion-borderStrong px-2.5 py-1 text-xs hover:bg-notion-sunken" @click="copyAuthCmd(agents.detail.manifest.id)" x-text="t('web.agents.btn.oauth_cmd')"></button>
                 <button class="rounded border border-notion-borderStrong px-2.5 py-1 text-xs hover:bg-notion-sunken" @click="copyLaunchCmd(agents.detail.manifest.id)" x-text="t('web.agents.btn.launch_cmd')"></button>

@@ -92,7 +92,8 @@ pub fn fetch_manifests_offline() -> Result<ManifestSet> {
     let cache_path = paths::manifest_cache_path()?;
     if cache_path.exists() {
         if let Ok(bytes) = std::fs::read(&cache_path) {
-            if let Ok(env) = envelope::verify_envelope(&bytes) {
+            if let Ok(mut env) = envelope::verify_envelope(&bytes) {
+                fetch::merge_newer_baked_manifests(&mut env);
                 return Ok(ManifestSet {
                     envelope: env,
                     source: Source::Cache,

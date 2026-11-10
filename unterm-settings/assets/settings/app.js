@@ -1434,6 +1434,42 @@ function untermSettings() {
       }
     },
 
+    async repairAgentPath(id) {
+      this.agents.busyId = id || '__all__';
+      try {
+        const url = id
+          ? '/api/agents/' + encodeURIComponent(id) + '/repair-path'
+          : '/api/agents/repair-path';
+        const res = await this.api('POST', url);
+        const reports = res.reports || [];
+        const updatedFiles = Array.from(
+          new Set(reports.flatMap((r) => r.updated_files || [])),
+        );
+        if (updatedFiles.length > 0) {
+          this.toast(
+            this.t('web.agents.toast.path_repaired').replace('{files}', updatedFiles.join(', ')),
+            'success',
+          );
+        } else {
+          const dirs = Array.from(
+            new Set(reports.map((r) => r.bin_dir).filter(Boolean)),
+          );
+          this.toast(
+            this.t('web.agents.toast.path_ok').replace('{dir}', dirs.join(', ') || 'PATH'),
+            'info',
+          );
+        }
+        await this.loadAgents();
+        if (this.agents.detail && id) {
+          await this.openAgent(id);
+        }
+      } catch (e) {
+        this.toast(e.message, 'error');
+      } finally {
+        this.agents.busyId = null;
+      }
+    },
+
     async importAgent(id) {
       try {
         const res = await this.api(
@@ -1515,11 +1551,13 @@ function untermSettings() {
       if (summary && summary.headless_supported !== undefined) {
         return summary.headless_supported === true;
       }
-      return id === 'codex-cli'
+      return id === 'agy'
+        || id === 'codex-cli'
         || id === 'claude-code'
         || id === 'gemini-cli'
         || id === 'opencode'
         || id === 'kimi-code'
+        || id === 'qwen-code'
         || id === 'trae-agent';
     },
 
@@ -1530,11 +1568,13 @@ function untermSettings() {
       }
       const summary = this.agentSummary(id);
       if (summary?.headless_default_prompt) return summary.headless_default_prompt;
+      if (id === 'agy') return 'inspect the current repository and suggest the next useful task';
       if (id === 'codex-cli') return 'review this diff and list risky changes';
       if (id === 'claude-code') return 'summarise the last failing test output';
       if (id === 'gemini-cli') return 'summarise this repository and suggest the next useful task';
       if (id === 'opencode') return 'inspect the current project and suggest the next useful task';
       if (id === 'kimi-code') return 'inspect this project and suggest the next useful task';
+      if (id === 'qwen-code') return 'inspect this project and suggest the next useful task';
       if (id === 'trae-agent') return 'inspect this project and suggest the next useful task';
       return 'summarise the current task';
     },

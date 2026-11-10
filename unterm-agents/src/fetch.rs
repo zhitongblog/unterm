@@ -41,15 +41,41 @@ pub struct FetchResult {
 }
 
 pub fn fetch_or_fallback() -> Result<FetchResult> {
-    match fetch_from_network() {
-        Ok(Some(env)) => Ok(FetchResult {
+    let mut res = match fetch_from_network() {
+        Ok(Some(env)) => FetchResult {
             envelope: env,
             source: Source::Network,
-        }),
-        Ok(None) => load_cache_or_baked(),
+        },
+        Ok(None) => load_cache_or_baked()?,
         Err(e) => {
             log::warn!("manifest network fetch failed: {e}; trying cache");
-            load_cache_or_baked()
+            load_cache_or_baked()?
+        }
+    };
+    if res.source != Source::Baked {
+        merge_newer_baked_manifests(&mut res.envelope);
+    }
+    Ok(res)
+}
+
+/// Ensure that newly-shipped agents or higher-versioned manifests baked into
+/// this binary are never downgraded or hidden by an older cached/remote
+/// envelope. If the remote envelope has a strictly newer `version` for an
+/// agent (or a brand-new OTA agent), the remote entry is kept.
+pub(crate) fn merge_newer_baked_manifests(envelope: &mut Envelope) {
+    let Ok(baked) = load_baked_envelope() else {
+        return;
+    };
+    for bm in baked.manifests {
+        match envelope.manifests.iter_mut().find(|m| m.id == bm.id) {
+            Some(existing) => {
+                if bm.version > existing.version {
+                    *existing = bm;
+                }
+            }
+            None => {
+                envelope.manifests.push(bm);
+            }
         }
     }
 }

@@ -54,6 +54,7 @@ pub fn api_list(query: &str) -> Response {
                 "tagline_i18n": m.tagline_i18n,
                 "category": m.category,
                 "installed": detect.ok,
+                "on_path": detect.on_path,
                 "detected_version": detect.version,
                 "binary_path": detect.binary_path,
                 "mcp_supported": m.mcp.as_ref().map(|x| x.client_supports_mcp).unwrap_or(false),
@@ -83,6 +84,7 @@ pub fn api_show(id: &str) -> Response {
         "manifest": manifest,
         "detect": {
             "ok": detect.ok,
+            "on_path": detect.on_path,
             "version": detect.version,
             "binary_path": detect.binary_path,
         },
@@ -167,6 +169,38 @@ pub fn api_update_agent(id: &str) -> Response {
     }
 }
 
+pub fn api_repair_path(id: Option<&str>) -> Response {
+    if let Some(agent_id) = id {
+        let manifest = match resolve(agent_id) {
+            Ok(m) => m,
+            Err(r) => return r,
+        };
+        let report = installer::repair_agent_path(&manifest);
+        return Response::ok_json(json!({
+            "ok": true,
+            "id": manifest.id,
+            "report": report,
+            "reports": [report],
+        }));
+    }
+
+    let set = match fetch_manifests() {
+        Ok(s) => s,
+        Err(e) => {
+            return Response::err(503, "Service Unavailable", &format!("manifest fetch: {e}"))
+        }
+    };
+    let manifests: Vec<AgentManifest> = set.for_current_platform().into_iter().cloned().collect();
+    let reports: Vec<_> = installer::repair_all_agents_path(&manifests)
+        .into_iter()
+        .filter(|r| r.binary_path.is_some())
+        .collect();
+    Response::ok_json(json!({
+        "ok": true,
+        "reports": reports,
+    }))
+}
+
 pub fn api_auth(id: &str, body: &[u8]) -> Response {
     let manifest = match resolve(id) {
         Ok(m) => m,
@@ -246,6 +280,7 @@ pub fn api_settings_get(id: &str, query: &str) -> Response {
         "manifest": &manifest,
         "detect": {
             "ok": detect.ok,
+            "on_path": detect.on_path,
             "version": detect.version,
             "binary_path": detect.binary_path,
         },

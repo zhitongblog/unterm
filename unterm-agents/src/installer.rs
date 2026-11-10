@@ -20,6 +20,9 @@ pub struct DetectOutcome {
     pub ok: bool,
     pub version: Option<String>,
     pub binary_path: Option<String>,
+    /// `true` if the resolved binary's directory is already on the current
+    /// `$PATH` AND persisted in the user's shell RC files (when inside `$HOME`).
+    pub on_path: bool,
     pub stderr_sample: Option<String>,
 }
 
@@ -63,9 +66,11 @@ pub fn detect(spec: &DetectSpec) -> DetectOutcome {
             ok: false,
             version: None,
             binary_path: None,
+            on_path: false,
             stderr_sample: None,
         };
     };
+    let on_path = is_bin_on_user_path(&resolved);
 
     // Spawn the resolved absolute path, not just `spec.command`. which()'s
     // fallback may have found the binary in ~/.local/bin (etc.) even when
@@ -87,6 +92,7 @@ pub fn detect(spec: &DetectSpec) -> DetectOutcome {
                 ok: false,
                 version: None,
                 binary_path,
+                on_path,
                 stderr_sample: Some(e.to_string()),
             }
         }
@@ -113,6 +119,7 @@ pub fn detect(spec: &DetectSpec) -> DetectOutcome {
         ok,
         version,
         binary_path,
+        on_path,
         stderr_sample: if stderr.is_empty() {
             None
         } else {
@@ -644,6 +651,121 @@ pub fn ensure_dir_on_user_path_in_home(
     }
 
     updated
+}
+
+/// Check whether `resolved_bin` is already on the current process's `$PATH`
+/// AND (for user-local directories under `$HOME` on Unix) mentioned in at
+/// least one of the user's shell RC files.
+pub fn is_bin_on_user_path(resolved_bin: &str) -> bool {
+    let Some(bin_dir) = std::path::Path::new(resolved_bin).parent() else {
+        return false;
+    };
+    let dir_raw = bin_dir.to_string_lossy();
+    if matches!(
+        dir_raw.as_ref(),
+        "/usr/bin" | "/bin" | "/usr/sbin" | "/sbin"
+    ) {
+        return true;
+    }
+
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    let in_env = std::env::split_paths(&current_path).any(|p| p == bin_dir);
+    if !in_env {
+        return false;
+    }
+
+    #[cfg(unix)]
+    if let Some(home) = dirs_next::home_dir() {
+        if let Ok(rel) = bin_dir.strip_prefix(&home) {
+            if !rel.as_os_str().is_empty() {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let posix_expr = format!("$HOME/{rel_str}");
+                let candidates = [
+                    home.join(".zshrc"),
+                    home.join(".bashrc"),
+                    home.join(".bash_profile"),
+                    home.join(".profile"),
+                    home.join(".config").join("fish").join("config.fish"),
+                ];
+                let any_rc_exists = candidates.iter().any(|p| p.exists());
+                if any_rc_exists {
+                    let mentioned = candidates.iter().any(|rc| {
+                        let Ok(text) = std::fs::read_to_string(rc) else {
+                            return false;
+                        };
+                        text.contains(dir_raw.as_ref())
+                            || text.contains(&posix_expr)
+                            || text.contains(&format!("~/{rel_str}"))
+                            || text.contains(&format!("${{HOME}}/{rel_str}"))
+                    });
+                    if !mentioned {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    true
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PathRepairReport {
+    pub id: String,
+    pub installed: bool,
+    pub binary_path: Option<String>,
+    pub bin_dir: Option<String>,
+    pub on_path_before: bool,
+    pub on_path_after: bool,
+    pub updated_files: Vec<String>,
+}
+
+/// Detect `manifest`'s binary and repair the user's `$PATH` (both in the
+/// current process environment and in `.zshrc` / `.bashrc` / `.bash_profile` /
+/// `config.fish` / Windows `HKCU\Environment\Path`).
+pub fn repair_agent_path(manifest: &AgentManifest) -> PathRepairReport {
+    let before = detect(&manifest.detect);
+    let Some(bin_path) = before.binary_path.clone() else {
+        return PathRepairReport {
+            id: manifest.id.clone(),
+            installed: false,
+            binary_path: None,
+            bin_dir: None,
+            on_path_before: false,
+            on_path_after: false,
+            updated_files: Vec::new(),
+        };
+    };
+
+    let Some(bin_dir) = std::path::Path::new(&bin_path).parent() else {
+        return PathRepairReport {
+            id: manifest.id.clone(),
+            installed: before.ok,
+            binary_path: Some(bin_path),
+            bin_dir: None,
+            on_path_before: before.on_path,
+            on_path_after: before.on_path,
+            updated_files: Vec::new(),
+        };
+    };
+
+    let updated_files = ensure_dir_on_user_path(bin_dir);
+    let on_path_after = is_bin_on_user_path(&bin_path);
+    let bin_dir_str = bin_dir.to_string_lossy().to_string();
+    PathRepairReport {
+        id: manifest.id.clone(),
+        installed: before.ok,
+        binary_path: Some(bin_path),
+        bin_dir: Some(bin_dir_str),
+        on_path_before: before.on_path,
+        on_path_after,
+        updated_files,
+    }
+}
+
+/// Repair `$PATH` for all installed agents in `manifests`.
+pub fn repair_all_agents_path(manifests: &[AgentManifest]) -> Vec<PathRepairReport> {
+    manifests.iter().map(repair_agent_path).collect()
 }
 
 pub fn run_install(manifest: &AgentManifest) -> Result<Vec<StepReport>> {
