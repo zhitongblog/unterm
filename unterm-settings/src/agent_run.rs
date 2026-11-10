@@ -7,7 +7,8 @@
 //! path that `installer::detect` hands back; the caller's own input only ever
 //! reaches the prompt, which is written to the agent's stdin.
 //!
-//! What the caller can decide: which agent, what prompt, and which
+//! What the caller can decide: which agent, what prompt, which workspace
+//! directory it works in, whether it is hosted (asks before tools), and which
 //! task/run/step the events belong to. What it cannot decide: what runs.
 
 use super::server::Response;
@@ -32,6 +33,31 @@ fn headless_args(agent_id: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// Arguments for a *hosted* run: the agent is driven over its host protocol
+/// (unterm-brain's `host` module adds the rest -- Claude's stream-json and
+/// stdio permission prompts, `codex app-server`, `opencode acp`), stdin
+/// stays open for follow-up turns, and every tool that needs permission
+/// comes to the console's inbox instead of being pre-approved or skipped.
+fn hosted_args(agent_id: &str) -> Option<&'static [&'static str]> {
+    match agent_id {
+        "claude-code" => Some(&["-p"]),
+        "codex-cli" => Some(&[]),
+        "opencode" => Some(&[]),
+        _ => None,
+    }
+}
+
+/// The adapter a run of this agent is read with. Said back to the console
+/// so it knows which vocabulary the events came from.
+fn adapter_of(agent_id: &str) -> &'static str {
+    match agent_id {
+        "claude-code" => "claude",
+        "codex-cli" => "codex",
+        "opencode" => "opencode",
+        _ => "generic",
+    }
+}
+
 fn parse_body(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or(Value::Null)
 }
@@ -50,11 +76,16 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
     let Some(prompt) = string_field(&body, "prompt") else {
         return Response::err(400, "Bad Request", "prompt is required");
     };
-    let Some(args) = headless_args(agent_id) else {
+    let hosted = body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
+    let args = if hosted { hosted_args(agent_id) } else { headless_args(agent_id) };
+    let Some(args) = args else {
         return Response::err(
             400,
             "Bad Request",
-            &format!("{agent_id} has no headless mode the console knows how to drive"),
+            &format!(
+                "{agent_id} has no {} mode the console knows how to drive",
+                if hosted { "hosted" } else { "headless" }
+            ),
         );
     };
 
@@ -90,6 +121,18 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
     let mut params = serde_json::Map::new();
     params.insert("command".into(), Value::Array(command));
     params.insert("prompt".into(), json!(prompt));
+    if hosted {
+        params.insert("hosted".into(), json!(true));
+    }
+    // Where the agent works: the workspace the console has open. Only an
+    // existing directory -- it decides where the agent reads and writes, not
+    // what runs, but a typo should fail here rather than at spawn.
+    if let Some(cwd) = string_field(&body, "cwd") {
+        if !std::path::Path::new(cwd).is_dir() {
+            return Response::err(400, "Bad Request", &format!("cwd is not a directory: {cwd}"));
+        }
+        params.insert("cwd".into(), json!(cwd));
+    }
     // Carried onto every event and log line, so the console can thread them
     // back onto the task they belong to.
     for key in ["task_id", "run_id", "step_id", "idempotency_key"] {
@@ -102,7 +145,8 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
     match handler.handle(&ctx, "agent_session.start", &Value::Object(params)) {
         Ok(value) => Response::ok_json(json!({
             "agent": agent_id,
-            "adapter": if agent_id == "claude-code" { "claude" } else { "codex" },
+            "adapter": adapter_of(agent_id),
+            "hosted": hosted,
             "session": value,
         })),
         Err(e) => Response::err(400, "Bad Request", &e.to_string()),
@@ -133,6 +177,57 @@ pub fn api_session_act(handler: &McpHandler, method: &str, body: &[u8]) -> Respo
 
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
     match handler.handle(&ctx, method, &Value::Object(params)) {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(400, "Bad Request", &e.to_string()),
+    }
+}
+
+/// GET /api/agent/approvals — the inbox: every question a hosted session is
+/// waiting on, oldest first, each the `approval.requested` event as
+/// published (tool, arguments, description, turn, task/run/step ids) plus
+/// `session_id` and `adapter`.
+///
+/// A read, so it goes straight to the session layer; answering goes through
+/// the handler below, which audits it.
+pub fn api_approvals() -> Response {
+    Response::ok_json(json!({
+        "approvals": unterm_services::agent_session::pending_requests(),
+    }))
+}
+
+/// The decision fields of a POST /api/agent/decide body, checked. Kept apart
+/// from the handler call so the checks can be tested without a session.
+fn decide_params(body: &Value) -> Result<serde_json::Map<String, Value>, &'static str> {
+    let session_id = string_field(body, "session_id").ok_or("session_id is required")?;
+    let request_id = string_field(body, "request_id").ok_or("request_id is required")?;
+    let allow = body
+        .get("allow")
+        .and_then(Value::as_bool)
+        .ok_or("allow is required: true or false, never assumed")?;
+    let mut params = serde_json::Map::new();
+    params.insert("session_id".into(), json!(session_id));
+    params.insert("request_id".into(), json!(request_id));
+    params.insert("allow".into(), json!(allow));
+    if !allow {
+        if let Some(message) = string_field(body, "message") {
+            params.insert("message".into(), json!(message));
+        }
+        if let Some(interrupt) = body.get("interrupt").and_then(Value::as_bool) {
+            params.insert("interrupt".into(), json!(interrupt));
+        }
+    }
+    Ok(params)
+}
+
+/// POST /api/agent/decide — answer one question: `allow`, or deny with an
+/// optional `message` and `interrupt` (also stop the turn).
+pub fn api_decide(handler: &McpHandler, body: &[u8]) -> Response {
+    let params = match decide_params(&parse_body(body)) {
+        Ok(params) => params,
+        Err(problem) => return Response::err(400, "Bad Request", problem),
+    };
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    match handler.handle(&ctx, "agent_session.decide", &Value::Object(params)) {
         Ok(value) => Response::ok_json(value),
         Err(e) => Response::err(400, "Bad Request", &e.to_string()),
     }
@@ -172,6 +267,37 @@ mod tests {
         let empty = parse_body(br#"{"agent":"","prompt":""}"#);
         assert!(string_field(&empty, "agent").is_none());
         assert!(string_field(&empty, "prompt").is_none());
+    }
+
+    #[test]
+    fn hosted_runs_are_offered_only_for_agents_with_a_host_protocol() {
+        for agent in ["claude-code", "codex-cli", "opencode"] {
+            assert!(hosted_args(agent).is_some(), "{agent}");
+            let adapter = adapter_of(agent);
+            assert!(
+                unterm_brain::host::host_for(adapter).is_some(),
+                "{agent} is offered hosted, so {adapter} must have a host protocol"
+            );
+        }
+        assert!(hosted_args("gemini-cli").is_none());
+        assert!(hosted_args("aider").is_none());
+    }
+
+    #[test]
+    fn a_decision_must_say_allow_or_deny_and_whom_it_answers() {
+        let ok = decide_params(&json!({"session_id": "ags_1", "request_id": "0", "allow": false,
+                                        "message": "not here", "interrupt": true}))
+        .unwrap();
+        assert_eq!(Value::Object(ok), json!({"session_id": "ags_1", "request_id": "0", "allow": false,
+                                              "message": "not here", "interrupt": true}));
+        // Allowing carries nothing else: no message, no interrupt.
+        let allow = decide_params(&json!({"session_id": "a", "request_id": "r", "allow": true, "interrupt": true})).unwrap();
+        assert!(allow.get("interrupt").is_none());
+        // A missing allow is refused, never read as yes.
+        assert!(decide_params(&json!({"session_id": "a", "request_id": "r"})).is_err());
+        assert!(decide_params(&json!({"session_id": "a", "request_id": "r", "allow": "yes"})).is_err());
+        assert!(decide_params(&json!({"request_id": "r", "allow": true})).is_err());
+        assert!(decide_params(&json!({"session_id": "a", "allow": true})).is_err());
     }
 
     #[test]

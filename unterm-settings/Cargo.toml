@@ -36,4 +36,5 @@ unterm-services.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+unterm-brain.workspace = true
 tempfile.workspace = true

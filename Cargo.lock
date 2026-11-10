@@ -6428,6 +6428,7 @@ dependencies = [
  "socket2 0.5.10",
  "tempfile",
  "unterm-agents",
+ "unterm-brain",
  "unterm-engine",
  "unterm-mcp",
  "unterm-profile",

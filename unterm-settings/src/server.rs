@@ -502,6 +502,9 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/agent/close") => {
             super::agent_run::api_session_act(handler, "agent_session.close", &req.body)
         }
+        // The inbox: open permission questions of hosted runs, and answers.
+        ("GET", "/api/agent/approvals") => super::agent_run::api_approvals(),
+        ("POST", "/api/agent/decide") => super::agent_run::api_decide(handler, &req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),

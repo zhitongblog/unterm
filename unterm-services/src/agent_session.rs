@@ -712,6 +712,39 @@ fn resolution(request_id: &str, decision: &Decision, decided_by: &str) -> Value 
 }
 
 /// Approvals still waiting, for a caller that reconnected and lost track.
+/// Every question a live session is waiting on, across all sessions: the
+/// inbox.
+///
+/// Each entry is the `approval.requested` event as it was published -- the
+/// tool, its arguments, the description, the turn and the caller's ids (task,
+/// run, step) -- plus the session's adapter. Oldest first, so the inbox reads
+/// in the order the questions were asked.
+pub fn pending_requests() -> Vec<Value> {
+    let sessions = sessions().lock().unwrap();
+    let mut out: Vec<Value> = Vec::new();
+    for (id, live) in sessions.iter() {
+        let pending: Vec<String> = live.pending.lock().unwrap().keys().cloned().collect();
+        if pending.is_empty() {
+            continue;
+        }
+        let events = live.events.lock().unwrap();
+        for request_id in pending {
+            // The latest asking of it: a request id is the CLI's, and a CLI
+            // that restarts its numbering would otherwise surface an old one.
+            if let Some(asked) = events.iter().rev().find(|event| {
+                event["event"] == "approval.requested" && event["approval"]["request_id"] == request_id.as_str()
+            }) {
+                let mut entry = asked.clone();
+                entry["session_id"] = json!(id);
+                entry["adapter"] = json!(live.adapter);
+                out.push(entry);
+            }
+        }
+    }
+    out.sort_by(|a, b| a["at"].as_str().cmp(&b["at"].as_str()));
+    out
+}
+
 pub fn pending_approvals(id: &str) -> Result<Vec<String>> {
     let sessions = sessions().lock().unwrap();
     let live = sessions
@@ -840,6 +873,18 @@ pub fn close(id: &str) -> Result<Value> {
             )),
         ),
         Some(StopReason::Error) => ("failed", runtime::Running::failure_reason(&snapshot)),
+        // The last turn was stopped by an answer -- deny with interrupt --
+        // and the session closed after it. Claude exits 1 when its last
+        // result was an interrupted turn (live, through the console's inbox:
+        // a session closed cleanly after "reject and stop" read `failed`).
+        // Nothing failed; the code is said, not taken as the verdict.
+        Some(StopReason::Interrupted) if host.is_some() && snapshot.exit_code.unwrap_or(0) != 0 => (
+            "exited",
+            Some(format!(
+                "the last turn was stopped by a refusal; the agent exits {} after an interrupted turn",
+                snapshot.exit_code.map(|c| c.to_string()).unwrap_or_default()
+            )),
+        ),
         _ if snapshot.exit_code.unwrap_or(0) != 0 => (
             "failed",
             runtime::Running::failure_reason(&snapshot).or_else(|| {
@@ -1538,6 +1583,41 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"i
         close(&id).unwrap();
     }
 
+    /// Claude after "deny + interrupt": it reports the interruption, ends the
+    /// turn with `error_during_execution`, and exits 1 when its input ends.
+    const HOSTED_CLAUDE_STOPPED: &str = r#"
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+read -r prompt
+printf '%s\n' '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo hi > out.txt"}}}'
+read -r reply
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}'
+printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{"input_tokens":1,"output_tokens":1}}'
+read -r rest || exit 1
+"#;
+
+    #[test]
+    fn a_session_closed_after_a_stopped_turn_finished_rather_than_failed() {
+        let _dir = isolate();
+        let id = start_hosted(
+            &a_codex_like_agent(HOSTED_CLAUDE_STOPPED),
+            None,
+            &[],
+            Some("write the file"),
+            Some("claude"),
+            TaskContext::default(),
+        )
+        .unwrap();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        decide(&id, "r1", false, Some("no"), true).unwrap();
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        let done = events.iter().find(|e| e["event"] == "turn.completed").unwrap();
+        assert_eq!(done["state"], "interrupted", "{events:#?}");
+        let ending = close(&id).unwrap();
+        assert_eq!(ending["exit_code"], 1, "{ending}");
+        assert_eq!(ending["state"], "finished", "{ending}");
+        assert!(ending["reason"].as_str().unwrap().contains("stopped by a refusal"), "{ending}");
+    }
+
     #[test]
     fn closing_with_a_question_open_denies_it_instead_of_hanging() {
         let _dir = isolate();
@@ -1658,6 +1738,35 @@ read -r rest || exit 0
         let ending = close(&id).unwrap();
         assert_eq!(ending["state"], "interrupted", "{ending}");
         assert!(ending["reason"].as_str().unwrap().contains("1 unanswered"), "{ending}");
+    }
+
+    #[test]
+    fn the_inbox_lists_every_open_question_with_what_it_asks() {
+        let _dir = isolate();
+        let context = TaskContext { task_id: Some("task_inbox".into()), ..TaskContext::default() };
+        let id = start_hosted(
+            &a_codex_like_agent(HOSTED_CLAUDE),
+            None,
+            &[],
+            Some("write the file"),
+            Some("claude"),
+            context,
+        )
+        .unwrap();
+        wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        let inbox: Vec<Value> = pending_requests().into_iter().filter(|e| e["session_id"] == id.as_str()).collect();
+        assert_eq!(inbox.len(), 1, "{inbox:#?}");
+        let asked = &inbox[0];
+        assert_eq!(asked["approval"]["request_id"], "r1");
+        assert_eq!(asked["approval"]["tool_call"]["tool"], "Bash");
+        assert_eq!(asked["approval"]["tool_call"]["arguments"]["command"], "echo hi > out.txt");
+        assert_eq!(asked["adapter"], "claude");
+        assert_eq!(asked["task_id"], "task_inbox", "the caller's ids come along: {asked}");
+
+        // Answered: gone from the inbox.
+        decide(&id, "r1", true, None, false).unwrap();
+        assert!(pending_requests().iter().all(|e| e["session_id"] != id.as_str()));
+        close(&id).unwrap();
     }
 
     #[test]
