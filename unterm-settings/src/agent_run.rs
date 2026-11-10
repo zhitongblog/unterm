@@ -151,60 +151,72 @@ fn string_field<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
 
 /// POST /api/agent/start — run one agent against one prompt.
 pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
-    let body = parse_body(body);
+    match start_session(handler, &parse_body(body)) {
+        Ok(value) => Response::ok_json(value),
+        Err((code, reason, message)) => Response::err(code, reason, &message),
+    }
+}
 
-    let Some(agent_id) = string_field(&body, "agent") else {
-        return Response::err(400, "Bad Request", "agent is required");
+/// Why a start was refused: status code, reason phrase, message.
+pub(crate) type StartError = (u16, &'static str, String);
+
+/// Start a session from a start body (`agent`, `prompt`, `hosted`,
+/// `governed`, `cwd`, ids). The one path both `/api/agent/start` and the
+/// console's task runner take, so a task the runtime starts on its own is
+/// started exactly as one the console asked for.
+pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value, StartError> {
+    let Some(agent_id) = string_field(body, "agent") else {
+        return Err((400, "Bad Request", "agent is required".to_string()));
     };
-    let Some(prompt) = string_field(&body, "prompt") else {
-        return Response::err(400, "Bad Request", "prompt is required");
+    let Some(prompt) = string_field(body, "prompt") else {
+        return Err((400, "Bad Request", "prompt is required".to_string()));
     };
     let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
     let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
     let governed_args = if governed {
         match governed_args(agent_id) {
             Ok(args) => Some(args),
-            Err(why) => return Response::err(400, "Bad Request", &why),
+            Err(why) => return Err((400, "Bad Request", why.to_string())),
         }
     } else {
         None
     };
     let args = if hosted { hosted_args(agent_id) } else { headless_args(agent_id) };
     let Some(args) = args else {
-        return Response::err(
+        return Err((
             400,
             "Bad Request",
-            &format!(
+            format!(
                 "{agent_id} has no {} mode the console knows how to drive",
                 if hosted { "hosted" } else { "headless" }
             ),
-        );
+        ));
     };
 
     let set = match fetch_manifests() {
         Ok(set) => set,
-        Err(e) => return Response::err(503, "Service Unavailable", &format!("manifest fetch: {e}")),
+        Err(e) => return Err((503, "Service Unavailable", format!("manifest fetch: {e}"))),
     };
     let Some(manifest) = set
         .for_current_platform()
         .into_iter()
         .find(|m| m.id == agent_id)
     else {
-        return Response::err(404, "Not Found", &format!("no agent named {agent_id}"));
+        return Err((404, "Not Found", format!("no agent named {agent_id}")));
     };
 
     // Resolve once, here: on Windows the binary is a .cmd shim that a bare
     // name does not spawn, and the detected path is already absolute.
     let detected = installer::detect(&manifest.detect);
     if !detected.ok {
-        return Response::err(
+        return Err((
             503,
             "Service Unavailable",
-            &format!("{} is not installed on this machine", manifest.name),
-        );
+            format!("{} is not installed on this machine", manifest.name),
+        ));
     }
     let Some(binary) = detected.binary_path else {
-        return Response::err(503, "Service Unavailable", "the agent has no resolved path");
+        return Err((503, "Service Unavailable", "the agent has no resolved path".to_string()));
     };
 
     let mut command = vec![json!(binary)];
@@ -225,30 +237,30 @@ pub fn api_start(handler: &McpHandler, body: &[u8]) -> Response {
     // Where the agent works: the workspace the console has open. Only an
     // existing directory -- it decides where the agent reads and writes, not
     // what runs, but a typo should fail here rather than at spawn.
-    if let Some(cwd) = string_field(&body, "cwd") {
+    if let Some(cwd) = string_field(body, "cwd") {
         if !std::path::Path::new(cwd).is_dir() {
-            return Response::err(400, "Bad Request", &format!("cwd is not a directory: {cwd}"));
+            return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
         }
         params.insert("cwd".into(), json!(cwd));
     }
     // Carried onto every event and log line, so the console can thread them
     // back onto the task they belong to.
     for key in ["task_id", "run_id", "step_id", "idempotency_key"] {
-        if let Some(value) = string_field(&body, key) {
+        if let Some(value) = string_field(body, key) {
             params.insert(key.into(), json!(value));
         }
     }
 
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
     match handler.handle(&ctx, "agent_session.start", &Value::Object(params)) {
-        Ok(value) => Response::ok_json(json!({
+        Ok(value) => Ok(json!({
             "agent": agent_id,
             "adapter": adapter_of(agent_id),
             "hosted": hosted,
             "governed": governed,
             "session": value,
         })),
-        Err(e) => Response::err(400, "Bad Request", &e.to_string()),
+        Err(e) => Err((400, "Bad Request", e.to_string())),
     }
 }
 

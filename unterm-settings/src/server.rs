@@ -51,6 +51,8 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     }
 
     let handler = Arc::new(McpHandler::new());
+    // Console tasks run on schedule whether or not a console page is open.
+    crate::console_tasks::start_scheduler(Arc::clone(&handler));
     if crate::remote::load_or_init_config().enabled {
         crate::remote::ensure_remote_server_started(Arc::clone(&handler));
     }
@@ -510,6 +512,13 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/agent/policy") => super::agent_run::api_policy_list(),
         ("POST", "/api/agent/policy") => super::agent_run::api_policy_add(&req.body),
         ("POST", "/api/agent/policy/remove") => super::agent_run::api_policy_remove(&req.body),
+        ("GET", "/api/console/tasks") => super::console_tasks::api_list(),
+        ("POST", "/api/console/tasks/put") => super::console_tasks::api_put(&req.body),
+        ("POST", "/api/console/tasks/delete") => super::console_tasks::api_delete(&req.body),
+        ("POST", "/api/console/tasks/run") => super::console_tasks::api_run(handler, &req.body),
+        ("POST", "/api/console/tasks/stop") => super::console_tasks::api_stop(&req.body),
+        ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
+        ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),
