@@ -34,6 +34,15 @@ fn id_key(id: &Value) -> String {
     }
 }
 
+/// A tool call's input: `rawInput` (the ACP field), else agy's `args`.
+fn input_of(call: &Value) -> Value {
+    call.get("rawInput")
+        .or_else(|| call.get("args"))
+        .filter(|input| !input.is_null())
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 /// Reads an ACP agent's stdout.
 pub struct AcpAdapter {
     id: &'static str,
@@ -109,11 +118,14 @@ impl AcpAdapter {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let name = update["title"]
+                // agy names the tool (`run_command`) and makes `title` a
+                // description; OpenCode puts the name in `title` (`bash`).
+                let name = update["name"]
                     .as_str()
+                    .or(update["title"].as_str())
                     .or(update["kind"].as_str())
                     .unwrap_or("tool");
-                let arguments = update.get("rawInput").cloned().unwrap_or(Value::Null);
+                let arguments = input_of(update);
                 self.calls
                     .insert(call_id.clone(), (name.to_string(), arguments));
                 if matches!(
@@ -132,14 +144,15 @@ impl AcpAdapter {
                     .to_string();
                 let entry = self.calls.entry(call_id.clone()).or_insert_with(|| {
                     (
-                        update["kind"].as_str().unwrap_or("tool").to_string(),
+                        update["name"].as_str().or(update["kind"].as_str()).unwrap_or("tool").to_string(),
                         Value::Null,
                     )
                 });
                 // The name stays what `tool_call` called it (live: `bash`);
                 // later titles are descriptions (`echo hi > out.txt`).
-                if let Some(input) = update.get("rawInput") {
-                    entry.1 = input.clone();
+                let input = input_of(update);
+                if !input.is_null() {
+                    entry.1 = input;
                 }
                 if matches!(
                     update["status"].as_str(),
@@ -240,10 +253,10 @@ impl BrainAdapter for AcpAdapter {
                 self.start_turn(&mut out);
                 let call = &message["params"]["toolCall"];
                 let call_id = call["toolCallId"].as_str().unwrap_or_default().to_string();
-                let input = call.get("rawInput").cloned().unwrap_or(Value::Null);
+                let input = input_of(call);
                 let entry = self.calls.entry(call_id.clone()).or_insert_with(|| {
                     (
-                        call["kind"].as_str().unwrap_or("tool").to_string(),
+                        call["name"].as_str().or(call["kind"].as_str()).unwrap_or("tool").to_string(),
                         Value::Null,
                     )
                 });
@@ -266,6 +279,8 @@ impl BrainAdapter for AcpAdapter {
                         .as_array()
                         .and_then(|options| options.iter().find(|o| o["category"] == "model"))
                         .and_then(|option| option["currentValue"].as_str())
+                        // agy: `models.currentModelId`.
+                        .or(result["models"]["currentModelId"].as_str())
                     {
                         self.model = Some(model.to_string());
                     }
@@ -351,6 +366,19 @@ impl AcpHost {
         }
     }
 
+    /// `agy acp`: Google's agent CLI (Antigravity). It asks before running
+    /// a command by default, so nothing needs setting. Verified against
+    /// agy 1.5.3.
+    pub fn agy() -> Self {
+        Self {
+            id: "agy",
+            subcommand: Some("acp"),
+            flag: None,
+            env: Vec::new(),
+            state: Mutex::new(HostState::default()),
+        }
+    }
+
     fn request(state: &mut HostState, method: &str, params: Value) -> String {
         state.next_id += 1;
         json!({"jsonrpc": "2.0", "id": state.next_id, "method": method, "params": params})
@@ -385,29 +413,10 @@ impl HostProtocol for AcpHost {
     /// its flags belong to `run`, and guessing which of them `acp` accepts
     /// would launch something other than what was asked for.
     fn hosted_command(&self, command: &[String]) -> anyhow::Result<Vec<String>> {
-        let mut out = command.to_vec();
-        if let Some(sub) = self.subcommand {
-            if out.iter().any(|word| word == sub) {
-                return Ok(out);
-            }
-            // A command that never names the CLI is the caller's own
-            // launcher (a wrapper script): it is taken as already in ACP mode.
-            let Some(program) = out
-                .iter()
-                .position(|word| crate::host::program_name(word) == self.id)
-            else {
-                return Ok(out);
-            };
-            if let Some(next) = out.get(program + 1).filter(|word| !word.starts_with('-')) {
-                anyhow::bail!(
-                    "a hosted {} session runs `{} {sub}`, not `{} {next}`: pass the command without `{next}`",
-                    self.id,
-                    self.id,
-                    self.id
-                );
-            }
-            out.insert(program + 1, sub.to_string());
-        }
+        let mut out = match self.subcommand {
+            Some(sub) => crate::host::with_subcommand(command, self.id, sub)?,
+            None => command.to_vec(),
+        };
         if let Some(flag) = self.flag {
             if !out.iter().any(|word| word == flag) {
                 out.push(flag.to_string());
@@ -662,6 +671,44 @@ mod tests {
             })
         );
         assert!(run(&["INFO some log line", ""]).is_empty());
+    }
+
+    #[test]
+    fn a_live_agy_turn_reads_with_its_names_and_model() {
+        // agy 1.5.3 over `agy acp` (trimmed): the tool is `name`, the
+        // request id a string, the model under `models`.
+        let events = run(&[
+            r#"{"jsonrpc":"2.0","result":{"sessionId":"c2aa","models":{"currentModelId":"gemini-4-argon-medium"}},"id":2}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"run it"}}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"call_17","name":"run_command","args":{"CommandLine":"echo hi > out.txt"},"status":"in_progress","kind":"execute","title":"Write hi to out.txt"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"session/request_permission","params":{"toolCall":{"toolCallId":"call_17","name":"run_command","args":{"CommandLine":"echo hi > out.txt"},"status":"pending","kind":"execute","title":"Write hi to out.txt"},"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}]},"id":"1"}"#,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"call_17","name":"run_command","status":"completed","kind":"execute"}}}"#,
+            r#"{"jsonrpc":"2.0","result":{"stopReason":"end_turn","usage":{"inputTokens":9696,"outputTokens":55,"cachedReadTokens":5447,"cachedWriteTokens":0,"totalTokens":15198}},"id":3}"#,
+        ]);
+        let args = json!({"CommandLine": "echo hi > out.txt"});
+        assert_eq!(
+            events,
+            vec![
+                BrainEvent::TurnStarted { model: Some("gemini-4-argon-medium".into()) },
+                BrainEvent::ToolRequested { call_id: "call_17".into(), name: "run_command".into(), arguments: args.clone() },
+                BrainEvent::PermissionRequested {
+                    request_id: "1".into(),
+                    tool: "run_command".into(),
+                    input: args,
+                    description: Some("Write hi to out.txt".into()),
+                },
+                BrainEvent::ToolResult { call_id: "call_17".into(), ok: true, output: None },
+                BrainEvent::Usage(Usage { input_tokens: 9696, output_tokens: 55, cached_input_tokens: 5447 }),
+                BrainEvent::TurnEnded { reason: StopReason::Completed },
+            ]
+        );
+        let host = AcpHost::agy();
+        host.observe(r#"{"jsonrpc":"2.0","method":"session/request_permission","params":{"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}]},"id":"1"}"#);
+        let reply: Value = serde_json::from_str(&host.permission_reply("1", &Decision::Allow, &Value::Null)[0]).unwrap();
+        assert_eq!(reply, json!({"jsonrpc": "2.0", "id": "1", "result": {"outcome": {"outcome": "selected", "optionId": "allow"}}}));
+        let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(host.hosted_command(&words(&["agy"])).unwrap(), words(&["agy", "acp"]));
+        assert!(host.hosted_env().is_empty(), "agy asks by default");
     }
 
     fn parsed(lines: Vec<String>) -> Vec<Value> {

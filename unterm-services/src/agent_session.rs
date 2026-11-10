@@ -360,7 +360,7 @@ fn start_with(
     let host: Option<Arc<dyn HostProtocol>> = if hosted {
         Some(Arc::from(host::host_for(adapter_id).ok_or_else(|| {
             anyhow!(
-                "{adapter_id} cannot be driven: no host protocol (hosted sessions support claude and opencode)"
+                "{adapter_id} cannot be driven: no host protocol (hosted sessions support claude, codex, opencode and agy)"
             )
         })?))
     } else {
@@ -1663,7 +1663,7 @@ read -r rest || exit 0
     #[test]
     fn only_a_cli_with_a_host_protocol_can_be_driven() {
         let _dir = isolate();
-        let err = start_hosted(&a_codex_like_agent("true"), None, &[], None, Some("codex"), TaskContext::default())
+        let err = start_hosted(&a_codex_like_agent("true"), None, &[], None, Some("generic"), TaskContext::default())
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot be driven"), "{err}");

@@ -22,6 +22,7 @@
 
 pub mod acp;
 pub mod adapters;
+pub mod codex_app;
 pub mod health;
 pub mod host;
 pub mod sdk;

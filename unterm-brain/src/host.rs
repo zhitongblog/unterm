@@ -135,6 +135,8 @@ pub fn host_for(adapter: &str) -> Option<Box<dyn HostProtocol>> {
     match adapter {
         "claude" => Some(Box::new(ClaudeHost)),
         "opencode" => Some(Box::new(crate::acp::AcpHost::opencode())),
+        "codex" => Some(Box::new(crate::codex_app::CodexAppHost::new())),
+        "agy" => Some(Box::new(crate::acp::AcpHost::agy())),
         _ => None,
     }
 }
@@ -155,6 +157,32 @@ pub fn program_name(word: &str) -> String {
         }
     }
     base
+}
+
+/// `command` with `sub` right after the program `program` (`opencode` ->
+/// `opencode acp`, `cmd /c codex` -> `cmd /c codex app-server`).
+///
+/// Left alone when it already names `sub`, or when it never names the
+/// program at all -- then it is the caller's own launcher (a wrapper script),
+/// taken as already in that mode. Another subcommand there (`opencode run`,
+/// `codex exec`) is an error rather than a rewrite: its flags belong to it,
+/// and guessing which of them `sub` accepts would launch something other
+/// than what was asked for.
+pub fn with_subcommand(command: &[String], program: &str, sub: &str) -> anyhow::Result<Vec<String>> {
+    let mut out = command.to_vec();
+    if out.iter().any(|word| word == sub) {
+        return Ok(out);
+    }
+    let Some(at) = out.iter().position(|word| program_name(word) == program) else {
+        return Ok(out);
+    };
+    if let Some(next) = out.get(at + 1).filter(|word| !word.starts_with('-')) {
+        anyhow::bail!(
+            "a hosted {program} session runs `{program} {sub}`, not `{program} {next}`: pass the command without `{next}`"
+        );
+    }
+    out.insert(at + 1, sub.to_string());
+    Ok(out)
 }
 
 fn with_args(command: &[String], wanted: &[&str]) -> Vec<String> {
@@ -244,7 +272,9 @@ mod tests {
     fn only_clis_with_a_host_protocol_get_one() {
         assert!(host_for("claude").is_some());
         assert!(host_for("opencode").is_some());
-        for other in ["codex", "gemini", "agy", "generic"] {
+        assert!(host_for("codex").is_some());
+        assert!(host_for("agy").is_some());
+        for other in ["gemini", "generic"] {
             assert!(host_for(other).is_none(), "{other}");
         }
     }

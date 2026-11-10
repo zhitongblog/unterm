@@ -2,12 +2,12 @@
 unterm's real product path (unterm-core --headless + unterm-cli mcp-stdio).
 
 Agents: `claude` (default; needs a logged-in claude, spends a few cents of
-haiku) or `opencode` (ACP over `opencode acp`, on OpenCode's free model).
+haiku), `codex` (`codex app-server`, signed in) `agy` (ACP over `agy acp`, signed in) or `opencode` (ACP over `opencode acp`, on OpenCode's free model).
 Run against an isolated Core:
 
     export UNTERM_STATE_DIR=$(mktemp -d)
     target/debug/unterm-core --headless &
-    python -I tests/e2e_hosted_agent_session.py target/debug/unterm-cli <workdir> <logfile> [claude|opencode]
+    python -I tests/e2e_hosted_agent_session.py target/debug/unterm-cli <workdir> <logfile> [claude|codex|opencode|agy]
 
 usage: python -I e2e_hosted_agent_session.py <unterm-cli> <workdir> <logfile> [agent]
 
@@ -29,8 +29,14 @@ elif agent == "opencode":
     # `opencode` into `opencode acp` and sets its tools to ask.
     COMMAND = (["cmd", "/c", "opencode"] if os.name == "nt" else ["opencode"])
     ENV = {"OPENCODE_CONFIG_CONTENT": json.dumps({"model": "opencode/deepseek-v4.1-flash-free"})}
+elif agent == "codex":
+    # unterm turns `codex` into `codex app-server` (approval policy untrusted).
+    COMMAND, ENV = (["cmd", "/c", "codex"] if os.name == "nt" else ["codex"]), {}
+elif agent == "agy":
+    # unterm turns `agy` into `agy acp`; agy asks before commands by default.
+    COMMAND, ENV = ["agy"], {}
 else:
-    sys.exit(f"unknown agent {agent!r}: claude or opencode")
+    sys.exit(f"unknown agent {agent!r}: claude, codex, opencode or agy")
 log = open(logfile, "w", encoding="utf-8")
 
 def note(*parts):
