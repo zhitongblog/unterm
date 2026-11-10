@@ -323,8 +323,8 @@ impl McpHost for AppMcpHost {
             log::warn!("could not record the instance title: {err:#}");
         }
         let title = match pinned {
-            Some(title) => format!("{title} — Unterm"),
-            None => "Unterm".to_string(),
+            Some(title) => format!("{title} — {}", unterm_protocol::product_name()),
+            None => unterm_protocol::product_name(),
         };
         window.set_title(&title);
         note_window_title(id, &title);

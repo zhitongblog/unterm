@@ -129,6 +129,18 @@ fn protocol_major(version: &str) -> Option<&str> {
 ///
 /// `UNTERM_STATE_DIR` overrides both, which is exactly why the divergence
 /// stayed hidden: every test that set it saw the two agree.
+/// The product name a window shows (its title bar, the window title an agent
+/// reads back). `Unterm`, unless the host that launched it says otherwise
+/// with `UNTERM_PRODUCT_NAME` -- an application that ships this terminal as
+/// one of its own features names its windows after itself.
+pub fn product_name() -> String {
+    std::env::var("UNTERM_PRODUCT_NAME")
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
+        .unwrap_or_else(|| "Unterm".to_string())
+}
+
 pub fn core_state_dir() -> Option<std::path::PathBuf> {
     if let Ok(dir) = std::env::var("UNTERM_STATE_DIR") {
         if !dir.is_empty() {
@@ -160,6 +172,20 @@ pub fn state_path(name: impl AsRef<std::path::Path>) -> Option<std::path::PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_host_can_name_the_windows_after_itself() {
+        std::env::remove_var("UNTERM_PRODUCT_NAME");
+        assert_eq!(product_name(), "Unterm");
+        std::env::set_var("UNTERM_PRODUCT_NAME", "  Unzoo One ");
+        assert_eq!(product_name(), "Unzoo One");
+        // Nothing that could break a title bar or impersonate a long string.
+        std::env::set_var("UNTERM_PRODUCT_NAME", "bad\nname");
+        assert_eq!(product_name(), "Unterm");
+        std::env::set_var("UNTERM_PRODUCT_NAME", "x".repeat(65));
+        assert_eq!(product_name(), "Unterm");
+        std::env::remove_var("UNTERM_PRODUCT_NAME");
+    }
 
     /// The Core's record and the user state directory are two places.
     ///
