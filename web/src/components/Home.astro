@@ -129,6 +129,11 @@ unterm-cli agent inbox`;
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
         <span>{t("hero.cta.download")}</span>
       </a>
+      <a href={`/api/download?v=${release.tag}&mirror=atomgit`}
+         class="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-notion-surface hover:bg-notion-sunken border border-notion-green/40 hover:border-notion-teal text-notion-teal font-medium transition">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+        <span>{isZhCN ? "🇨🇳 国内高速直链下载" : "🇨🇳 China Mirror Download"}</span>
+      </a>
       <a href="https://github.com/zhitongblog/unterm" target="_blank" rel="noopener"
          class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-notion-surface hover:bg-notion-sunken border border-notion-border hover:border-notion-borderStrong text-notion-ink font-medium transition">
         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.8 10.9.6.1.8-.2.8-.6V20c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.7.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.4-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2.9-.3 2-.4 3-.4s2.1.1 3 .4c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.9 1.2 3.2 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
@@ -145,7 +150,7 @@ unterm-cli agent inbox`;
       )}
       {t("home.hero.free")}
       <span class="text-zinc-700 mx-1.5">·</span><a href={pathPrefix + "/#install"} class="hover:text-notion-ink underline decoration-dotted underline-offset-4">{t("hero.cta.other")}</a>
-      <span class="text-zinc-700 mx-1.5">·</span><a href={release.atomgitReleaseUrl} target="_blank" rel="noopener" class="text-notion-teal hover:underline">{t("install.atomgit_mirror")}</a>
+      <span class="text-zinc-700 mx-1.5">·</span><a href={`/api/download?v=${release.tag}&mirror=atomgit`} class="text-notion-teal hover:underline">{t("install.atomgit_mirror")}</a>
     </p>
   </div>
   <div class="relative max-w-6xl mx-auto px-4 sm:px-6 pb-20">
@@ -332,13 +337,17 @@ unterm-cli agent inbox`;
         <div class="ml-auto text-xs text-notion-faint self-center pr-4 hidden sm:block">{t("install.copy_hint")}</div>
       </div>
       <div class="install-pane" data-pane="unix">
-        <pre class="font-mono text-sm text-notion-ink px-5 py-5 overflow-x-auto"><code>curl -fsSL https://unterm.app/install.sh | sh</code></pre>
+        <pre class="font-mono text-sm text-notion-ink px-5 py-4 overflow-x-auto"><code>curl -fsSL https://unterm.app/install.sh | sh</code></pre>
+        <p class="text-xs text-notion-teal px-5">{isZhCN ? "🇨🇳 中国大陆高速镜像一键安装（AtomGit CDN）：" : "🇨🇳 Mainland China mirror one-liner (AtomGit CDN):"}</p>
+        <pre class="font-mono text-sm text-notion-ink px-5 pt-1.5 pb-4 overflow-x-auto"><code>curl -fsSL https://unterm.app/install.sh | sh -s -- --cn</code></pre>
         <p class="text-xs text-notion-faint px-5 pb-4" set:html={t("install.unix_detail")}></p>
         <p class="text-xs text-notion-muted px-5">{t("install.via_brew")}</p>
         <pre class="font-mono text-sm text-notion-ink px-5 pt-2 pb-5 overflow-x-auto"><code>brew install --cask zhitongblog/tap/unterm</code></pre>
       </div>
       <div class="install-pane hidden" data-pane="win">
-        <pre class="font-mono text-sm text-notion-ink px-5 py-5 overflow-x-auto"><code>irm https://unterm.app/install.ps1 | iex</code></pre>
+        <pre class="font-mono text-sm text-notion-ink px-5 py-4 overflow-x-auto"><code>irm https://unterm.app/install.ps1 | iex</code></pre>
+        <p class="text-xs text-notion-teal px-5">{isZhCN ? "🇨🇳 中国大陆高速镜像一键安装（AtomGit CDN）：" : "🇨🇳 Mainland China mirror one-liner (AtomGit CDN):"}</p>
+        <pre class="font-mono text-sm text-notion-ink px-5 pt-1.5 pb-4 overflow-x-auto"><code>$env:UNTERM_MIRROR='atomgit'; irm https://unterm.app/install.ps1 | iex</code></pre>
         <p class="text-xs text-notion-faint px-5 pb-4" set:html={t("install.win_detail")}></p>
         <p class="text-xs text-notion-muted px-5">{t("install.via_scoop")}</p>
         <pre class="font-mono text-sm text-notion-ink px-5 pt-2 pb-5 overflow-x-auto"><code>scoop bucket add zhitongblog https://github.com/zhitongblog/scoop-bucket; scoop install unterm</code></pre>
@@ -350,30 +359,32 @@ unterm-cli agent inbox`;
         <div class="flex items-center justify-between"><div class="font-semibold">{t("install.macos.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.macos.size")}</span></div>
         <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.macos.detail")}</div>
         <div class="mt-3 flex flex-wrap gap-2 text-xs font-mono">
-          <a href={u.dmg} data-cn-href={cu.dmg} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.dmg →</a>
-          <a href={isZhCN ? gu.dmg : cu.dmg} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "GitHub .dmg" : "AtomGit (CN) .dmg"}</a>
+          <a href={cu.dmg} class="px-2.5 py-1 rounded-md bg-notion-green/15 hover:bg-notion-green/25 text-notion-teal border border-notion-green/30">{isZhCN ? "🇨🇳 国内高速 .dmg" : "🇨🇳 CN Mirror .dmg"}</a>
+          <a href={gu.dmg} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">GitHub .dmg</a>
         </div>
       </div>
       <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5 flex flex-col">
         <div class="flex items-center justify-between"><div class="font-semibold">{t("install.windows.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.windows.size")}</span></div>
         <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.windows.detail")}</div>
         <div class="mt-3 flex flex-wrap gap-2 text-xs font-mono">
-          <a href={u.msi} data-cn-href={cu.msi} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.msi x64</a>
-          <a href={u.msiArm} data-cn-href={cu.msiArm} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.msi arm64</a>
-          <a href={u.winZip} data-cn-href={cu.winZip} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">.zip x64</a>
-          <a href={u.winZipArm} data-cn-href={cu.winZipArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">.zip arm64</a>
-          <a href={isZhCN ? gu.msi : cu.msi} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "GitHub .msi" : "AtomGit (CN) .msi"}</a>
+          <a href={cu.msi} class="px-2.5 py-1 rounded-md bg-notion-green/15 hover:bg-notion-green/25 text-notion-teal border border-notion-green/30">{isZhCN ? "🇨🇳 国内高速 .msi x64" : "🇨🇳 CN .msi x64"}</a>
+          <a href={cu.msiArm} class="px-2.5 py-1 rounded-md bg-notion-green/15 hover:bg-notion-green/25 text-notion-teal border border-notion-green/30">{isZhCN ? "🇨🇳 国内高速 .msi arm64" : "🇨🇳 CN .msi arm64"}</a>
+          <a href={cu.winZip} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "🇨🇳 .zip x64" : "🇨🇳 CN .zip x64"}</a>
+          <a href={cu.winZipArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "🇨🇳 .zip arm64" : "🇨🇳 CN .zip arm64"}</a>
+          <a href={gu.msi} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">GitHub .msi x64</a>
+          <a href={gu.msiArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">GitHub .msi arm64</a>
         </div>
       </div>
       <div class="bg-notion-surface/60 border border-notion-border rounded-xl p-5 flex flex-col">
         <div class="flex items-center justify-between"><div class="font-semibold">{t("install.linux.title")}</div><span class="text-xs font-mono text-notion-faint">{t("install.linux.size")}</span></div>
         <div class="text-sm text-notion-muted mt-1 flex-1">{t("install.linux.detail")}</div>
         <div class="mt-3 flex flex-wrap gap-2 text-xs font-mono">
-          <a href={u.deb} data-cn-href={cu.deb} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.deb x64</a>
-          <a href={u.debArm} data-cn-href={cu.debArm} class="px-2.5 py-1 rounded-md bg-notion-green/10 hover:bg-notion-green/20 text-notion-teal border border-notion-green/20">.deb arm64</a>
-          <a href={u.appimage} data-cn-href={cu.appimage} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">AppImage x64</a>
-          <a href={u.appimageArm} data-cn-href={cu.appimageArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">AppImage arm64</a>
-          <a href={isZhCN ? gu.deb : cu.deb} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "GitHub .deb" : "AtomGit (CN) .deb"}</a>
+          <a href={cu.deb} class="px-2.5 py-1 rounded-md bg-notion-green/15 hover:bg-notion-green/25 text-notion-teal border border-notion-green/30">{isZhCN ? "🇨🇳 国内高速 .deb x64" : "🇨🇳 CN .deb x64"}</a>
+          <a href={cu.debArm} class="px-2.5 py-1 rounded-md bg-notion-green/15 hover:bg-notion-green/25 text-notion-teal border border-notion-green/30">{isZhCN ? "🇨🇳 国内高速 .deb arm64" : "🇨🇳 CN .deb arm64"}</a>
+          <a href={cu.appimage} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "🇨🇳 AppImage x64" : "🇨🇳 CN AppImage x64"}</a>
+          <a href={cu.appimageArm} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">{isZhCN ? "🇨🇳 AppImage arm64" : "🇨🇳 CN AppImage arm64"}</a>
+          <a href={gu.deb} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">GitHub .deb x64</a>
+          <a href={gu.appimage} class="px-2.5 py-1 rounded-md bg-notion-sunken/60 hover:bg-notion-sunken text-notion-ink border border-notion-borderStrong/50">GitHub AppImage x64</a>
         </div>
       </div>
     </div>
