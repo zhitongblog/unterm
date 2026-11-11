@@ -100,6 +100,204 @@ pub fn set_run_settings(next: RunSettings) -> Result<RunSettings> {
     Ok(next)
 }
 
+// ---- where a task works --------------------------------------------------
+
+/// Where tasks get their own folder when the run settings name none:
+/// `Documents/<product>`, a place a person finds their files in. Not the
+/// directory the service happened to start in -- for an installed service
+/// that is the install directory, where an agent cannot write.
+pub fn work_root() -> Option<std::path::PathBuf> {
+    if let Some(root) = std::env::var_os("UNTERM_WORK_ROOT").filter(|v| !v.is_empty()) {
+        return Some(root.into());
+    }
+    let base = dirs_next::document_dir().or_else(dirs_next::home_dir)?;
+    Some(base.join(unterm_protocol::product_name()))
+}
+
+/// A folder name from a task's title: what Windows, macOS and Linux all
+/// accept, short, and never a device name.
+pub fn folder_name(title: &str, fallback: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { ' ' } else { c })
+        .collect();
+    let mut name = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.chars().count() > 60 {
+        name = name.chars().take(60).collect();
+    }
+    let name = name.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
+    if name.is_empty() {
+        return fallback.to_string();
+    }
+    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("{name} task")
+    } else {
+        name
+    }
+}
+
+/// The directory a run of `task` works in: the one the run settings name,
+/// or else the task's own folder, picked on its first run and kept, so a
+/// renamed task keeps its files where they were.
+fn workdir_for(store: &TaskStore, task: &Task, settings: &RunSettings) -> Result<String> {
+    if !settings.cwd.is_empty() {
+        return Ok(settings.cwd.clone());
+    }
+    if let Some(kept) = task.detail.get("workdir").and_then(Value::as_str) {
+        std::fs::create_dir_all(kept).with_context(|| format!("could not make {kept}"))?;
+        return Ok(kept.to_string());
+    }
+    let root = work_root().ok_or_else(|| anyhow!("there is no documents or home folder to work in"))?;
+    let taken: HashSet<String> = store
+        .tasks()?
+        .iter()
+        .filter(|t| t.kind == KIND && t.id != task.id)
+        .filter_map(|t| t.detail.get("workdir").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let base = folder_name(&task.title, &console_id_of(task));
+    let mut dir = root.join(&base);
+    let mut n = 2;
+    while taken.contains(&dir.display().to_string()) {
+        dir = root.join(format!("{base} ({n})"));
+        n += 1;
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("could not make {}", dir.display()))?;
+    let dir = dir.display().to_string();
+    let mut detail = task.detail.clone();
+    detail["workdir"] = json!(dir);
+    store.set_task_detail(&task.id, detail)?;
+    Ok(dir)
+}
+
+// ---- what a run made -----------------------------------------------------
+
+/// Directories that hold tools' own state, never a deliverable.
+const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target", ".venv", "venv", "__pycache__", ".next", ".cache"];
+const MAX_OUTPUTS: usize = 50;
+const MAX_VISITED: usize = 20_000;
+const MAX_DEPTH: usize = 8;
+
+/// One file a run wrote, relative to the directory it worked in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Output {
+    pub path: String,
+    pub size: u64,
+    pub modified: String,
+}
+
+/// The files under `dir` written at or after `since`: what the run made or
+/// changed. Newest first, at most fifty; hidden files and tools' own
+/// directories are not deliverables and are skipped.
+pub fn outputs_since(dir: &std::path::Path, since: std::time::SystemTime) -> Vec<Output> {
+    let mut found: Vec<(std::time::SystemTime, Output)> = Vec::new();
+    let mut visited = 0usize;
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((current, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else { continue };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_VISITED {
+                break;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                if depth + 1 < MAX_DEPTH && !SKIPPED_DIRS.contains(&name.as_str()) {
+                    stack.push((entry.path(), depth + 1));
+                }
+                continue;
+            }
+            if !kind.is_file() {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(modified) = meta.modified() else { continue };
+            if modified < since {
+                continue;
+            }
+            let Ok(relative) = entry.path().strip_prefix(dir).map(|p| p.to_path_buf()) else { continue };
+            let path = relative.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            found.push((
+                modified,
+                Output {
+                    path,
+                    size: meta.len(),
+                    modified: chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339(),
+                },
+            ));
+        }
+        if visited > MAX_VISITED {
+            break;
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+    found.into_iter().take(MAX_OUTPUTS).map(|(_, output)| output).collect()
+}
+
+/// How much of one output the console is shown.
+const MAX_READ: u64 = 1024 * 1024;
+
+/// Read one file a run recorded as its output. Only those: the path must
+/// be in the run's list and resolve inside the directory it worked in.
+pub fn read_output(task_id: &str, console_run: &str, path: &str) -> Result<Value> {
+    let store = store()?;
+    let task = console_task(&store, task_id)?;
+    let run = run_key(console_run)?;
+    let step = store
+        .steps(&run)?
+        .into_iter()
+        .find(|s| s.kind == STEP_KIND)
+        .ok_or_else(|| anyhow!("no run {console_run}"))?;
+    if !store.runs(&task.id)?.iter().any(|r| r.id == run) {
+        bail!("{console_run} is not a run of {task_id}");
+    }
+    let listed = step
+        .detail
+        .get("outputs")
+        .and_then(Value::as_array)
+        .is_some_and(|outputs| outputs.iter().any(|o| o.get("path").and_then(Value::as_str) == Some(path)));
+    if !listed {
+        bail!("{path} is not an output of this run");
+    }
+    let dir = step
+        .detail
+        .get("cwd")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("the run does not say where it worked"))?;
+    let root = std::fs::canonicalize(dir).with_context(|| format!("{dir} is gone"))?;
+    let file = std::fs::canonicalize(root.join(path)).with_context(|| format!("{path} is gone"))?;
+    if !file.starts_with(&root) {
+        bail!("{path} is outside the run's directory");
+    }
+    let size = std::fs::metadata(&file)?.len();
+    let mut bytes = Vec::new();
+    use std::io::Read as _;
+    std::fs::File::open(&file)?.take(MAX_READ).read_to_end(&mut bytes)?;
+    let truncated = size > MAX_READ;
+    // A cut can land inside a character; drop the partial one at the end.
+    // A byte-order mark is how some editors say "UTF-8", not text.
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").map(<[u8]>::to_vec).unwrap_or(bytes);
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => Some(text.to_string()),
+        Err(e) if truncated && e.error_len().is_none() => Some(String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()),
+        Err(_) => None,
+    };
+    Ok(json!({
+        "path": path,
+        "absolute_path": file.display().to_string().trim_start_matches(r"\\?\"),
+        "size": size,
+        "truncated": truncated,
+        "binary": text.is_none(),
+        "text": text,
+    }))
+}
+
 // ---- schedules -----------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -231,6 +429,8 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
         "error_code": field("error_code"),
         "waiting": detail.get("waiting").and_then(Value::as_bool).unwrap_or(false),
         "usage": field("usage"),
+        "workdir": field("cwd"),
+        "outputs": detail.get("outputs").cloned().unwrap_or_else(|| json!([])),
     })
 }
 
@@ -253,6 +453,7 @@ fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
         "schedule": detail.get("schedule").cloned().unwrap_or(Value::Null),
         "paused": detail.get("paused").and_then(Value::as_bool).unwrap_or(false),
         "console": detail.get("console").cloned().unwrap_or(Value::Null),
+        "workdir": detail.get("workdir").cloned().unwrap_or(Value::Null),
         "runs": views,
     }))
 }
@@ -288,7 +489,7 @@ pub fn put(put: Put) -> Result<Value> {
         bail!("a task needs a title");
     }
     let key = task_key(&put.id)?;
-    let detail = json!({
+    let mut detail = json!({
         "console_id": put.id,
         "prompt": put.prompt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         "schedule": put.schedule,
@@ -298,7 +499,11 @@ pub fn put(put: Put) -> Result<Value> {
     let store = store()?;
     match store.task(&key)? {
         Some(existing) if existing.kind != KIND => bail!("{} is not a console task", put.id),
-        Some(_) => {
+        Some(existing) => {
+            // The runtime's own: where the task works stays where it was.
+            if let Some(workdir) = existing.detail.get("workdir") {
+                detail["workdir"] = workdir.clone();
+            }
             store.set_task_title(&key, title)?;
             store.set_task_detail(&key, detail)?;
         }
@@ -376,6 +581,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         .or_else(|| task.detail.get("prompt").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| task.title.clone());
     let settings = run_settings();
+    let workdir = workdir_for(&store, &task, &settings)?;
     let console_run_id = request
         .run_id
         .clone()
@@ -397,6 +603,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         "trigger": trigger,
         "agent": settings.agent,
         "prompt": prompt,
+        "cwd": workdir,
     });
     let step = store.request_step_with_detail(&run.id, STEP_KIND, None, detail.clone())?.step().clone();
     store.set_step_detail(&step.id, detail.clone(), State::Running)?;
@@ -429,9 +636,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                 "run_id": console_run_id,
                 "step_id": step_id,
             });
-            if !settings.cwd.is_empty() {
-                body["cwd"] = json!(settings.cwd);
-            }
+            body["cwd"] = json!(workdir);
             super::agent_run::start_session(handler, &body).map_err(|(_, _, message)| message)
         }
     };
@@ -477,6 +682,9 @@ struct Turn {
     error_code: Option<&'static str>,
     waiting: bool,
     ended: Option<String>,
+    /// Something other than the answer came since its last words -- a tool
+    /// call, a question -- so the next words are a new paragraph.
+    paragraph: bool,
 }
 
 impl Turn {
@@ -484,8 +692,16 @@ impl Turn {
         match event.get("event").and_then(Value::as_str).unwrap_or_default() {
             "output.delta" if event.get("stream").and_then(Value::as_str) != Some("reasoning") => {
                 if let Some(text) = event.get("text").and_then(Value::as_str) {
+                    if self.paragraph && !self.text.is_empty() && !text.trim().is_empty() {
+                        self.text.truncate(self.text.trim_end().len());
+                        self.text.push_str("\n\n");
+                    }
+                    if !text.trim().is_empty() {
+                        self.paragraph = false;
+                    }
                     self.text.push_str(text);
                 }
+                return;
             }
             "error" => {
                 self.error = event
@@ -501,6 +717,7 @@ impl Turn {
             }
             _ => {}
         }
+        self.paragraph = true;
     }
 
     /// The agent's last words, as the run's summary.
@@ -527,6 +744,9 @@ fn verdict(ended: &str, stopped_for_idling: bool) -> State {
 
 fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: Value) {
     let started = Instant::now();
+    // A file written in the second the run started still counts; clocks and
+    // file systems round.
+    let started_at = std::time::SystemTime::now() - Duration::from_secs(2);
     let mut last_progress = Instant::now();
     let mut cursor = 0usize;
     let mut turn = Turn::default();
@@ -622,6 +842,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     detail["duration_seconds"] = json!(started.elapsed().as_secs());
     if let Some(usage) = usage.filter(|u| !u.is_null()) {
         detail["usage"] = usage;
+    }
+    if let Some(dir) = detail.get("cwd").and_then(Value::as_str).map(std::path::PathBuf::from) {
+        detail["outputs"] = json!(outputs_since(&dir, started_at));
     }
     if state == State::Failed {
         if let Some(error) = &turn.error {
@@ -796,6 +1019,20 @@ pub fn api_stop(body: &[u8]) -> Response {
     }
 }
 
+/// POST /api/console/tasks/output — `{task_id, run_id, path}`: one file a
+/// run made, as text when it is text.
+pub fn api_output(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let (Some(task), Some(run), Some(path)) = (id_field(&body, "task_id"), id_field(&body, "run_id"), id_field(&body, "path"))
+    else {
+        return Response::err(400, "Bad Request", "task_id, run_id and path are required");
+    };
+    match read_output(&task, &run, &path) {
+        Ok(output) => Response::ok_json(json!({"output": output})),
+        Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
 /// GET /api/console/run-settings
 pub fn api_settings_get() -> Response {
     Response::ok_json(json!({"settings": run_settings()}))
@@ -875,7 +1112,7 @@ mod tests {
         ] {
             turn.read(&event);
         }
-        assert_eq!(turn.summary(), "Done: notes.txt written.");
+        assert_eq!(turn.summary(), "Done:\n\nnotes.txt written.", "a tool call between is a paragraph break");
         assert!(!turn.waiting);
         assert_eq!(turn.ended.as_deref(), Some("finished"));
         assert_eq!(verdict("finished", false), State::Succeeded);
@@ -883,6 +1120,37 @@ mod tests {
         assert_eq!(verdict("interrupted", false), State::Cancelled);
         assert_eq!(verdict("interrupted", true), State::Failed, "stopped for idling is a failure");
         assert_eq!(verdict("failed", false), State::Failed);
+    }
+
+    #[test]
+    fn a_task_folder_is_named_after_it_and_safe_everywhere() {
+        assert_eq!(folder_name("Weekly report", "task-1"), "Weekly report");
+        assert_eq!(folder_name("  a/b:c?  ", "task-1"), "a b c");
+        assert_eq!(folder_name("...", "task-1"), "task-1");
+        assert_eq!(folder_name("con", "task-1"), "con task");
+        assert_eq!(folder_name("COM1.txt", "task-1"), "COM1.txt task");
+        assert_eq!(folder_name("Compare prices", "task-1"), "Compare prices");
+        assert_eq!(folder_name(&"x".repeat(100), "task-1").len(), 60);
+    }
+
+    #[test]
+    fn a_runs_outputs_are_the_files_it_wrote_not_the_ones_already_there() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old.txt"), "before").unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
+        let since = std::time::SystemTime::now();
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("out/report.md"), "# Report").unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref").unwrap();
+        std::fs::write(dir.path().join("node_modules/pkg/index.js"), "x").unwrap();
+        std::fs::write(dir.path().join(".hidden"), "x").unwrap();
+        let old = std::fs::File::options().write(true).open(dir.path().join("old.txt")).unwrap();
+        old.set_modified(since - Duration::from_secs(60)).unwrap();
+        let outputs = outputs_since(dir.path(), since);
+        assert_eq!(outputs.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["out/report.md"]);
+        assert_eq!(outputs[0].size, 8);
     }
 
     #[test]
@@ -926,6 +1194,45 @@ mod tests {
         assert!(runs[0]["error"].as_str().unwrap().contains("stopped"));
         assert_eq!(runs[0]["error_code"], "service_restarted");
         assert_eq!(sweep_orphans().unwrap(), 0);
+
+        // With no directory in the settings, a task works in its own folder,
+        // kept across edits and renames.
+        let root = dir.path().join("Documents").join("Unzoo One");
+        std::env::set_var("UNTERM_WORK_ROOT", &root);
+        let task = console_task(&store, "task-1").unwrap();
+        let workdir = workdir_for(&store, &task, &RunSettings::default()).unwrap();
+        assert_eq!(std::path::PathBuf::from(&workdir), root.join("monthly report"));
+        assert!(std::path::Path::new(&workdir).is_dir());
+        put(Put { id: "task-1".into(), title: "renamed".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+            .unwrap();
+        assert_eq!(list().unwrap()[0]["workdir"], json!(workdir));
+        let task = console_task(&store, "task-1").unwrap();
+        assert_eq!(workdir_for(&store, &task, &RunSettings::default()).unwrap(), workdir);
+        // A second task of the same name gets a folder of its own.
+        put(Put { id: "task-2".into(), title: "monthly report".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+            .unwrap();
+        let other = console_task(&store, "task-2").unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(workdir_for(&store, &other, &RunSettings::default()).unwrap()),
+            root.join("monthly report (2)")
+        );
+        delete("task-2").unwrap();
+
+        // What a run wrote can be read back, and nothing else.
+        std::fs::write(std::path::Path::new(&workdir).join("report.md"), "\u{feff}# Done\n").unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "no").unwrap();
+        let mut detail = store.step(&step.id).unwrap().unwrap().detail;
+        detail["cwd"] = json!(workdir);
+        detail["outputs"] = json!([{"path": "report.md", "size": 7, "modified": "2026-11-11T00:00:00Z"},
+                                   {"path": "../../../secret.txt", "size": 2, "modified": "2026-11-11T00:00:00Z"}]);
+        store.set_step_detail(&step.id, detail, State::Interrupted).unwrap();
+        let read = read_output("task-1", "run-old", "report.md").unwrap();
+        assert_eq!(read["text"], "# Done\n");
+        assert_eq!(read["binary"], false);
+        assert_eq!(list().unwrap()[0]["runs"][0]["outputs"][0]["path"], "report.md");
+        assert!(read_output("task-1", "run-old", "other.md").is_err(), "not listed");
+        assert!(read_output("task-1", "run-old", "../../../secret.txt").is_err(), "outside the folder");
+        std::env::remove_var("UNTERM_WORK_ROOT");
 
         delete("task-1").unwrap();
         assert!(list().unwrap().is_empty());
