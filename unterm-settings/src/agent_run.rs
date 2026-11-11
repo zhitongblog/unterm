@@ -91,6 +91,24 @@ fn unzoo_service_path() -> Option<std::path::PathBuf> {
     candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
 }
 
+/// GET /api/console/capabilities — what an agent can use on this machine:
+/// Unterm's MCP for governed runs (needs `unterm-cli` beside this binary),
+/// and Unzoo Browser's, when it is installed.
+pub(crate) fn api_capabilities() -> Response {
+    Response::ok_json(capabilities())
+}
+
+fn capabilities() -> Value {
+    let browser = unzoo_service_path();
+    json!({
+        "terminal": {"governed_ready": unterm_cli_path().is_some()},
+        "browser": {
+            "installed": browser.is_some(),
+            "path": browser.map(|p| p.display().to_string()),
+        },
+    })
+}
+
 const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shell tools \
 (Bash, PowerShell) and WebFetch are switched off. Run every command through the unterm MCP \
 server: open a terminal with its session.create tool when you need one, run commands with \
@@ -445,6 +463,26 @@ mod tests {
         assert!(headless_args("gemini-cli").is_none());
         assert!(headless_args("").is_none());
         assert!(headless_args("../../evil").is_none());
+    }
+
+    #[test]
+    fn capabilities_say_what_governed_runs_can_mount() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        let browser = dir.path().join("unzoo-service.exe");
+        std::fs::write(&cli, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNZOO_SERVICE", dir.path().join("missing.exe"));
+        let found = capabilities();
+        assert_eq!(found["terminal"]["governed_ready"], true);
+        assert_eq!(found["browser"]["installed"], false);
+        std::fs::write(&browser, b"").unwrap();
+        std::env::set_var("UNZOO_SERVICE", &browser);
+        assert_eq!(capabilities()["browser"]["installed"], true);
+        std::env::set_var("UNTERM_CLI", dir.path().join("gone.exe"));
+        assert_eq!(capabilities()["terminal"]["governed_ready"], false);
+        std::env::remove_var("UNTERM_CLI");
+        std::env::remove_var("UNZOO_SERVICE");
     }
 
     #[test]

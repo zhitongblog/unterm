@@ -26,10 +26,41 @@ use unterm_agents::{
     AgentManifest,
 };
 
+/// How long a detection is reused. Detecting runs every agent's
+/// `--version`; the console asks on every page that shows agents, and an
+/// install does not change twice a minute. `?refresh=1` asks afresh.
+const DETECT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn detect_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, installer::DetectOutcome)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, installer::DetectOutcome)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Detect one agent, reusing an answer younger than [`DETECT_TTL`] unless
+/// `fresh`.
+fn detect_cached(manifest: &AgentManifest, fresh: bool) -> installer::DetectOutcome {
+    if !fresh {
+        if let Some((at, outcome)) = detect_cache().lock().unwrap().get(&manifest.id) {
+            if at.elapsed() < DETECT_TTL {
+                return outcome.clone();
+            }
+        }
+    }
+    let outcome = installer::detect(&manifest.detect);
+    detect_cache()
+        .lock()
+        .unwrap()
+        .insert(manifest.id.clone(), (std::time::Instant::now(), outcome.clone()));
+    outcome
+}
+
 pub fn api_list(query: &str) -> Response {
     let only_installed = query
         .split('&')
         .any(|p| p == "installed=true" || p == "installed=1");
+    let fresh = query.split('&').any(|p| p == "refresh=1" || p == "refresh=true");
 
     let set = match fetch_manifests() {
         Ok(s) => s,
@@ -43,14 +74,14 @@ pub fn api_list(query: &str) -> Response {
     // powershell on Windows); one after another that is seconds, side by
     // side it is the slowest one.
     let detections: Vec<_> = std::thread::scope(|scope| {
-        let pending: Vec<_> = manifests.iter().map(|m| scope.spawn(|| installer::detect(&m.detect))).collect();
+        let pending: Vec<_> = manifests.iter().map(|m| scope.spawn(move || detect_cached(m, fresh))).collect();
         pending.into_iter().map(|handle| handle.join().ok()).collect()
     });
     let mut rows: Vec<Value> = manifests
         .iter()
         .zip(detections)
         .map(|(m, detect)| {
-            let detect = detect.unwrap_or_else(|| installer::detect(&m.detect));
+            let detect = detect.unwrap_or_else(|| detect_cached(m, fresh));
             let mut row = json!({
                 "id": m.id,
                 "name": m.name,
