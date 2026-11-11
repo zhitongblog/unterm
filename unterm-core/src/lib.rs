@@ -915,13 +915,14 @@ fn handle_stream(
                 asked,
                 lifetime::mode(),
                 &host_channel().attached_pids(),
+                asked.unless_headless && unterm_settings::console_has_work(),
             );
             let body = match decision {
                 Ok(()) => serde_json::json!({"status": "stopping"}),
                 Err(kept) => {
                     let others = match kept {
                         lifetime::Kept::OtherFrontEnds(count) => count,
-                        lifetime::Kept::Headless => 0,
+                        lifetime::Kept::Headless | lifetime::Kept::ConsoleWork => 0,
                     };
                     serde_json::json!({
                         "status": "kept",

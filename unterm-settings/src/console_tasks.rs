@@ -902,6 +902,20 @@ pub fn sweep_orphans() -> Result<usize> {
     Ok(closed)
 }
 
+/// A run in progress, or a schedule that is not paused: something that needs
+/// the runtime to be there with no window open.
+pub fn has_work() -> Result<bool> {
+    let store = store()?;
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        let scheduled = task.detail.get("schedule").is_some_and(|s| !s.is_null())
+            && !task.detail.get("paused").and_then(Value::as_bool).unwrap_or(false);
+        if scheduled || store.runs(&task.id)?.iter().any(|r| r.state == State::Running) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// One pass of the scheduler: close orphans, then run what is due.
 pub fn tick(handler: &McpHandler) -> Result<Vec<String>> {
     sweep_orphans()?;
@@ -1234,8 +1248,22 @@ mod tests {
         assert!(read_output("task-1", "run-old", "../../../secret.txt").is_err(), "outside the folder");
         std::env::remove_var("UNTERM_WORK_ROOT");
 
+        // A paused task with no schedule is no reason to stay; a schedule is.
+        assert!(!has_work().unwrap());
+        put(Put {
+            id: "task-1".into(),
+            title: "renamed".into(),
+            prompt: None,
+            schedule: Some(Schedule::Daily { time: "09:00".into() }),
+            paused: false,
+            console: json!({}),
+        })
+        .unwrap();
+        assert!(has_work().unwrap());
+
         delete("task-1").unwrap();
         assert!(list().unwrap().is_empty());
+        assert!(!has_work().unwrap());
         assert!(delete("task-1").is_err());
 
         // Settings refuse what a scheduled run could not use.

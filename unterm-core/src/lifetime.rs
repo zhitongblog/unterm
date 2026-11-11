@@ -13,6 +13,12 @@
 //!   `core.shutdown` ends it: a window quitting leaves it alone and the
 //!   watchdog never fires.
 //!
+//! A window-started Core with **console work** -- a task run in progress, or
+//! a scheduled task that is not paused -- outlives its windows too: the
+//! console promises that a task runs whether or not anything is open, and
+//! the Core is what keeps that promise. Once the work is gone the ordinary
+//! rules apply again.
+//!
 //! The decisions are plain functions over plain inputs so they can be tested
 //! without a process, a socket or a clock.
 
@@ -65,6 +71,8 @@ pub struct WatchdogInput {
     pub front_end_alive: bool,
     /// A `core.drain {exit_when_idle: true}` is in progress.
     pub draining_to_exit: bool,
+    /// The console has a run in progress or a schedule to keep.
+    pub console_work: bool,
 }
 
 /// The watchdog's answer.
@@ -87,7 +95,7 @@ impl Watchdog {
     }
 
     pub fn tick(&mut self, now: Instant, input: WatchdogInput) -> Verdict {
-        if input.mode == CoreMode::Headless || input.front_end_alive {
+        if input.mode == CoreMode::Headless || input.front_end_alive || input.console_work {
             self.orphaned_since = None;
             return Verdict::Stay;
         }
@@ -145,6 +153,8 @@ impl ShutdownRequest {
 pub enum Kept {
     Headless,
     OtherFrontEnds(usize),
+    /// The console has a run in progress or a schedule to keep.
+    ConsoleWork,
 }
 
 impl Kept {
@@ -152,6 +162,7 @@ impl Kept {
         match self {
             Kept::Headless => "headless",
             Kept::OtherFrontEnds(_) => "other_front_ends",
+            Kept::ConsoleWork => "console_work",
         }
     }
 }
@@ -162,14 +173,19 @@ impl Kept {
 /// right now -- verifiably alive, since a dead process's socket is closed by
 /// the kernel. `None` is a front end too old to have said who it is; it is
 /// counted as another front end, because guessing it is the requester would
-/// end a window's sessions under it.
+/// end a window's sessions under it. `console_work` keeps a Core a window's
+/// quit would otherwise end; an unconditional stop still stops it.
 pub fn decide_shutdown(
     request: ShutdownRequest,
     mode: CoreMode,
     attached: &[Option<u32>],
+    console_work: bool,
 ) -> Result<(), Kept> {
     if request.unless_headless && mode == CoreMode::Headless {
         return Err(Kept::Headless);
+    }
+    if request.unless_headless && console_work {
+        return Err(Kept::ConsoleWork);
     }
     if request.unless_shared {
         let others = attached
@@ -195,6 +211,7 @@ mod tests {
             mode,
             front_end_alive: alive,
             draining_to_exit: draining,
+            console_work: false,
         }
     }
 
@@ -309,11 +326,35 @@ mod tests {
     }
 
     #[test]
+    fn console_work_keeps_a_window_core_until_it_is_done() {
+        let mut dog = Watchdog::new();
+        let start = Instant::now();
+        let working = WatchdogInput { console_work: true, ..input(CoreMode::GuiOwned, false, false) };
+        for seconds in [0, 31, 3600] {
+            assert_eq!(dog.tick(start + Duration::from_secs(seconds), working), Verdict::Stay);
+        }
+        // The work is done: the grace period starts from here, not from the
+        // last window.
+        assert_eq!(dog.tick(start + Duration::from_secs(3601), input(CoreMode::GuiOwned, false, false)), Verdict::Stay);
+        assert!(matches!(
+            dog.tick(start + Duration::from_secs(3631), input(CoreMode::GuiOwned, false, false)),
+            Verdict::Exit(_)
+        ));
+
+        // The last window quitting does not end it either...
+        let quit = ShutdownRequest { requester_pid: Some(10), unless_shared: true, unless_headless: true };
+        assert_eq!(decide_shutdown(quit, CoreMode::GuiOwned, &[Some(10)], true), Err(Kept::ConsoleWork));
+        assert_eq!(Kept::ConsoleWork.reason(), "console_work");
+        // ...but an unconditional stop does.
+        assert_eq!(decide_shutdown(ShutdownRequest::default(), CoreMode::GuiOwned, &[], true), Ok(()));
+    }
+
+    #[test]
     fn an_unconditional_shutdown_is_always_honoured() {
         let request = ShutdownRequest::from_params(&serde_json::Value::Null);
         assert_eq!(request, ShutdownRequest::default());
         assert_eq!(
-            decide_shutdown(request, CoreMode::Headless, &[Some(1), Some(2), None]),
+            decide_shutdown(request, CoreMode::Headless, &[Some(1), Some(2), None], false),
             Ok(())
         );
     }
@@ -324,11 +365,11 @@ mod tests {
             "requester_pid": 10, "unless_shared": true, "unless_headless": true,
         }));
         assert_eq!(
-            decide_shutdown(request, CoreMode::Headless, &[Some(10)]),
+            decide_shutdown(request, CoreMode::Headless, &[Some(10)], false),
             Err(Kept::Headless)
         );
         assert_eq!(
-            decide_shutdown(request, CoreMode::GuiOwned, &[Some(10)]),
+            decide_shutdown(request, CoreMode::GuiOwned, &[Some(10)], false),
             Ok(())
         );
     }
@@ -341,18 +382,18 @@ mod tests {
             unless_headless: true,
         };
         // Nobody else attached -- whatever a stale registry file might say.
-        assert_eq!(decide_shutdown(request, CoreMode::GuiOwned, &[]), Ok(()));
+        assert_eq!(decide_shutdown(request, CoreMode::GuiOwned, &[], false), Ok(()));
         assert_eq!(
-            decide_shutdown(request, CoreMode::GuiOwned, &[Some(10)]),
+            decide_shutdown(request, CoreMode::GuiOwned, &[Some(10)], false),
             Ok(())
         );
         assert_eq!(
-            decide_shutdown(request, CoreMode::GuiOwned, &[Some(10), Some(11)]),
+            decide_shutdown(request, CoreMode::GuiOwned, &[Some(10), Some(11)], false),
             Err(Kept::OtherFrontEnds(1))
         );
         // A front end that never said who it is counts as someone else.
         assert_eq!(
-            decide_shutdown(request, CoreMode::GuiOwned, &[None]),
+            decide_shutdown(request, CoreMode::GuiOwned, &[None], false),
             Err(Kept::OtherFrontEnds(1))
         );
         // "Quit everything" does not ask about others.
@@ -361,7 +402,7 @@ mod tests {
             ..request
         };
         assert_eq!(
-            decide_shutdown(everything, CoreMode::GuiOwned, &[Some(10), Some(11)]),
+            decide_shutdown(everything, CoreMode::GuiOwned, &[Some(10), Some(11)], false),
             Ok(())
         );
     }
