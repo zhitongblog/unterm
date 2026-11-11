@@ -8,6 +8,7 @@
 
 mod agent_run;
 mod console_tasks;
+mod local_agents;
 mod agents;
 mod assets;
 mod console;

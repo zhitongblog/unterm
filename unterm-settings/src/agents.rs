@@ -38,12 +38,20 @@ pub fn api_list(query: &str) -> Response {
         }
     };
 
-    let rows: Vec<Value> = set
-        .for_current_platform()
-        .into_iter()
-        .map(|m| {
-            let detect = installer::detect(&m.detect);
-            json!({
+    let manifests = set.for_current_platform();
+    // Each detection runs the agent's `--version` (through cmd or
+    // powershell on Windows); one after another that is seconds, side by
+    // side it is the slowest one.
+    let detections: Vec<_> = std::thread::scope(|scope| {
+        let pending: Vec<_> = manifests.iter().map(|m| scope.spawn(|| installer::detect(&m.detect))).collect();
+        pending.into_iter().map(|handle| handle.join().ok()).collect()
+    });
+    let mut rows: Vec<Value> = manifests
+        .iter()
+        .zip(detections)
+        .map(|(m, detect)| {
+            let detect = detect.unwrap_or_else(|| installer::detect(&m.detect));
+            let mut row = json!({
                 "id": m.id,
                 "name": m.name,
                 "vendor": m.vendor,
@@ -64,10 +72,30 @@ pub fn api_list(query: &str) -> Response {
                 "hosted_supported": super::agent_run::supports_hosted(&m.id),
                 "governed_supported": super::agent_run::supports_governed(&m.id),
                 "headless_default_prompt": headless_default_prompt_value(&m.id),
-            })
+            });
+            merge(&mut row, super::local_agents::sign_in_fields(&m.id));
+            row
         })
-        .filter(|row| !only_installed || row["installed"].as_bool().unwrap_or(false))
         .collect();
+    // Agents the console can run that the manifest does not list yet.
+    for agent in super::local_agents::local_agents() {
+        if manifests.iter().any(|m| m.id == agent.id) {
+            continue;
+        }
+        let mut row = agent.row();
+        merge(
+            &mut row,
+            json!({
+                "mcp_supported": false,
+                "headless_supported": supports_headless(agent.id),
+                "hosted_supported": super::agent_run::supports_hosted(agent.id),
+                "governed_supported": super::agent_run::supports_governed(agent.id),
+            }),
+        );
+        merge(&mut row, super::local_agents::sign_in_fields(agent.id));
+        rows.push(row);
+    }
+    rows.retain(|row| !only_installed || row["installed"].as_bool().unwrap_or(false));
 
     Response::ok_json(json!({
         "envelope_source": format!("{:?}", set.source),
@@ -76,6 +104,12 @@ pub fn api_list(query: &str) -> Response {
         "signing_key_id": set.envelope.signature.key_id,
         "agents": rows,
     }))
+}
+
+fn merge(row: &mut Value, extra: Value) {
+    if let (Some(row), Value::Object(extra)) = (row.as_object_mut(), extra) {
+        row.extend(extra);
+    }
 }
 
 pub fn api_show(id: &str) -> Response {
