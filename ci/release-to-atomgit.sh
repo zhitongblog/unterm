@@ -94,12 +94,35 @@ cut -f2 .manifest > .names
 rm -f .manifest
 [ "$MISSING" = 0 ] || { echo "Aborting: some assets could not be downloaded." >&2; exit 1; }
 
-# 1. Resolve GitHub release metadata (name + body).
+# 1. Resolve GitHub release metadata (name + body) and prepend direct download links
+# so visitors on AtomGit's web UI can click and download directly without logging in.
 META=$(gh release view "$TAG" --repo "$REPO_GH" --json name,body)
 NAME=$(echo "$META" | jq -r '.name')
 [ -n "$NAME" ] && [ "$NAME" != "null" ] || NAME="Unterm $TAG"
-BODY=$(echo "$META" | jq -r '.body // ""')
-[ -n "$BODY" ] || BODY="Release $TAG — see https://unterm.app/changelog"
+GH_BODY=$(echo "$META" | jq -r '.body // ""')
+[ -n "$GH_BODY" ] || GH_BODY="Release $TAG — see https://unterm.app/changelog"
+
+DL_BASE="https://atomgit.com/$REPO_ATOMGIT/releases/download/$TAG"
+DIRECT_LINKS=$(cat <<EOF
+### ⚡ 中国大陆高速直链下载（无需登录 AtomGit，点击即下）
+
+| 平台 | 安装包直链（华为云 CDN） | 备用包 |
+| :--- | :--- | :--- |
+| **macOS (Universal: Apple Silicon + Intel)** | [**Unterm-macos-${TAG}.dmg**](${DL_BASE}/Unterm-macos-${TAG}.dmg) | — |
+| **Windows x64** | [**Unterm-${VER}-x64.msi**](${DL_BASE}/Unterm-${VER}-x64.msi) | [Unterm-windows-x64-${TAG}.zip](${DL_BASE}/Unterm-windows-x64-${TAG}.zip) |
+| **Windows ARM64** | [**Unterm-${VER}-arm64.msi**](${DL_BASE}/Unterm-${VER}-arm64.msi) | [Unterm-windows-arm64-${TAG}.zip](${DL_BASE}/Unterm-windows-arm64-${TAG}.zip) |
+| **Linux x86_64** | [**unterm-${TAG}.deb**](${DL_BASE}/unterm-${TAG}.deb) | [Unterm-${TAG}-x86_64.AppImage](${DL_BASE}/Unterm-${TAG}-x86_64.AppImage) |
+| **Linux ARM64** | [**unterm-${TAG}.arm64.deb**](${DL_BASE}/unterm-${TAG}.arm64.deb) | [Unterm-${TAG}-aarch64.AppImage](${DL_BASE}/Unterm-${TAG}-aarch64.AppImage) |
+
+**命令行一键安装（国内镜像）：**
+- **macOS / Linux**: \`curl -fsSL https://unterm.app/install.sh | sh -s -- --cn\`
+- **Windows (PowerShell)**: \`\$env:UNTERM_MIRROR='atomgit'; irm https://unterm.app/install.ps1 | iex\`
+
+---
+
+EOF
+)
+BODY="${DIRECT_LINKS}"$'\n'"${GH_BODY}"
 
 # 2. Check if the AtomGit release already exists for this tag.
 EXISTING_TAG=$(curl -fsS "$API/releases/tags/$TAG?access_token=$ATOMGIT_TOKEN" 2>/dev/null \

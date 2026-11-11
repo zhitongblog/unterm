@@ -65,11 +65,11 @@ esac
 
 # Need either curl or wget — picked at runtime.
 if command -v curl >/dev/null 2>&1; then
-  fetch() { curl -fsSL "$1" -o "$2"; }
-  fetch_stdout() { curl -fsSL "$1"; }
+  fetch() { curl -fsSL --connect-timeout 10 "$1" -o "$2"; }
+  fetch_stdout() { curl -fsSL --connect-timeout 8 "$1"; }
 elif command -v wget >/dev/null 2>&1; then
-  fetch() { wget -qO "$2" "$1"; }
-  fetch_stdout() { wget -qO- "$1"; }
+  fetch() { wget -q --timeout=10 -O "$2" "$1"; }
+  fetch_stdout() { wget -q --timeout=8 -O- "$1"; }
 else
   die "need curl or wget on PATH"
 fi

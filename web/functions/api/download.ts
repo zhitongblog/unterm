@@ -78,19 +78,15 @@ function targetForUA(
 
 export const onRequestGet: PagesFunction<Env> = (ctx) => {
   const url = new URL(ctx.request.url);
-  const v = url.searchParams.get("v");
+  const v = url.searchParams.get("v") || "v0.71.25";
   const mirror = url.searchParams.get("mirror");
   const cfCountry = (ctx.request as any).cf?.country;
+  const acceptLang = (ctx.request.headers.get("accept-language") || "").trim();
+  const isZhCNLang = /^zh(-cn|-hans)?\b/i.test(acceptLang);
   const useAtomgit =
     mirror === "atomgit" ||
     url.searchParams.get("cn") === "1" ||
-    (mirror !== "github" && cfCountry === "CN");
-  if (!v) {
-    return Response.redirect(
-      useAtomgit ? ATOMGIT_BASE : `${BASE}/latest`,
-      302
-    );
-  }
+    (mirror !== "github" && (cfCountry === "CN" || isZhCNLang));
   const ua = ctx.request.headers.get("user-agent") || "";
   const arch = hintedArch(ctx.request);
   const response = Response.redirect(targetForUA(ua, v, arch, useAtomgit), 302);
@@ -102,7 +98,7 @@ export const onRequestGet: PagesFunction<Env> = (ctx) => {
   if (/Windows/i.test(ua) && arch === null) {
     headers.set("Critical-CH", "Sec-CH-UA-Arch");
   }
-  headers.set("Vary", "User-Agent, Sec-CH-UA-Arch");
+  headers.set("Vary", "User-Agent, Sec-CH-UA-Arch, Accept-Language");
   headers.set("Cache-Control", "no-store");
   return new Response(null, { status: 302, headers });
 };
