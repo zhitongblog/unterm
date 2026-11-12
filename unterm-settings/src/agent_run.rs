@@ -91,18 +91,45 @@ fn unzoo_service_path() -> Option<std::path::PathBuf> {
     candidates.iter().map(std::path::PathBuf::from).find(|p| p.is_file())
 }
 
+/// GET /api/console/capabilities — what an agent can use on this machine:
+/// Unterm's MCP for governed runs (needs `unterm-cli` beside this binary),
+/// and Unzoo Browser's, when it is installed.
+pub(crate) fn api_capabilities() -> Response {
+    Response::ok_json(capabilities())
+}
+
+/// GET /api/console/browser — Unzoo Browser for the agents: the plan, the
+/// profiles, and which one they browse in (see `browser`). Looking makes
+/// their own profile while the plan has room for it.
+pub(crate) fn api_browser() -> Response {
+    let chosen = super::console_tasks::run_settings().browser_profile;
+    Response::ok_json(super::browser::status(unzoo_service_path().is_some(), &chosen))
+}
+
+fn capabilities() -> Value {
+    let browser = unzoo_service_path();
+    json!({
+        "terminal": {"governed_ready": unterm_cli_path().is_some()},
+        "browser": {
+            "installed": browser.is_some(),
+            "path": browser.map(|p| p.display().to_string()),
+        },
+    })
+}
+
 const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shell tools \
 (Bash, PowerShell) and WebFetch are switched off. Run every command through the unterm MCP \
 server: open a terminal with its session.create tool when you need one, run commands with \
 exec.run_wait and read their output from the result. For anything in a web browser use the \
-unzoo MCP tools. Each tool call is shown to the user for approval before it runs.";
+unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
+refused, say what you needed it for instead of trying another way.";
 
 /// The governed preset for Claude Code: hosted, its own shell and fetch
 /// switched off, Unterm's MCP (and Unzoo Browser's, when installed) mounted
 /// in their place, and a note saying so. Every command it runs then goes
 /// through Unterm -- `AGENTS.md`'s first rule -- and every one is a question
 /// in the inbox first.
-fn governed_args(agent_id: &str) -> Result<Vec<String>, String> {
+fn governed_args(agent_id: &str, browser_profile: Option<&str>) -> Result<Vec<String>, String> {
     if !supports_governed(agent_id) {
         return Err(format!(
             "{agent_id} has no governed mode yet: only Claude Code can have its own shell switched off and Unterm mounted in its place"
@@ -116,11 +143,21 @@ fn governed_args(agent_id: &str) -> Result<Vec<String>, String> {
         json!({"type": "stdio", "command": cli.display().to_string(), "args": ["mcp-stdio"]}),
     );
     if let Some(unzoo) = unzoo_service_path() {
+        // Unzoo gives each client its own isolated browser profile and tabs.
+        // Not `claude-code`: that is the person's own Claude Code, whose tabs
+        // an agent running here must not navigate away (it did, live).
         servers.insert(
             "unzoo".into(),
             json!({"type": "stdio", "command": unzoo.display().to_string(),
-                   "args": ["--mcp", "stdio", "--client", "claude-code"]}),
+                   "args": ["--mcp", "stdio", "--client", super::browser::CLIENT]}),
         );
+    }
+    let mut prompt = GOVERNED_PROMPT.to_string();
+    if let Some(profile) = browser_profile.map(str::trim).filter(|p| !p.is_empty()) {
+        if unzoo_service_path().is_some() && profile != super::browser::RESERVED_PROFILE {
+            prompt.push(' ');
+            prompt.push_str(&super::browser::profile_instructions(profile));
+        }
     }
     Ok(vec![
         "-p".into(),
@@ -129,7 +166,7 @@ fn governed_args(agent_id: &str) -> Result<Vec<String>, String> {
         "--mcp-config".into(),
         json!({"mcpServers": servers}).to_string(),
         "--append-system-prompt".into(),
-        GOVERNED_PROMPT.into(),
+        prompt,
     ])
 }
 
@@ -178,7 +215,7 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
     let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
     let governed_args = if governed {
-        match governed_args(agent_id) {
+        match governed_args(agent_id, string_field(body, "browser_profile")) {
             Ok(args) => Some(args),
             Err(why) => return Err((400, "Bad Request", why.to_string())),
         }
@@ -197,36 +234,62 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
         ));
     };
 
-    let set = match fetch_manifests() {
-        Ok(set) => set,
-        Err(e) => return Err((503, "Service Unavailable", format!("manifest fetch: {e}"))),
-    };
-    let Some(manifest) = set
-        .for_current_platform()
-        .into_iter()
-        .find(|m| m.id == agent_id)
-    else {
-        return Err((404, "Not Found", format!("no agent named {agent_id}")));
-    };
+    let binary = match super::local_agents::local_agent(agent_id) {
+        // Built in: found where its installer puts it.
+        Some(local) => match local.binary() {
+            Some(path) => path.display().to_string(),
+            None => {
+                return Err((503, "Service Unavailable", format!("{} is not installed on this machine", local.name)))
+            }
+        },
+        None => {
+            let set = match fetch_manifests() {
+                Ok(set) => set,
+                Err(e) => return Err((503, "Service Unavailable", format!("manifest fetch: {e}"))),
+            };
+            let Some(manifest) = set
+                .for_current_platform()
+                .into_iter()
+                .find(|m| m.id == agent_id)
+            else {
+                return Err((404, "Not Found", format!("no agent named {agent_id}")));
+            };
 
-    // Resolve once, here: on Windows the binary is a .cmd shim that a bare
-    // name does not spawn, and the detected path is already absolute.
-    let detected = installer::detect(&manifest.detect);
-    if !detected.ok {
-        return Err((
-            503,
-            "Service Unavailable",
-            format!("{} is not installed on this machine", manifest.name),
-        ));
-    }
-    let Some(binary) = detected.binary_path else {
-        return Err((503, "Service Unavailable", "the agent has no resolved path".to_string()));
+            // Resolve once, here: on Windows the binary is a .cmd shim that a
+            // bare name does not spawn, and the detected path is already
+            // absolute.
+            let detected = installer::detect(&manifest.detect);
+            if !detected.ok {
+                return Err((
+                    503,
+                    "Service Unavailable",
+                    format!("{} is not installed on this machine", manifest.name),
+                ));
+            }
+            let Some(binary) = detected.binary_path else {
+                return Err((503, "Service Unavailable", "the agent has no resolved path".to_string()));
+            };
+            binary
+        }
     };
 
     let mut command = vec![json!(binary)];
     match &governed_args {
         Some(governed) => command.extend(governed.iter().map(|arg| json!(arg))),
         None => command.extend(args.iter().map(|arg| json!(arg))),
+    }
+    // The enabled skills, as a plugin for this session only. Claude Code is
+    // the CLI that loads one from a folder; a skill that cannot be laid out
+    // is not a reason to refuse the run.
+    if agent_id == "claude-code" {
+        match super::skills::prepare_plugin() {
+            Ok(Some(dir)) => {
+                command.push(json!("--plugin-dir"));
+                command.push(json!(dir.display().to_string()));
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("skills were not loaded for this run: {error:#}"),
+        }
     }
 
     let mut params = serde_json::Map::new();
@@ -237,6 +300,13 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     }
     if governed {
         params.insert("governed".into(), json!(true));
+    }
+    // How much it may do unasked: only a hosted agent asks anything.
+    if let Some(level) = string_field(body, "autonomy") {
+        if !hosted {
+            return Err((400, "Bad Request", "autonomy needs a hosted session".to_string()));
+        }
+        params.insert("autonomy".into(), json!(level));
     }
     // Where the agent works: the workspace the console has open. Only an
     // existing directory -- it decides where the agent reads and writes, not
@@ -435,6 +505,26 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_say_what_governed_runs_can_mount() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        let browser = dir.path().join("unzoo-service.exe");
+        std::fs::write(&cli, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNZOO_SERVICE", dir.path().join("missing.exe"));
+        let found = capabilities();
+        assert_eq!(found["terminal"]["governed_ready"], true);
+        assert_eq!(found["browser"]["installed"], false);
+        std::fs::write(&browser, b"").unwrap();
+        std::env::set_var("UNZOO_SERVICE", &browser);
+        assert_eq!(capabilities()["browser"]["installed"], true);
+        std::env::set_var("UNTERM_CLI", dir.path().join("gone.exe"));
+        assert_eq!(capabilities()["terminal"]["governed_ready"], false);
+        std::env::remove_var("UNTERM_CLI");
+        std::env::remove_var("UNZOO_SERVICE");
+    }
+
+    #[test]
     fn claude_gets_the_flags_its_adapter_parses() {
         let args = headless_args("claude-code").expect("claude");
         assert!(args.contains(&"-p"), "headless, not interactive");
@@ -471,7 +561,7 @@ mod tests {
         assert!(supports_hosted("codex-cli") && !supports_hosted("aider"));
         assert!(supports_governed("claude-code"));
         assert!(!supports_governed("codex-cli"));
-        assert!(governed_args("codex-cli").is_err());
+        assert!(governed_args("codex-cli", None).is_err());
     }
 
     #[test]
@@ -480,7 +570,7 @@ mod tests {
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
         std::fs::write(&cli, b"").unwrap();
         std::env::set_var("UNTERM_CLI", &cli);
-        let args = governed_args("claude-code").unwrap();
+        let args = governed_args("claude-code", None).unwrap();
         let at = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
         let off = at("--disallowedTools").unwrap();
         for tool in ["Bash", "PowerShell", "WebFetch"] {
@@ -492,10 +582,43 @@ mod tests {
         assert!(at("--append-system-prompt").unwrap().contains("exec.run_wait"));
         assert!(args.contains(&"-p".to_string()));
         // Only Claude Code can have its shell switched off today.
-        assert!(governed_args("codex-cli").is_err());
+        assert!(governed_args("codex-cli", None).is_err());
         std::env::set_var("UNTERM_CLI", dir.path().join("missing"));
-        assert!(governed_args("claude-code").is_err(), "no unterm-cli, no governed mode");
+        assert!(governed_args("claude-code", None).is_err(), "no unterm-cli, no governed mode");
         std::env::remove_var("UNTERM_CLI");
+    }
+
+    #[test]
+    fn unzoo_is_mounted_as_the_agents_own_client_and_a_chosen_profile_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        let unzoo = dir.path().join("unzoo-service.exe");
+        std::fs::write(&cli, b"").unwrap();
+        std::fs::write(&unzoo, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNZOO_SERVICE", &unzoo);
+        let prompt_of = |args: &[String]| {
+            let at = args.iter().position(|a| a == "--append-system-prompt").unwrap();
+            args[at + 1].clone()
+        };
+        let mounted = |args: &[String]| {
+            let at = args.iter().position(|a| a == "--mcp-config").unwrap();
+            serde_json::from_str::<Value>(&args[at + 1]).unwrap()["mcpServers"]["unzoo"]["args"].clone()
+        };
+
+        let own = governed_args("claude-code", None).unwrap();
+        // Not the person's own Claude Code's profile.
+        assert_eq!(mounted(&own), json!(["--mcp", "stdio", "--client", "unzoo-one-agent"]));
+        assert!(!prompt_of(&own).contains("profile_id"));
+        // Its own reserved profile needs no instructions either.
+        let reserved = governed_args("claude-code", Some(super::super::browser::RESERVED_PROFILE)).unwrap();
+        assert!(!prompt_of(&reserved).contains("profile_id"));
+        // A chosen one is named on every call, in tabs the agent opened.
+        let chosen = governed_args("claude-code", Some("default")).unwrap();
+        assert!(prompt_of(&chosen).contains("profile_id=\"default\""), "{}", prompt_of(&chosen));
+
+        std::env::remove_var("UNTERM_CLI");
+        std::env::remove_var("UNZOO_SERVICE");
     }
 
     #[test]

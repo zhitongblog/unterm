@@ -26,10 +26,41 @@ use unterm_agents::{
     AgentManifest,
 };
 
+/// How long a detection is reused. Detecting runs every agent's
+/// `--version`; the console asks on every page that shows agents, and an
+/// install does not change twice a minute. `?refresh=1` asks afresh.
+const DETECT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn detect_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, installer::DetectOutcome)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, installer::DetectOutcome)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Detect one agent, reusing an answer younger than [`DETECT_TTL`] unless
+/// `fresh`.
+fn detect_cached(manifest: &AgentManifest, fresh: bool) -> installer::DetectOutcome {
+    if !fresh {
+        if let Some((at, outcome)) = detect_cache().lock().unwrap().get(&manifest.id) {
+            if at.elapsed() < DETECT_TTL {
+                return outcome.clone();
+            }
+        }
+    }
+    let outcome = installer::detect(&manifest.detect);
+    detect_cache()
+        .lock()
+        .unwrap()
+        .insert(manifest.id.clone(), (std::time::Instant::now(), outcome.clone()));
+    outcome
+}
+
 pub fn api_list(query: &str) -> Response {
     let only_installed = query
         .split('&')
         .any(|p| p == "installed=true" || p == "installed=1");
+    let fresh = query.split('&').any(|p| p == "refresh=1" || p == "refresh=true");
 
     let set = match fetch_manifests() {
         Ok(s) => s,
@@ -38,12 +69,20 @@ pub fn api_list(query: &str) -> Response {
         }
     };
 
-    let rows: Vec<Value> = set
-        .for_current_platform()
-        .into_iter()
-        .map(|m| {
-            let detect = installer::detect(&m.detect);
-            json!({
+    let manifests = set.for_current_platform();
+    // Each detection runs the agent's `--version` (through cmd or
+    // powershell on Windows); one after another that is seconds, side by
+    // side it is the slowest one.
+    let detections: Vec<_> = std::thread::scope(|scope| {
+        let pending: Vec<_> = manifests.iter().map(|m| scope.spawn(move || detect_cached(m, fresh))).collect();
+        pending.into_iter().map(|handle| handle.join().ok()).collect()
+    });
+    let mut rows: Vec<Value> = manifests
+        .iter()
+        .zip(detections)
+        .map(|(m, detect)| {
+            let detect = detect.unwrap_or_else(|| detect_cached(m, fresh));
+            let mut row = json!({
                 "id": m.id,
                 "name": m.name,
                 "vendor": m.vendor,
@@ -64,10 +103,30 @@ pub fn api_list(query: &str) -> Response {
                 "hosted_supported": super::agent_run::supports_hosted(&m.id),
                 "governed_supported": super::agent_run::supports_governed(&m.id),
                 "headless_default_prompt": headless_default_prompt_value(&m.id),
-            })
+            });
+            merge(&mut row, super::local_agents::sign_in_fields(&m.id));
+            row
         })
-        .filter(|row| !only_installed || row["installed"].as_bool().unwrap_or(false))
         .collect();
+    // Agents the console can run that the manifest does not list yet.
+    for agent in super::local_agents::local_agents() {
+        if manifests.iter().any(|m| m.id == agent.id) {
+            continue;
+        }
+        let mut row = agent.row();
+        merge(
+            &mut row,
+            json!({
+                "mcp_supported": false,
+                "headless_supported": supports_headless(agent.id),
+                "hosted_supported": super::agent_run::supports_hosted(agent.id),
+                "governed_supported": super::agent_run::supports_governed(agent.id),
+            }),
+        );
+        merge(&mut row, super::local_agents::sign_in_fields(agent.id));
+        rows.push(row);
+    }
+    rows.retain(|row| !only_installed || row["installed"].as_bool().unwrap_or(false));
 
     Response::ok_json(json!({
         "envelope_source": format!("{:?}", set.source),
@@ -76,6 +135,12 @@ pub fn api_list(query: &str) -> Response {
         "signing_key_id": set.envelope.signature.key_id,
         "agents": rows,
     }))
+}
+
+fn merge(row: &mut Value, extra: Value) {
+    if let (Some(row), Value::Object(extra)) = (row.as_object_mut(), extra) {
+        row.extend(extra);
+    }
 }
 
 pub fn api_show(id: &str) -> Response {

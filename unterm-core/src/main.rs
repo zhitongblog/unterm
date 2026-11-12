@@ -175,6 +175,8 @@ fn main() -> Result<()> {
                 while running.load(std::sync::atomic::Ordering::Acquire) {
                     let front_end_alive = !unterm_core::host_channel().attached_pids().is_empty()
                         || spawner.as_ref().is_some_and(|watch| watch.is_alive());
+                    // Asked only with no window left: it reads the task store.
+                    let console_work = !front_end_alive && unterm_settings::console_has_work();
                     let verdict = watchdog.tick(
                         std::time::Instant::now(),
                         lifetime::WatchdogInput {
@@ -182,6 +184,7 @@ fn main() -> Result<()> {
                             front_end_alive,
                             draining_to_exit: draining_to_exit
                                 .load(std::sync::atomic::Ordering::Acquire),
+                            console_work,
                         },
                     );
                     if let lifetime::Verdict::Exit(reason) = verdict {

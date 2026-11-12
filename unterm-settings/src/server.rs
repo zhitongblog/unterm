@@ -170,7 +170,7 @@ impl Request {
 }
 
 pub(crate) struct Response {
-    status: u16,
+    pub(crate) status: u16,
     reason: &'static str,
     content_type: &'static str,
     body: Vec<u8>,
@@ -568,6 +568,18 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/tasks/delete") => super::console_tasks::api_delete(&req.body),
         ("POST", "/api/console/tasks/run") => super::console_tasks::api_run(handler, &req.body),
         ("POST", "/api/console/tasks/stop") => super::console_tasks::api_stop(&req.body),
+        ("POST", "/api/console/tasks/output") => super::console_tasks::api_output(&req.body),
+        ("POST", "/api/console/tasks/thread") => super::console_tasks::api_thread(&req.body),
+        ("POST", "/api/console/computer/terminal") => super::console_tasks::api_terminal(handler, &req.body),
+        ("POST", "/api/console/computer/terminal/focus") => super::console_tasks::api_terminal_focus(handler, &req.body),
+        ("POST", "/api/console/computer/tab") => super::console_tasks::api_tab(&req.body),
+        ("POST", "/api/console/computer/tab/activate") => super::console_tasks::api_tab_activate(&req.body),
+        ("GET", "/api/console/skills") => super::console_tasks::api_skills(),
+        ("POST", "/api/console/skills/toggle") => super::console_tasks::api_skill_toggle(&req.body),
+        ("POST", "/api/console/skills/delete") => super::console_tasks::api_skill_delete(&req.body),
+        ("POST", "/api/console/skills/import") => super::console_tasks::api_skill_import(&req.body),
+        ("GET", "/api/console/capabilities") => super::agent_run::api_capabilities(),
+        ("GET", "/api/console/browser") => super::agent_run::api_browser(),
         ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
         ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),

@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use unterm_mcp::handler::McpHandler;
 use unterm_services::agent_session;
+use unterm_services::tool_risk::{self, Autonomy};
 use unterm_tasks::{Run, RunId, State, Step, StepId, Task, TaskId, TaskStore};
 
 use super::server::Response;
@@ -42,6 +43,12 @@ const STEP_KIND: &str = "agent_turn";
 /// person -- for this long is stuck, not thinking.
 const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const POLL: Duration = Duration::from_millis(700);
+/// The most tool calls one turn keeps a line for.
+const MAX_ACTIVITY: usize = 300;
+/// Tools a CLI calls to manage itself rather than to do the work.
+const HOUSEKEEPING_TOOLS: &[&str] = &["ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool"];
+/// The most of a reply one turn keeps (bytes).
+const MAX_REPLY: usize = 64 * 1024;
 
 // ---- run settings --------------------------------------------------------
 
@@ -55,6 +62,14 @@ pub struct RunSettings {
     pub cwd: String,
     #[serde(default = "yes")]
     pub governed: bool,
+    /// How much the agent may do without asking (see
+    /// `unterm_services::tool_risk`).
+    #[serde(default)]
+    pub autonomy: Autonomy,
+    /// The Unzoo Browser profile the agents browse in. Empty: their own
+    /// (`browser::RESERVED_PROFILE`).
+    #[serde(default)]
+    pub browser_profile: String,
 }
 
 fn yes() -> bool {
@@ -63,7 +78,13 @@ fn yes() -> bool {
 
 impl Default for RunSettings {
     fn default() -> Self {
-        Self { agent: "claude-code".into(), cwd: String::new(), governed: true }
+        Self {
+            agent: "claude-code".into(),
+            cwd: String::new(),
+            governed: true,
+            autonomy: Autonomy::default(),
+            browser_profile: String::new(),
+        }
     }
 }
 
@@ -98,6 +119,293 @@ pub fn set_run_settings(next: RunSettings) -> Result<RunSettings> {
     std::fs::write(&temp, serde_json::to_vec_pretty(&next)?)?;
     std::fs::rename(&temp, &path)?;
     Ok(next)
+}
+
+// ---- where a task works --------------------------------------------------
+
+/// Where tasks get their own folder when the run settings name none:
+/// `Documents/<product>`, a place a person finds their files in. Not the
+/// directory the service happened to start in -- for an installed service
+/// that is the install directory, where an agent cannot write.
+pub fn work_root() -> Option<std::path::PathBuf> {
+    if let Some(root) = std::env::var_os("UNTERM_WORK_ROOT").filter(|v| !v.is_empty()) {
+        return Some(root.into());
+    }
+    let base = dirs_next::document_dir().or_else(dirs_next::home_dir)?;
+    Some(base.join(unterm_protocol::product_name()))
+}
+
+/// A folder name from a task's title: what Windows, macOS and Linux all
+/// accept, short, and never a device name.
+pub fn folder_name(title: &str, fallback: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { ' ' } else { c })
+        .collect();
+    let mut name = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.chars().count() > 60 {
+        name = name.chars().take(60).collect();
+    }
+    let name = name.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
+    if name.is_empty() {
+        return fallback.to_string();
+    }
+    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("{name} task")
+    } else {
+        name
+    }
+}
+
+/// The directory a run of `task` works in: the one the run settings name,
+/// or else the task's own folder, picked on its first run and kept, so a
+/// renamed task keeps its files where they were.
+fn workdir_for(store: &TaskStore, task: &Task, settings: &RunSettings) -> Result<String> {
+    if !settings.cwd.is_empty() {
+        return Ok(settings.cwd.clone());
+    }
+    if let Some(kept) = task.detail.get("workdir").and_then(Value::as_str) {
+        std::fs::create_dir_all(kept).with_context(|| format!("could not make {kept}"))?;
+        return Ok(kept.to_string());
+    }
+    let root = work_root().ok_or_else(|| anyhow!("there is no documents or home folder to work in"))?;
+    let taken: HashSet<String> = store
+        .tasks()?
+        .iter()
+        .filter(|t| t.kind == KIND && t.id != task.id)
+        .filter_map(|t| t.detail.get("workdir").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let base = folder_name(&task.title, &console_id_of(task));
+    let mut dir = root.join(&base);
+    let mut n = 2;
+    while taken.contains(&dir.display().to_string()) {
+        dir = root.join(format!("{base} ({n})"));
+        n += 1;
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("could not make {}", dir.display()))?;
+    let dir = dir.display().to_string();
+    let mut detail = task.detail.clone();
+    detail["workdir"] = json!(dir);
+    store.set_task_detail(&task.id, detail)?;
+    Ok(dir)
+}
+
+// ---- what a run made -----------------------------------------------------
+
+/// Directories that hold tools' own state, never a deliverable.
+const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target", ".venv", "venv", "__pycache__", ".next", ".cache"];
+const MAX_OUTPUTS: usize = 50;
+const MAX_VISITED: usize = 20_000;
+const MAX_DEPTH: usize = 8;
+
+/// One file a run wrote, relative to the directory it worked in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Output {
+    pub path: String,
+    pub size: u64,
+    pub modified: String,
+}
+
+/// The files under `dir` written at or after `since`: what the run made or
+/// changed. Newest first, at most fifty; hidden files and tools' own
+/// directories are not deliverables and are skipped.
+pub fn outputs_since(dir: &std::path::Path, since: std::time::SystemTime) -> Vec<Output> {
+    let mut found: Vec<(std::time::SystemTime, Output)> = Vec::new();
+    let mut visited = 0usize;
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((current, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else { continue };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_VISITED {
+                break;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                if depth + 1 < MAX_DEPTH && !SKIPPED_DIRS.contains(&name.as_str()) {
+                    stack.push((entry.path(), depth + 1));
+                }
+                continue;
+            }
+            if !kind.is_file() {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(modified) = meta.modified() else { continue };
+            if modified < since {
+                continue;
+            }
+            let Ok(relative) = entry.path().strip_prefix(dir).map(|p| p.to_path_buf()) else { continue };
+            let path = relative.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            found.push((
+                modified,
+                Output {
+                    path,
+                    size: meta.len(),
+                    modified: chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339(),
+                },
+            ));
+        }
+        if visited > MAX_VISITED {
+            break;
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+    found.into_iter().take(MAX_OUTPUTS).map(|(_, output)| output).collect()
+}
+
+/// How much of one output the console is shown.
+const MAX_READ: u64 = 1024 * 1024;
+
+/// Read one file a run recorded as its output. Only those: the path must
+/// be in the run's list and resolve inside the directory it worked in.
+pub fn read_output(task_id: &str, console_run: &str, path: &str) -> Result<Value> {
+    let store = store()?;
+    let task = console_task(&store, task_id)?;
+    let run = run_key(console_run)?;
+    let step = store
+        .steps(&run)?
+        .into_iter()
+        .find(|s| s.kind == STEP_KIND)
+        .ok_or_else(|| anyhow!("no run {console_run}"))?;
+    if !store.runs(&task.id)?.iter().any(|r| r.id == run) {
+        bail!("{console_run} is not a run of {task_id}");
+    }
+    let listed = step
+        .detail
+        .get("outputs")
+        .and_then(Value::as_array)
+        .is_some_and(|outputs| outputs.iter().any(|o| o.get("path").and_then(Value::as_str) == Some(path)));
+    if !listed {
+        bail!("{path} is not an output of this run");
+    }
+    let dir = step
+        .detail
+        .get("cwd")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("the run does not say where it worked"))?;
+    let root = std::fs::canonicalize(dir).with_context(|| format!("{dir} is gone"))?;
+    let file = std::fs::canonicalize(root.join(path)).with_context(|| format!("{path} is gone"))?;
+    if !file.starts_with(&root) {
+        bail!("{path} is outside the run's directory");
+    }
+    let size = std::fs::metadata(&file)?.len();
+    let mut bytes = Vec::new();
+    use std::io::Read as _;
+    std::fs::File::open(&file)?.take(MAX_READ).read_to_end(&mut bytes)?;
+    let truncated = size > MAX_READ;
+    // A cut can land inside a character; drop the partial one at the end.
+    // A byte-order mark is how some editors say "UTF-8", not text.
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").map(<[u8]>::to_vec).unwrap_or(bytes);
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => Some(text.to_string()),
+        Err(e) if truncated && e.error_len().is_none() => Some(String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()),
+        Err(_) => None,
+    };
+    Ok(json!({
+        "path": path,
+        "absolute_path": file.display().to_string().trim_start_matches(r"\\?\"),
+        "size": size,
+        "truncated": truncated,
+        "binary": text.is_none(),
+        "text": text,
+    }))
+}
+
+// ---- the agent's computer ------------------------------------------------
+
+/// A terminal session or tab id as an argument gives it: a string or a number.
+fn scalar_id(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+/// The value after `"key":` in a tool's output, which reaches us as text --
+/// often JSON inside JSON, its quotes escaped. Letters, digits, `_` and `-`.
+pub(crate) fn id_after(text: &str, key: &str) -> Option<String> {
+    let needle = key;
+    let mut from = 0;
+    while let Some(found) = text[from..].find(&needle) {
+        let after = from + found + needle.len();
+        let rest = &text[after..];
+        let trimmed = rest.trim_start_matches(|c: char| c == '\\' || c == '"' || c == ' ');
+        if let Some(value) = trimmed.strip_prefix(':') {
+            let value = value.trim_start_matches(|c: char| c == '\\' || c == '"' || c == ' ');
+            let id: String = value.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+        from = after;
+    }
+    None
+}
+
+/// Whether an agent run here used this terminal session (`"terminals"`) or
+/// tab (`"tabs"`). The console shows only those: its token reaches the whole
+/// runtime, but this view is for watching the agents, not for reading every
+/// terminal and tab on the machine.
+fn used_by_an_agent(kind: &str, id: &str) -> Result<bool> {
+    let store = store()?;
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        for run in store.runs(&task.id)? {
+            for step in store.steps(&run.id)? {
+                if step.detail.get(kind).and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id)) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// What is on an agent's terminal now.
+pub fn terminal_screen(handler: &McpHandler, session: &str) -> Result<Value> {
+    if !used_by_an_agent("terminals", session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    let screen = handler
+        .handle(&ctx, "screen.text", &json!({"session_id": session}))
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(json!({"session_id": session, "lines": screen.get("lines").cloned().unwrap_or(json!([])),
+              "cols": screen.get("cols").cloned().unwrap_or(Value::Null)}))
+}
+
+/// Bring an agent's terminal to the front of an Unzoo One terminal window,
+/// for a person to take over.
+pub fn focus_terminal(handler: &McpHandler, session: &str) -> Result<Value> {
+    if !used_by_an_agent("terminals", session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    handler.handle(&ctx, "session.focus", &json!({"session_id": session})).map_err(|e| anyhow!("{e}"))
+}
+
+/// What an agent's tab shows now: its address, title and a picture.
+pub fn tab_view(tab: &str) -> Result<Value> {
+    if !used_by_an_agent("tabs", tab)? {
+        bail!("{tab} is not a tab an agent used");
+    }
+    super::browser::tab_view(tab)
+}
+
+/// Bring an agent's tab to the front of Unzoo Browser.
+pub fn activate_tab(tab: &str) -> Result<Value> {
+    if !used_by_an_agent("tabs", tab)? {
+        bail!("{tab} is not a tab an agent used");
+    }
+    super::browser::activate_tab(tab)
 }
 
 // ---- schedules -----------------------------------------------------------
@@ -231,7 +539,50 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
         "error_code": field("error_code"),
         "waiting": detail.get("waiting").and_then(Value::as_bool).unwrap_or(false),
         "usage": field("usage"),
+        "workdir": field("cwd"),
+        "outputs": detail.get("outputs").cloned().unwrap_or_else(|| json!([])),
     })
+}
+
+/// A run as one turn of the conversation: [`run_view`] and what was said
+/// both ways, and what the agent did in between.
+fn turn_view(run: &Run, step: Option<&Step>) -> Value {
+    let mut view = run_view(run, step);
+    let detail = step.map(|s| &s.detail);
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error"] {
+        view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
+    }
+    for key in ["activity", "terminals", "tabs"] {
+        if view[key].is_null() {
+            view[key] = json!([]);
+        }
+    }
+    view
+}
+
+/// The most turns a conversation is read back with.
+const MAX_THREAD: usize = 500;
+
+/// One task as a conversation: the task, and every run oldest first, each
+/// with its prompt, the agent's whole reply and what it did.
+pub fn thread(console_id: &str) -> Result<Value> {
+    let store = store()?;
+    let task = console_task(&store, console_id)?;
+    let mut runs = store.runs(&task.id)?;
+    if runs.len() > MAX_THREAD {
+        runs.drain(..runs.len() - MAX_THREAD);
+    }
+    let mut turns = Vec::with_capacity(runs.len());
+    for run in &runs {
+        let steps = store.steps(&run.id)?;
+        turns.push(turn_view(run, steps.iter().find(|s| s.kind == STEP_KIND)));
+    }
+    let mut view = task_view(&store, &task)?;
+    if let Some(map) = view.as_object_mut() {
+        map.remove("runs");
+    }
+    view["turns"] = json!(turns);
+    Ok(view)
 }
 
 fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
@@ -253,6 +604,7 @@ fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
         "schedule": detail.get("schedule").cloned().unwrap_or(Value::Null),
         "paused": detail.get("paused").and_then(Value::as_bool).unwrap_or(false),
         "console": detail.get("console").cloned().unwrap_or(Value::Null),
+        "workdir": detail.get("workdir").cloned().unwrap_or(Value::Null),
         "runs": views,
     }))
 }
@@ -288,7 +640,7 @@ pub fn put(put: Put) -> Result<Value> {
         bail!("a task needs a title");
     }
     let key = task_key(&put.id)?;
-    let detail = json!({
+    let mut detail = json!({
         "console_id": put.id,
         "prompt": put.prompt.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
         "schedule": put.schedule,
@@ -298,7 +650,11 @@ pub fn put(put: Put) -> Result<Value> {
     let store = store()?;
     match store.task(&key)? {
         Some(existing) if existing.kind != KIND => bail!("{} is not a console task", put.id),
-        Some(_) => {
+        Some(existing) => {
+            // The runtime's own: where the task works stays where it was.
+            if let Some(workdir) = existing.detail.get("workdir") {
+                detail["workdir"] = workdir.clone();
+            }
             store.set_task_title(&key, title)?;
             store.set_task_detail(&key, detail)?;
         }
@@ -332,6 +688,28 @@ pub struct RunRequest {
     /// A session whose conversation this run continues.
     #[serde(default)]
     pub continue_from: Option<String>,
+    /// Continue the task's own conversation: the latest run's session, found
+    /// here so the caller need not know it. A new conversation when there is
+    /// none to continue.
+    #[serde(default)]
+    pub follow_up: bool,
+    /// Ask the agent to write what this conversation did as a skill, and take
+    /// it in when the turn ends. Implies `follow_up`.
+    #[serde(default)]
+    pub save_skill: bool,
+}
+
+/// The session of the task's latest run that can be continued: its agent
+/// named a conversation (it has a resume record).
+fn latest_conversation(store: &TaskStore, task: &Task) -> Result<Option<String>> {
+    for run in store.runs(&task.id)?.into_iter().rev() {
+        let Some(step) = store.steps(&run.id)?.into_iter().find(|s| s.kind == STEP_KIND) else { continue };
+        let Some(session) = step.detail.get("session_id").and_then(Value::as_str) else { continue };
+        if matches!(agent_session::resume_record(session), Ok(Some(_))) {
+            return Ok(Some(session.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 fn running_run(store: &TaskStore, task: &Task) -> Result<Option<(Run, Option<Step>)>> {
@@ -368,6 +746,11 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
     if running_run(&store, &task)?.is_some() {
         bail!("{} is already running", request.task_id);
     }
+    let mut request = request;
+    if request.save_skill {
+        request.prompt = Some(super::skills::save_prompt());
+        request.follow_up = true;
+    }
     let prompt = request
         .prompt
         .clone()
@@ -376,6 +759,12 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         .or_else(|| task.detail.get("prompt").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| task.title.clone());
     let settings = run_settings();
+    let workdir = workdir_for(&store, &task, &settings)?;
+    let continue_from = match &request.continue_from {
+        Some(session) => Some(session.clone()),
+        None if request.follow_up => latest_conversation(&store, &task)?,
+        None => None,
+    };
     let console_run_id = request
         .run_id
         .clone()
@@ -397,11 +786,18 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         "trigger": trigger,
         "agent": settings.agent,
         "prompt": prompt,
+        "cwd": workdir,
     });
+    if request.follow_up || request.continue_from.is_some() {
+        detail["continued"] = json!(continue_from.is_some());
+    }
+    if request.save_skill {
+        detail["purpose"] = json!("save_skill");
+    }
     let step = store.request_step_with_detail(&run.id, STEP_KIND, None, detail.clone())?.step().clone();
     store.set_step_detail(&step.id, detail.clone(), State::Running)?;
 
-    let started = match &request.continue_from {
+    let resumed = match &continue_from {
         Some(session) => {
             let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
             handler
@@ -416,22 +812,38 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                         "step_id": step_id,
                     }),
                 )
+                .map(Some)
                 .map_err(|e| e.to_string())
         }
-        None => {
+        None => Ok(None),
+    };
+    // A conversation that cannot be picked up again (its agent's own record
+    // of it is gone) is started afresh rather than failing the message.
+    let resumed = match resumed {
+        Err(message) if request.follow_up && request.continue_from.is_none() => {
+            log::warn!("console run {console_run_id}: could not continue, starting afresh: {message}");
+            detail["continued"] = json!(false);
+            Ok(None)
+        }
+        other => other,
+    };
+    let started = match resumed {
+        Ok(Some(value)) => Ok(value),
+        Err(message) => Err(message),
+        Ok(None) => {
             let governed = settings.governed && super::agent_run::supports_governed(&settings.agent);
             let mut body = json!({
                 "agent": settings.agent,
                 "prompt": prompt,
                 "hosted": true,
                 "governed": governed,
+                "autonomy": settings.autonomy.as_str(),
+                "browser_profile": settings.browser_profile,
                 "task_id": console_task_id,
                 "run_id": console_run_id,
                 "step_id": step_id,
             });
-            if !settings.cwd.is_empty() {
-                body["cwd"] = json!(settings.cwd);
-            }
+            body["cwd"] = json!(workdir);
             super::agent_run::start_session(handler, &body).map_err(|(_, _, message)| message)
         }
     };
@@ -477,6 +889,17 @@ struct Turn {
     error_code: Option<&'static str>,
     waiting: bool,
     ended: Option<String>,
+    /// Something other than the answer came since its last words -- a tool
+    /// call, a question -- so the next words are a new paragraph.
+    paragraph: bool,
+    /// What the agent did, one entry per tool call, in order.
+    activity: Vec<Value>,
+    /// Where it works, for judging its edits.
+    cwd: Option<String>,
+    /// Terminal sessions it used (Unterm's ids), in the order first seen.
+    terminals: Vec<String>,
+    /// Unzoo Browser tabs it used.
+    tabs: Vec<String>,
 }
 
 impl Turn {
@@ -484,8 +907,16 @@ impl Turn {
         match event.get("event").and_then(Value::as_str).unwrap_or_default() {
             "output.delta" if event.get("stream").and_then(Value::as_str) != Some("reasoning") => {
                 if let Some(text) = event.get("text").and_then(Value::as_str) {
+                    if self.paragraph && !self.text.is_empty() && !text.trim().is_empty() {
+                        self.text.truncate(self.text.trim_end().len());
+                        self.text.push_str("\n\n");
+                    }
+                    if !text.trim().is_empty() {
+                        self.paragraph = false;
+                    }
                     self.text.push_str(text);
                 }
+                return;
             }
             "error" => {
                 self.error = event
@@ -494,13 +925,163 @@ impl Turn {
                     .map(str::to_string)
                     .or(self.error.take());
             }
-            "approval.requested" => self.waiting = true,
-            "approval.resolved" => self.waiting = false,
+            "tool_call.requested" => self.tool_requested(event),
+            "tool_call.result" => {
+                let id = event.get("external_call_id").and_then(Value::as_str);
+                let mut tool = None;
+                if let Some(entry) =
+                    self.activity.iter_mut().rev().find(|a| id.is_some() && a["call_id"].as_str() == id)
+                {
+                    entry["ok"] = event.get("ok").cloned().unwrap_or(Value::Null);
+                    tool = entry["tool"].as_str().map(str::to_string);
+                }
+                // What a terminal or a tab was opened as is only in the
+                // answer: `session.create` and `tab_create` name it there.
+                if let (Some(tool), Some(output)) = (tool, event.get("output").and_then(Value::as_str)) {
+                    if tool.starts_with("mcp__unterm__") {
+                        if let Some(session) = id_after(output, "session_id") {
+                            self.note_terminal(&session);
+                        }
+                    } else if tool.starts_with("mcp__unzoo__") {
+                        if let Some(tab) = id_after(output, "tab_id") {
+                            self.note_tab(&tab);
+                        }
+                    }
+                }
+            }
+            "approval.requested" => {
+                self.waiting = true;
+                self.approval_requested(event);
+            }
+            "approval.resolved" => {
+                self.waiting = false;
+                self.approval_resolved(event);
+            }
             "turn.completed" | "session.closed" => {
                 self.ended = Some(event.get("state").and_then(Value::as_str).unwrap_or("finished").to_string());
             }
             _ => {}
         }
+        self.paragraph = true;
+    }
+
+    fn tool_requested(&mut self, event: &Value) {
+        if self.activity.len() >= MAX_ACTIVITY {
+            return;
+        }
+        let call = &event["tool_call"];
+        let tool = call["tool"].as_str().unwrap_or("tool");
+        // The CLI looking up its own tools is not something it did.
+        if HOUSEKEEPING_TOOLS.contains(&tool) {
+            return;
+        }
+        let arguments = &call["arguments"];
+        if tool.starts_with("mcp__unterm__") {
+            for key in ["session_id", "pane_id", "id"] {
+                if let Some(session) = scalar_id(&arguments[key]) {
+                    self.note_terminal(&session);
+                    break;
+                }
+            }
+        } else if tool.starts_with("mcp__unzoo__") {
+            if let Some(tab) = scalar_id(&arguments["tab_id"]) {
+                self.note_tab(&tab);
+            }
+        }
+        let (verb, target) = tool_risk::describe_in(tool, arguments, self.cwd.as_deref());
+        let risk = tool_risk::classify(tool, arguments, self.cwd.as_deref());
+        self.activity.push(json!({
+            "call_id": call["external_call_id"],
+            "tool": tool,
+            "verb": verb,
+            "target": target,
+            "risk": risk.map(|r| r.as_str()),
+            "at": event.get("at").cloned().unwrap_or(Value::Null),
+        }));
+    }
+
+    /// A question about a call: matched to the call it is about (the latest
+    /// one of that tool not yet asked about), or recorded by itself when the
+    /// CLI asks before it says it is calling.
+    fn approval_requested(&mut self, event: &Value) {
+        let approval = &event["approval"];
+        let tool = approval["tool_call"]["tool"].as_str().unwrap_or("tool").to_string();
+        let request = approval["request_id"].clone();
+        let room = self.activity.len() < MAX_ACTIVITY;
+        let entry = self
+            .activity
+            .iter_mut()
+            .rev()
+            .find(|a| a["tool"].as_str() == Some(tool.as_str()) && a.get("request_id").is_none());
+        match entry {
+            Some(entry) => {
+                entry["request_id"] = request;
+                if let Some(risk) = approval.get("risk") {
+                    entry["risk"] = risk.clone();
+                }
+            }
+            None if room => {
+                let arguments = &approval["tool_call"]["arguments"];
+                let (verb, target) = tool_risk::describe_in(&tool, arguments, self.cwd.as_deref());
+                let risk = approval.get("risk").cloned().unwrap_or_else(|| {
+                    json!(tool_risk::classify(&tool, arguments, self.cwd.as_deref()).map(|r| r.as_str()))
+                });
+                self.activity.push(json!({
+                    "tool": tool,
+                    "verb": verb,
+                    "target": target,
+                    "risk": risk,
+                    "request_id": request,
+                    "at": event.get("at").cloned().unwrap_or(Value::Null),
+                }));
+            }
+            None => {}
+        }
+    }
+
+    fn approval_resolved(&mut self, event: &Value) {
+        let approval = &event["approval"];
+        let request = &approval["request_id"];
+        if let Some(entry) = self.activity.iter_mut().rev().find(|a| a.get("request_id") == Some(request)) {
+            // `caller` is whoever answered through the API: a person, at the
+            // console or in the inbox.
+            let by = match approval["decided_by"].as_str() {
+                Some("caller") | None => "person",
+                Some(other) => other,
+            };
+            entry["decided_by"] = json!(by);
+            entry["decision"] = json!(if approval["decision"] == "deny" { "deny" } else { "allow" });
+        }
+    }
+
+    fn note_terminal(&mut self, session: &str) {
+        if !self.terminals.iter().any(|known| known == session) && self.terminals.len() < 32 {
+            self.terminals.push(session.to_string());
+        }
+    }
+
+    fn note_tab(&mut self, tab: &str) {
+        if !self.tabs.iter().any(|known| known == tab) && self.tabs.len() < 32 {
+            self.tabs.push(tab.to_string());
+        }
+    }
+
+    /// Everything the agent said this turn, as its reply. A very long reply
+    /// keeps its beginning and its end.
+    fn reply(&self) -> String {
+        let text = self.text.trim();
+        if text.len() <= MAX_REPLY {
+            return text.to_string();
+        }
+        let mut head = MAX_REPLY / 2;
+        while !text.is_char_boundary(head) {
+            head -= 1;
+        }
+        let mut tail = text.len() - MAX_REPLY / 2;
+        while !text.is_char_boundary(tail) {
+            tail += 1;
+        }
+        format!("{}\n\n…\n\n{}", &text[..head], &text[tail..])
     }
 
     /// The agent's last words, as the run's summary.
@@ -527,11 +1108,15 @@ fn verdict(ended: &str, stopped_for_idling: bool) -> State {
 
 fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: Value) {
     let started = Instant::now();
+    // A file written in the second the run started still counts; clocks and
+    // file systems round.
+    let started_at = std::time::SystemTime::now() - Duration::from_secs(2);
     let mut last_progress = Instant::now();
     let mut cursor = 0usize;
-    let mut turn = Turn::default();
+    let mut turn = Turn { cwd: detail.get("cwd").and_then(Value::as_str).map(str::to_string), ..Turn::default() };
     let mut shown_waiting = false;
     let mut shown_len = 0usize;
+    let mut shown_activity = 0usize;
     let mut idled: Option<Instant> = None;
 
     loop {
@@ -578,11 +1163,17 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
         }
         let waiting = pending || turn.waiting;
         let text_len = turn.text.len();
-        if waiting != shown_waiting || text_len >= shown_len + 200 {
+        let activity_len = turn.activity.len();
+        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity {
             shown_waiting = waiting;
             shown_len = text_len;
+            shown_activity = activity_len;
             detail["waiting"] = json!(waiting);
             detail["summary"] = json!(turn.summary());
+            detail["reply"] = json!(turn.reply());
+            detail["activity"] = json!(turn.activity);
+            detail["terminals"] = json!(turn.terminals);
+            detail["tabs"] = json!(turn.tabs);
             if let Ok(store) = store() {
                 let _ = store.set_step_detail(&step, detail.clone(), State::Running);
             }
@@ -618,10 +1209,25 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     };
     detail["waiting"] = json!(false);
     detail["summary"] = json!(turn.summary());
+    detail["reply"] = json!(turn.reply());
+    detail["activity"] = json!(turn.activity);
+    detail["terminals"] = json!(turn.terminals);
+    detail["tabs"] = json!(turn.tabs);
     detail["ended"] = json!(ended);
     detail["duration_seconds"] = json!(started.elapsed().as_secs());
     if let Some(usage) = usage.filter(|u| !u.is_null()) {
         detail["usage"] = usage;
+    }
+    if let Some(dir) = detail.get("cwd").and_then(Value::as_str).map(std::path::PathBuf::from) {
+        // Asked to save a skill: take in what it wrote before the folder is
+        // scanned, so the skill's files are not listed as deliverables.
+        if detail.get("purpose").and_then(Value::as_str) == Some("save_skill") && state == State::Succeeded {
+            match super::skills::import_saved(&dir) {
+                Ok(names) => detail["saved_skills"] = json!(names),
+                Err(error) => detail["skill_error"] = json!(format!("{error:#}")),
+            }
+        }
+        detail["outputs"] = json!(outputs_since(&dir, started_at));
     }
     if state == State::Failed {
         if let Some(error) = &turn.error {
@@ -677,6 +1283,20 @@ pub fn sweep_orphans() -> Result<usize> {
         }
     }
     Ok(closed)
+}
+
+/// A run in progress, or a schedule that is not paused: something that needs
+/// the runtime to be there with no window open.
+pub fn has_work() -> Result<bool> {
+    let store = store()?;
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        let scheduled = task.detail.get("schedule").is_some_and(|s| !s.is_null())
+            && !task.detail.get("paused").and_then(Value::as_bool).unwrap_or(false);
+        if scheduled || store.runs(&task.id)?.iter().any(|r| r.state == State::Running) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// One pass of the scheduler: close orphans, then run what is due.
@@ -796,16 +1416,133 @@ pub fn api_stop(body: &[u8]) -> Response {
     }
 }
 
+/// POST /api/console/tasks/output — `{task_id, run_id, path}`: one file a
+/// run made, as text when it is text.
+pub fn api_output(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let (Some(task), Some(run), Some(path)) = (id_field(&body, "task_id"), id_field(&body, "run_id"), id_field(&body, "path"))
+    else {
+        return Response::err(400, "Bad Request", "task_id, run_id and path are required");
+    };
+    match read_output(&task, &run, &path) {
+        Ok(output) => Response::ok_json(json!({"output": output})),
+        Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/tasks/thread — `{task_id}`: the task as a conversation.
+pub fn api_thread(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let Some(task) = id_field(&body, "task_id") else {
+        return Response::err(400, "Bad Request", "task_id is required");
+    };
+    match thread(&task) {
+        Ok(thread) => Response::ok_json(json!({"thread": thread})),
+        Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
+fn computer_reply(result: Result<Value>) -> Response {
+    match result {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/computer/terminal — `{session_id}`: the screen's lines.
+pub fn api_terminal(handler: &McpHandler, body: &[u8]) -> Response {
+    match id_field(&body_json(body), "session_id") {
+        Some(session) => computer_reply(terminal_screen(handler, &session)),
+        None => Response::err(400, "Bad Request", "session_id is required"),
+    }
+}
+
+/// POST /api/console/computer/terminal/focus — `{session_id}`.
+pub fn api_terminal_focus(handler: &McpHandler, body: &[u8]) -> Response {
+    match id_field(&body_json(body), "session_id") {
+        Some(session) => computer_reply(focus_terminal(handler, &session)),
+        None => Response::err(400, "Bad Request", "session_id is required"),
+    }
+}
+
+/// POST /api/console/computer/tab — `{tab_id}`: address, title, screenshot.
+pub fn api_tab(body: &[u8]) -> Response {
+    match id_field(&body_json(body), "tab_id") {
+        Some(tab) => computer_reply(tab_view(&tab)),
+        None => Response::err(400, "Bad Request", "tab_id is required"),
+    }
+}
+
+/// GET /api/console/skills
+pub fn api_skills() -> Response {
+    Response::ok_json(json!({"skills": super::skills::list()}))
+}
+
+/// POST /api/console/skills/toggle — `{name, enabled}`.
+pub fn api_skill_toggle(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let (Some(name), Some(enabled)) = (id_field(&body, "name"), body.get("enabled").and_then(Value::as_bool)) else {
+        return Response::err(400, "Bad Request", "name and enabled are required");
+    };
+    match super::skills::set_enabled(&name, enabled) {
+        Ok(()) => api_skills(),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/skills/delete — `{name}`.
+pub fn api_skill_delete(body: &[u8]) -> Response {
+    let Some(name) = id_field(&body_json(body), "name") else {
+        return Response::err(400, "Bad Request", "name is required");
+    };
+    match super::skills::delete(&name) {
+        Ok(()) => api_skills(),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/skills/import — `{path, replace?}`: a folder holding a SKILL.md.
+pub fn api_skill_import(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let Some(path) = body.get("path").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()) else {
+        return Response::err(400, "Bad Request", "path is required");
+    };
+    let replace = body.get("replace").and_then(Value::as_bool).unwrap_or(false);
+    match super::skills::import(std::path::Path::new(path), replace) {
+        Ok(name) => Response::ok_json(json!({"imported": name, "skills": super::skills::list()})),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/computer/tab/activate — `{tab_id}`.
+pub fn api_tab_activate(body: &[u8]) -> Response {
+    match id_field(&body_json(body), "tab_id") {
+        Some(tab) => computer_reply(activate_tab(&tab)),
+        None => Response::err(400, "Bad Request", "tab_id is required"),
+    }
+}
+
 /// GET /api/console/run-settings
 pub fn api_settings_get() -> Response {
     Response::ok_json(json!({"settings": run_settings()}))
 }
 
-/// POST /api/console/run-settings — `{agent, cwd, governed}`
+/// POST /api/console/run-settings — `{agent, cwd, governed, autonomy}`.
+/// A field left out keeps its current value: an older console that does
+/// not know `autonomy` must not reset it by saving the agent.
 pub fn api_settings_set(body: &[u8]) -> Response {
-    let next: RunSettings = match serde_json::from_slice(body) {
+    let mut merged = serde_json::to_value(run_settings()).unwrap_or_else(|_| json!({}));
+    match serde_json::from_slice::<Value>(body) {
+        Ok(Value::Object(given)) => {
+            for (key, value) in given {
+                merged[key] = value;
+            }
+        }
+        _ => return Response::err(400, "Bad Request", "settings are a JSON object"),
+    }
+    let next: RunSettings = match serde_json::from_value(merged) {
         Ok(next) => next,
-        Err(e) => return Response::err(400, "Bad Request", &format!("settings need an agent: {e}")),
+        Err(e) => return Response::err(400, "Bad Request", &format!("settings: {e}")),
     };
     match set_run_settings(next) {
         Ok(settings) => Response::ok_json(json!({"settings": settings})),
@@ -875,7 +1612,7 @@ mod tests {
         ] {
             turn.read(&event);
         }
-        assert_eq!(turn.summary(), "Done: notes.txt written.");
+        assert_eq!(turn.summary(), "Done:\n\nnotes.txt written.", "a tool call between is a paragraph break");
         assert!(!turn.waiting);
         assert_eq!(turn.ended.as_deref(), Some("finished"));
         assert_eq!(verdict("finished", false), State::Succeeded);
@@ -883,6 +1620,37 @@ mod tests {
         assert_eq!(verdict("interrupted", false), State::Cancelled);
         assert_eq!(verdict("interrupted", true), State::Failed, "stopped for idling is a failure");
         assert_eq!(verdict("failed", false), State::Failed);
+    }
+
+    #[test]
+    fn a_task_folder_is_named_after_it_and_safe_everywhere() {
+        assert_eq!(folder_name("Weekly report", "task-1"), "Weekly report");
+        assert_eq!(folder_name("  a/b:c?  ", "task-1"), "a b c");
+        assert_eq!(folder_name("...", "task-1"), "task-1");
+        assert_eq!(folder_name("con", "task-1"), "con task");
+        assert_eq!(folder_name("COM1.txt", "task-1"), "COM1.txt task");
+        assert_eq!(folder_name("Compare prices", "task-1"), "Compare prices");
+        assert_eq!(folder_name(&"x".repeat(100), "task-1").len(), 60);
+    }
+
+    #[test]
+    fn a_runs_outputs_are_the_files_it_wrote_not_the_ones_already_there() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old.txt"), "before").unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
+        let since = std::time::SystemTime::now();
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("out/report.md"), "# Report").unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), "ref").unwrap();
+        std::fs::write(dir.path().join("node_modules/pkg/index.js"), "x").unwrap();
+        std::fs::write(dir.path().join(".hidden"), "x").unwrap();
+        let old = std::fs::File::options().write(true).open(dir.path().join("old.txt")).unwrap();
+        old.set_modified(since - Duration::from_secs(60)).unwrap();
+        let outputs = outputs_since(dir.path(), since);
+        assert_eq!(outputs.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["out/report.md"]);
+        assert_eq!(outputs[0].size, 8);
     }
 
     #[test]
@@ -927,8 +1695,61 @@ mod tests {
         assert_eq!(runs[0]["error_code"], "service_restarted");
         assert_eq!(sweep_orphans().unwrap(), 0);
 
+        // With no directory in the settings, a task works in its own folder,
+        // kept across edits and renames.
+        let root = dir.path().join("Documents").join("Unzoo One");
+        std::env::set_var("UNTERM_WORK_ROOT", &root);
+        let task = console_task(&store, "task-1").unwrap();
+        let workdir = workdir_for(&store, &task, &RunSettings::default()).unwrap();
+        assert_eq!(std::path::PathBuf::from(&workdir), root.join("monthly report"));
+        assert!(std::path::Path::new(&workdir).is_dir());
+        put(Put { id: "task-1".into(), title: "renamed".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+            .unwrap();
+        assert_eq!(list().unwrap()[0]["workdir"], json!(workdir));
+        let task = console_task(&store, "task-1").unwrap();
+        assert_eq!(workdir_for(&store, &task, &RunSettings::default()).unwrap(), workdir);
+        // A second task of the same name gets a folder of its own.
+        put(Put { id: "task-2".into(), title: "monthly report".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+            .unwrap();
+        let other = console_task(&store, "task-2").unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(workdir_for(&store, &other, &RunSettings::default()).unwrap()),
+            root.join("monthly report (2)")
+        );
+        delete("task-2").unwrap();
+
+        // What a run wrote can be read back, and nothing else.
+        std::fs::write(std::path::Path::new(&workdir).join("report.md"), "\u{feff}# Done\n").unwrap();
+        std::fs::write(dir.path().join("secret.txt"), "no").unwrap();
+        let mut detail = store.step(&step.id).unwrap().unwrap().detail;
+        detail["cwd"] = json!(workdir);
+        detail["outputs"] = json!([{"path": "report.md", "size": 7, "modified": "2026-11-11T00:00:00Z"},
+                                   {"path": "../../../secret.txt", "size": 2, "modified": "2026-11-11T00:00:00Z"}]);
+        store.set_step_detail(&step.id, detail, State::Interrupted).unwrap();
+        let read = read_output("task-1", "run-old", "report.md").unwrap();
+        assert_eq!(read["text"], "# Done\n");
+        assert_eq!(read["binary"], false);
+        assert_eq!(list().unwrap()[0]["runs"][0]["outputs"][0]["path"], "report.md");
+        assert!(read_output("task-1", "run-old", "other.md").is_err(), "not listed");
+        assert!(read_output("task-1", "run-old", "../../../secret.txt").is_err(), "outside the folder");
+        std::env::remove_var("UNTERM_WORK_ROOT");
+
+        // A paused task with no schedule is no reason to stay; a schedule is.
+        assert!(!has_work().unwrap());
+        put(Put {
+            id: "task-1".into(),
+            title: "renamed".into(),
+            prompt: None,
+            schedule: Some(Schedule::Daily { time: "09:00".into() }),
+            paused: false,
+            console: json!({}),
+        })
+        .unwrap();
+        assert!(has_work().unwrap());
+
         delete("task-1").unwrap();
         assert!(list().unwrap().is_empty());
+        assert!(!has_work().unwrap());
         assert!(delete("task-1").is_err());
 
         // Settings refuse what a scheduled run could not use.
@@ -938,8 +1759,98 @@ mod tests {
             agent: "codex-cli".into(),
             cwd: dir.path().display().to_string(),
             governed: false,
+            autonomy: Autonomy::Cautious,
+            browser_profile: String::new(),
         })
         .unwrap();
         assert_eq!(run_settings(), kept);
+        // Saving without `autonomy` (an older console) keeps it.
+        let response = api_settings_set(br#"{"agent": "claude-code", "cwd": "", "governed": true}"#);
+        assert_eq!(response.status, 200);
+        assert_eq!(run_settings().autonomy, Autonomy::Cautious);
+        assert_eq!(run_settings().agent, "claude-code");
+        api_settings_set(br#"{"autonomy": "autonomous"}"#);
+        assert_eq!(run_settings().autonomy, Autonomy::Autonomous);
+        assert_eq!(api_settings_set(br#"{"autonomy": "yolo"}"#).status, 400);
+        assert_eq!(run_settings().autonomy, Autonomy::Autonomous);
+    }
+
+    fn event(value: Value) -> Value {
+        value
+    }
+
+    #[test]
+    fn a_turn_records_what_the_agent_did_and_who_let_it() {
+        let mut turn = Turn { cwd: Some(if cfg!(windows) { r"C:\work".into() } else { "/work".into() }), ..Turn::default() };
+        for e in [
+            event(json!({"event": "turn.started"})),
+            event(json!({"event": "output.delta", "stream": "assistant", "text": "Looking."})),
+            event(json!({"event": "tool_call.requested", "tool_call": {"tool": "Read", "arguments": {"file_path": "a.md"}, "external_call_id": "c1"}})),
+            event(json!({"event": "tool_call.result", "external_call_id": "c1", "ok": true})),
+            event(json!({"event": "tool_call.requested", "tool_call": {"tool": "Bash", "arguments": {"command": "npm test"}, "external_call_id": "c2"}})),
+            event(json!({"event": "approval.requested", "approval": {"request_id": "r1", "risk": "exec", "tool_call": {"tool": "Bash", "arguments": {"command": "npm test"}}}})),
+            event(json!({"event": "approval.resolved", "approval": {"request_id": "r1", "decided_by": "autonomy", "decision": "allow_once"}})),
+            event(json!({"event": "tool_call.requested", "tool_call": {"tool": "Bash", "arguments": {"command": "git push"}, "external_call_id": "c3"}})),
+            event(json!({"event": "approval.requested", "approval": {"request_id": "r2", "risk": "external_side_effect", "tool_call": {"tool": "Bash", "arguments": {"command": "git push"}}}})),
+            event(json!({"event": "approval.resolved", "approval": {"request_id": "r2", "decided_by": "caller", "decision": "deny"}})),
+            // Asked about before the CLI said it was calling: a line of its own.
+            event(json!({"event": "approval.requested", "approval": {"request_id": "r3", "tool_call": {"tool": "mcp__unzoo__browser_navigate", "arguments": {"url": "https://example.com"}}}})),
+            event(json!({"event": "output.delta", "stream": "assistant", "text": "Done."})),
+        ] {
+            turn.read(&e);
+        }
+        let a = &turn.activity;
+        assert_eq!(a.len(), 4, "{a:#?}");
+        assert_eq!((a[0]["verb"].as_str(), a[0]["target"].as_str(), a[0]["risk"].as_str()), (Some("read"), Some("a.md"), Some("read")));
+        assert_eq!(a[0]["ok"], true);
+        assert_eq!((a[1]["decided_by"].as_str(), a[1]["decision"].as_str()), (Some("autonomy"), Some("allow")));
+        assert_eq!((a[2]["decided_by"].as_str(), a[2]["decision"].as_str()), (Some("person"), Some("deny")));
+        assert_eq!(a[2]["risk"], "external_side_effect");
+        assert_eq!((a[3]["verb"].as_str(), a[3]["target"].as_str()), (Some("open"), Some("https://example.com")));
+        assert_eq!(a[3]["risk"], "exec");
+        assert!(turn.waiting, "r3 is still open");
+        assert_eq!(turn.reply(), "Looking.\n\nDone.");
+    }
+
+    #[test]
+    fn ids_are_found_in_tool_output_even_inside_escaped_json() {
+        assert_eq!(id_after(r#"{"session_id":"17","cols":120}"#, "session_id").as_deref(), Some("17"));
+        assert_eq!(
+            id_after(r#"[{"type":"text","text":"{\"tab_id\": 1030143360, \"url\": \"x\"}"}]"#, "tab_id").as_deref(),
+            Some("1030143360")
+        );
+        assert_eq!(id_after("no ids here", "tab_id"), None);
+        assert_eq!(id_after(r#"{"tab_id": null}"#, "tab_id").as_deref(), Some("null"));
+    }
+
+    #[test]
+    fn a_turn_remembers_the_terminals_and_tabs_its_agent_used() {
+        let mut turn = Turn::default();
+        for e in [
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unterm__session_create", "arguments": {}, "external_call_id": "c1"}}),
+            json!({"event": "tool_call.result", "external_call_id": "c1", "ok": true,
+                   "output": r#"[{"type":"text","text":"{\"session_id\":\"5\"}"}]"#}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unterm__exec_run_wait", "arguments": {"session_id": "5", "command": "dir"}, "external_call_id": "c2"}}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unterm__screen_text", "arguments": {"session_id": 9}, "external_call_id": "c3"}}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unzoo__tab_create", "arguments": {"url": "https://x"}, "external_call_id": "c4"}}),
+            json!({"event": "tool_call.result", "external_call_id": "c4", "ok": true, "output": r#"{"tab_id": 77}"#}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unzoo__browser_get_title", "arguments": {"tab_id": 77}, "external_call_id": "c5"}}),
+            // Another program's output naming a session is not a terminal.
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "Bash", "arguments": {"command": "echo"}, "external_call_id": "c6"}}),
+            json!({"event": "tool_call.result", "external_call_id": "c6", "ok": true, "output": r#"{"session_id":"99"}"#}),
+        ] {
+            turn.read(&e);
+        }
+        assert_eq!(turn.terminals, vec!["5".to_string(), "9".to_string()]);
+        assert_eq!(turn.tabs, vec!["77".to_string()]);
+    }
+
+    #[test]
+    fn a_very_long_reply_keeps_its_beginning_and_end() {
+        let turn = Turn { text: format!("start{}end", "é".repeat(MAX_REPLY)), ..Turn::default() };
+        let reply = turn.reply();
+        assert!(reply.starts_with("start") && reply.ends_with("end"));
+        assert!(reply.contains("\n\n…\n\n"));
+        assert!(reply.len() <= MAX_REPLY + 16);
     }
 }

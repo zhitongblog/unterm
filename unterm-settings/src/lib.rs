@@ -7,7 +7,17 @@
 //! shared auth token.
 
 mod agent_run;
+mod browser;
 mod console_tasks;
+mod local_agents;
+mod skills;
+
+/// Whether the console has work that needs this process to stay: a task run
+/// in progress, or a scheduled task that is not paused. A Core started by a
+/// window outlives its windows while this holds.
+pub fn console_has_work() -> bool {
+    console_tasks::has_work().unwrap_or(false)
+}
 mod agents;
 mod assets;
 mod console;

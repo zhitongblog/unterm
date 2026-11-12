@@ -326,7 +326,7 @@ pub fn start(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, false, false, None)
+    start_with(command, cwd, env, prompt, adapter, context, false, false, None, None)
 }
 
 /// Start an agent that is *driven*, not just watched.
@@ -353,7 +353,7 @@ pub fn start_hosted(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, true, false, None)
+    start_with(command, cwd, env, prompt, adapter, context, true, false, None, None)
 }
 
 /// A hosted session whose agent works through Unterm, with a grant.
@@ -373,7 +373,32 @@ pub fn start_governed(
     adapter: Option<&str>,
     context: TaskContext,
 ) -> Result<String> {
-    start_with(command, cwd, env, prompt, adapter, context, true, true, None)
+    start_with(command, cwd, env, prompt, adapter, context, true, true, None, None)
+}
+
+/// A hosted (and, with `governed`, governed) session that answers on its own
+/// the questions its [`Autonomy`] covers.
+///
+/// A standing rule still comes first; then a call whose risk
+/// ([`crate::tool_risk::classify`]) is within the level runs without anyone
+/// being asked, and its `approval.resolved` says `decided_by: "autonomy"`
+/// with the risk it was judged at. Anything else -- a tool nobody
+/// classified, or a risk above the level -- is asked, as before. A resumed
+/// session keeps the level it was started with.
+///
+/// [`Autonomy`]: crate::tool_risk::Autonomy
+#[allow(clippy::too_many_arguments)]
+pub fn start_with_autonomy(
+    command: &[String],
+    cwd: Option<&str>,
+    env: &[(String, String)],
+    prompt: Option<&str>,
+    adapter: Option<&str>,
+    context: TaskContext,
+    governed: bool,
+    autonomy: crate::tool_risk::Autonomy,
+) -> Result<String> {
+    start_with(command, cwd, env, prompt, adapter, context, true, governed, None, Some(autonomy))
 }
 
 /// What it takes to continue a hosted session after the process that ran
@@ -395,6 +420,10 @@ pub struct ResumeRecord {
     pub command: Vec<String>,
     pub cwd: Option<String>,
     pub governed: bool,
+    /// How much the session answered on its own; kept so a continued
+    /// conversation does not quietly start asking about everything again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy: Option<crate::tool_risk::Autonomy>,
     pub task_id: Option<String>,
     pub run_id: Option<String>,
     pub step_id: Option<String>,
@@ -475,6 +504,7 @@ pub fn resume(
         true,
         record.governed,
         Some(&record.external_id),
+        record.autonomy,
     )
 }
 
@@ -488,6 +518,7 @@ fn start_with(
     hosted: bool,
     governed: bool,
     resume_from: Option<&str>,
+    autonomy: Option<crate::tool_risk::Autonomy>,
 ) -> Result<String> {
     let caller_command = command.to_vec();
     let (adapter_id, mut adapter) = adapter_for(command, adapter)?;
@@ -625,6 +656,7 @@ fn start_with(
                 command: caller_command.clone(),
                 cwd: cwd.clone(),
                 governed,
+                autonomy,
                 task_id: context.task_id.clone(),
                 run_id: context.run_id.clone(),
                 step_id: context.step_id.clone(),
@@ -647,7 +679,11 @@ fn start_with(
                         }
                     }
                     let mut ruled = None;
+                    let mut judged = None;
+                    let mut asked_risk = None;
                     if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
+                        let risk = crate::tool_risk::classify(tool, input, cwd.as_deref());
+                        asked_risk = risk;
                         // A standing rule answers without asking anyone; the
                         // question and its answer are both on the record.
                         if let (Some(host), Some(rule)) = (
@@ -655,6 +691,12 @@ fn start_with(
                             crate::agent_policy::evaluate(cwd.as_deref(), tool, input),
                         ) {
                             ruled = Some((request_id.clone(), host.clone(), rule, input.clone()));
+                        } else if let (Some(host), Some(level), Some(risk)) = (&host, autonomy, risk) {
+                            if level.allows(risk) {
+                                judged = Some((request_id.clone(), host.clone(), risk, input.clone()));
+                            } else {
+                                pending.lock().unwrap().insert(request_id.clone(), input.clone());
+                            }
                         } else {
                             // Recorded before the event is published, so a
                             // caller that answers the moment it sees the
@@ -663,8 +705,22 @@ fn start_with(
                         }
                     }
                     let mut described = describe(&event);
+                    if let (Some(risk), Some(approval)) =
+                        (asked_risk, described.get_mut("approval").and_then(Value::as_object_mut))
+                    {
+                        approval.insert("risk".into(), json!(risk.as_str()));
+                    }
                     turn.stamp(&event, &mut described);
                     push(&events, &context, &id, described);
+                    if let Some((request_id, host, risk, input)) = judged {
+                        for line in host.permission_reply(&request_id, &Decision::Allow, &input) {
+                            let _ = writer.write_line(&line);
+                        }
+                        let mut resolved = resolution(&request_id, &Decision::Allow, "autonomy");
+                        resolved["approval"]["risk"] = json!(risk.as_str());
+                        turn.stamp_now(&mut resolved);
+                        push(&events, &context, &id, resolved);
+                    }
                     if let Some((request_id, host, rule, input)) = ruled {
                         let decision = match rule.decision {
                             crate::agent_policy::RuleDecision::Allow => Decision::Allow,
@@ -2098,6 +2154,58 @@ read -r rest || exit 0
         assert_eq!(resolved["approval"]["decision"], "deny");
         assert_eq!(resolved["approval"]["interrupt"], true);
         assert!(resolved["approval"]["message"].as_str().unwrap().contains(&rule), "{resolved}");
+        close(&id).unwrap();
+    }
+
+    fn autonomous_fake(level: crate::tool_risk::Autonomy) -> String {
+        start_with_autonomy(
+            &a_codex_like_agent(HOSTED_CLAUDE),
+            None,
+            &[],
+            Some("write the file"),
+            Some("claude"),
+            TaskContext::default(),
+            false,
+            level,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_call_within_the_autonomy_level_runs_unasked_and_says_why() {
+        let _dir = isolate();
+        // The fake asks to run `echo hi > out.txt`: an ordinary command.
+        let id = autonomous_fake(crate::tool_risk::Autonomy::Balanced);
+        let events = wait_for(&id, |e| said(e, "allowed"));
+        let asked = events.iter().find(|e| e["event"] == "approval.requested").expect("asked");
+        assert_eq!(asked["approval"]["risk"], "exec", "{asked}");
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decided_by"], "autonomy", "{resolved}");
+        assert_eq!(resolved["approval"]["risk"], "exec");
+        assert_eq!(resolved["approval"]["decision"], "allow_once");
+        assert!(pending_requests().iter().all(|e| e["session_id"] != id.as_str()));
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn a_call_above_the_autonomy_level_is_still_asked() {
+        let _dir = isolate();
+        let id = autonomous_fake(crate::tool_risk::Autonomy::Cautious);
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        assert!(!events.iter().any(|e| e["event"] == "approval.resolved"), "{events:#?}");
+        assert_eq!(pending_approvals(&id).unwrap(), ["r1"]);
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn a_standing_rule_outranks_the_autonomy_level() {
+        let _dir = isolate();
+        let rule = a_rule("*", Some("echo"), crate::agent_policy::RuleDecision::Deny);
+        let id = autonomous_fake(crate::tool_risk::Autonomy::Autonomous);
+        let events = wait_for(&id, |e| said(e, "denied"));
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decided_by"], "policy");
+        assert_eq!(resolved["approval"]["rule_id"], rule.as_str());
         close(&id).unwrap();
     }
 
