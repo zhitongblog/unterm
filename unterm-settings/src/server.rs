@@ -556,7 +556,10 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
             super::agent_run::api_session_act(handler, "agent_session.close", &req.body)
         }
         // The inbox: open permission questions of hosted runs, and answers.
-        ("GET", "/api/agent/approvals") => super::agent_run::api_approvals(),
+        ("GET", "/api/agent/approvals") => {
+            unterm_mcp::handler::note_console_watching();
+            super::agent_run::api_approvals()
+        }
         ("POST", "/api/agent/decide") => super::agent_run::api_decide(handler, &req.body),
         ("POST", "/api/agent/resume") => super::agent_run::api_resume(handler, &req.body),
         // Standing answers. Console-only: no MCP method adds a rule.
@@ -580,6 +583,9 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/skills/import") => super::console_tasks::api_skill_import(&req.body),
         ("GET", "/api/console/capabilities") => super::agent_run::api_capabilities(),
         ("GET", "/api/console/browser") => super::agent_run::api_browser(),
+        ("GET", "/api/console/clients") => super::agent_run::api_clients(),
+        ("POST", "/api/console/clients/connect") => super::agent_run::api_client_connect(&req.body),
+        ("POST", "/api/console/clients/browser") => super::agent_run::api_client_browser(),
         ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
         ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
@@ -2116,6 +2122,9 @@ fn api_proxy_clash_status(handler: &McpHandler) -> Response {
 
 /// GET /api/approvals — what the gateway is waiting on a person to answer.
 fn api_approvals(handler: &McpHandler) -> Response {
+    // Someone is looking at the questions: a write that needs a person can
+    // wait for them here instead of being refused for want of a window.
+    unterm_mcp::handler::note_console_watching();
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
     match handler.handle(&ctx, "approval.list", &json!({})) {
         Ok(v) => Response::ok_json(v),

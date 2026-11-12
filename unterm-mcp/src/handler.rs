@@ -4431,6 +4431,58 @@ impl ConfirmationDecision {
     }
 }
 
+/// When a console last asked for the questions waiting on a person (unix
+/// seconds). See [`note_console_watching`].
+static CONSOLE_SEEN: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// How long a console that stopped asking still counts as there.
+const CONSOLE_PRESENT_SECS: i64 = 90;
+
+/// A console has just asked for the questions waiting on a person.
+///
+/// A headless Core has no window to raise a banner in, and used to refuse
+/// every write that needed one. But a console that lists the pending
+/// questions -- the settings page, or a product built on it -- can show and
+/// answer them (`approval.decide`), so while one is looking, questions are
+/// parked for it instead of refused.
+pub fn note_console_watching() {
+    CONSOLE_SEEN.store(chrono::Utc::now().timestamp(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether a console has asked recently enough to be answering.
+pub fn console_watching() -> bool {
+    let seen = CONSOLE_SEEN.load(std::sync::atomic::Ordering::Relaxed);
+    seen > 0 && chrono::Utc::now().timestamp() - seen <= CONSOLE_PRESENT_SECS
+}
+
+/// Whether anyone can answer a confirmation now: a window that can raise a
+/// banner, or a console that is watching.
+fn someone_can_answer() -> bool {
+    unterm_engine::mcp_host().is_some_and(|host| host.can_prompt()) || console_watching()
+}
+
+/// Put a confirmation to whoever can answer it, and wait.
+///
+/// A window, when one is attached: its banner is right where the person is
+/// working. Otherwise a watching console: the question is queued here, where
+/// `approval.list` shows it and `approval.decide` answers it, with at least
+/// two minutes to answer -- the person may have to switch to the console
+/// first.
+fn ask_someone(request: Value) -> Result<Value> {
+    if let Some(host) = unterm_engine::mcp_host().filter(|host| host.can_prompt()) {
+        return host.ask_confirmation(&request);
+    }
+    if console_watching() {
+        let mut request = request;
+        let timeout = request.get("timeout_ms").and_then(Value::as_u64).unwrap_or(30_000).max(120_000);
+        request["timeout_ms"] = json!(timeout);
+        return prompt_locally(&request)
+            .map(|decision| json!(decision.to_wire()))
+            .ok_or_else(|| anyhow!("nobody answered in the console"));
+    }
+    Err(anyhow!("no front end to ask"))
+}
+
 /// Put a write-confirmation question on this process's queue and wait
 /// for whoever is drawing that queue to answer it.
 ///
@@ -7102,14 +7154,14 @@ impl McpHandler {
         // Nobody to ask means no. An irreversible action performed because
         // there was no window to raise the question is the exact outcome this
         // gate exists to prevent.
-        if !unterm_engine::mcp_host().is_some_and(|host| host.can_prompt()) {
+        if !someone_can_answer() {
             self.audit(
                 "mcp.confirm.headless_block",
                 None,
                 &format!("agent={agent} method={method} (no window to approve a destructive action)"),
             );
             return Err(anyhow!(
-                "blocked: {method} cannot be undone and no Unterm window is open to approve it. \
+                "blocked: {method} cannot be undone and no Unterm window or console is open to approve it. \
                  Add the agent to mcp_trusted_agents, or set mcp_input_confirmation=never."
             ));
         }
@@ -7138,10 +7190,7 @@ impl McpHandler {
             );
             id
         };
-        let reply = unterm_engine::mcp_host()
-            .context("no front end to ask")
-            .and_then(|host| {
-                host.ask_confirmation(&json!({
+        let reply = ask_someone(json!({
                     "id": confirm_id,
                     "agent": agent,
                     "method": method,
@@ -7150,7 +7199,6 @@ impl McpHandler {
                     "timeout_ms": timeout_ms,
                     "risk": "destructive",
                 }))
-            })
             .ok();
         let window_id = reply
             .as_ref()
@@ -7310,7 +7358,7 @@ impl McpHandler {
         // answer it. Fail closed now, with an audit entry pointing at
         // the ways to authorize, instead of parking every caller on
         // the confirmation timeout.
-        if !unterm_engine::mcp_host().is_some_and(|host| host.can_prompt()) {
+        if !someone_can_answer() {
             self.audit(
                 "mcp.confirm.headless_block",
                 Some(&pane_id.to_string()),
@@ -7319,7 +7367,7 @@ impl McpHandler {
                 ),
             );
             return Ok(GateOutcome::Block(
-                "blocked: no Unterm window is open to approve this write. Add the agent to \
+                "blocked: no Unterm window or console is open to approve this write. Add the agent to \
                  mcp_trusted_agents, or set mcp_input_confirmation=never."
                     .to_string(),
             ));
@@ -7355,10 +7403,7 @@ impl McpHandler {
             );
             id
         };
-        let reply = unterm_engine::mcp_host()
-            .context("no front end to ask")
-            .and_then(|host| {
-                host.ask_confirmation(&json!({
+        let reply = ask_someone(json!({
                     "id": confirm_id,
                     "agent": agent,
                     "method": method,
@@ -7367,8 +7412,7 @@ impl McpHandler {
                     "timeout_ms": timeout_ms,
                     // So "always allow" grants exactly what was on screen.
                     "risk": gateway.risk.as_str(),
-                }))
-            });
+                }));
         let window_id = reply
             .as_ref()
             .ok()
@@ -12924,4 +12968,41 @@ fn clipboard_read_linux() -> Result<Value> {
     Err(anyhow!(
         "Clipboard is empty or no clipboard tool available (install wl-clipboard, xclip, or xsel)"
     ))
+}
+
+#[cfg(test)]
+mod console_confirmation_tests {
+    use super::*;
+
+    /// A headless Core asks a watching console instead of refusing, and the
+    /// console's answer is what the asker gets.
+    #[test]
+    fn a_watching_console_answers_what_no_window_can() {
+        if unterm_engine::mcp_host().is_some_and(|host| host.can_prompt()) {
+            return; // A window is attached in this process: not the case under test.
+        }
+        CONSOLE_SEEN.store(0, std::sync::atomic::Ordering::Relaxed);
+        assert!(!someone_can_answer(), "no window, no console: nobody to ask");
+        assert!(ask_someone(json!({"id": 990_001})).is_err());
+
+        note_console_watching();
+        assert!(someone_can_answer());
+        let asker = std::thread::spawn(|| {
+            ask_someone(json!({
+                "id": 990_002, "agent": "claude-desktop", "method": "exec.run",
+                "pane_id": 0, "input_preview": "npm test", "timeout_ms": 1_000, "risk": "exec",
+            }))
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pending_confirmations_list().iter().any(|record| record.id == 990_002) {
+            assert!(std::time::Instant::now() < deadline, "the question never reached the queue");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let queued = pending_confirmations_list().into_iter().find(|record| record.id == 990_002).unwrap();
+        assert!(queued.timeout_ms >= 120_000, "a console gets time to be switched to");
+        assert!(resolve_confirmation(990_002, ConfirmationDecision::Allow));
+        assert_eq!(asker.join().unwrap().unwrap(), json!("allow"));
+
+        CONSOLE_SEEN.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
 }

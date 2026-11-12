@@ -8,6 +8,7 @@
 
 mod agent_run;
 mod browser;
+mod clients;
 mod console_tasks;
 mod local_agents;
 mod skills;

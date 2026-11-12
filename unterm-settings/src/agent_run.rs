@@ -106,6 +106,60 @@ pub(crate) fn api_browser() -> Response {
     Response::ok_json(super::browser::status(unzoo_service_path().is_some(), &chosen))
 }
 
+/// GET /api/console/clients — the AI clients on this machine, and whether
+/// each can use this terminal and Unzoo Browser.
+pub(crate) fn api_clients() -> Response {
+    let cli = unterm_cli_path().map(|p| p.display().to_string());
+    Response::ok_json(json!({
+        "server": super::clients::server_name(),
+        "terminal_ready": cli.is_some(),
+        "browser_installed": unzoo_service_path().is_some(),
+        "clients": super::clients::status(cli.as_deref()),
+    }))
+}
+
+/// POST /api/console/clients/connect — `{id, connect}`: put this terminal in
+/// that client's MCP servers, or take it out.
+pub(crate) fn api_client_connect(body: &[u8]) -> Response {
+    let body = parse_body(body);
+    let (Some(id), Some(connect)) = (string_field(&body, "id"), body.get("connect").and_then(Value::as_bool)) else {
+        return Response::err(400, "Bad Request", "id and connect are required");
+    };
+    let Some(cli) = unterm_cli_path() else {
+        return Response::err(503, "Service Unavailable", "unterm-cli is not next to this service");
+    };
+    match super::clients::set(id, &cli.display().to_string(), connect) {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/clients/browser — run Unzoo Browser's own setup, which
+/// adds its server to every AI client it knows. Its server is its to manage;
+/// this only starts the program that does.
+pub(crate) fn api_client_browser() -> Response {
+    let script = unzoo_service_path()
+        .and_then(|service| service.parent().and_then(|dir| dir.parent()).map(|root| root.join("setup-mcp.ps1")))
+        .filter(|script| script.is_file());
+    let Some(script) = script else {
+        return Response::err(404, "Not Found", "Unzoo Browser's setup (setup-mcp.ps1) was not found");
+    };
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Silent")
+        .output();
+    match output {
+        Ok(out) if out.status.success() => Response::ok_json(json!({"ok": true})),
+        Ok(out) => Response::err(
+            500,
+            "Internal Server Error",
+            &format!("Unzoo Browser's setup failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        ),
+        Err(e) => Response::err(500, "Internal Server Error", &format!("could not run Unzoo Browser's setup: {e}")),
+    }
+}
+
 fn capabilities() -> Value {
     let browser = unzoo_service_path();
     json!({
