@@ -109,6 +109,10 @@ fn capabilities() -> Value {
     })
 }
 
+/// The client name an agent run here presents to Unzoo Browser, which keys
+/// its isolated profile on it.
+const UNZOO_CLIENT: &str = "unzoo-one-agent";
+
 const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shell tools \
 (Bash, PowerShell) and WebFetch are switched off. Run every command through the unterm MCP \
 server: open a terminal with its session.create tool when you need one, run commands with \
@@ -134,10 +138,13 @@ fn governed_args(agent_id: &str) -> Result<Vec<String>, String> {
         json!({"type": "stdio", "command": cli.display().to_string(), "args": ["mcp-stdio"]}),
     );
     if let Some(unzoo) = unzoo_service_path() {
+        // Unzoo gives each client its own isolated browser profile and tabs.
+        // Not `claude-code`: that is the person's own Claude Code, whose tabs
+        // an agent running here must not navigate away (it did, live).
         servers.insert(
             "unzoo".into(),
             json!({"type": "stdio", "command": unzoo.display().to_string(),
-                   "args": ["--mcp", "stdio", "--client", "claude-code"]}),
+                   "args": ["--mcp", "stdio", "--client", UNZOO_CLIENT]}),
         );
     }
     Ok(vec![
@@ -268,6 +275,13 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     }
     if governed {
         params.insert("governed".into(), json!(true));
+    }
+    // How much it may do unasked: only a hosted agent asks anything.
+    if let Some(level) = string_field(body, "autonomy") {
+        if !hosted {
+            return Err((400, "Bad Request", "autonomy needs a hosted session".to_string()));
+        }
+        params.insert("autonomy".into(), json!(level));
     }
     // Where the agent works: the workspace the console has open. Only an
     // existing directory -- it decides where the agent reads and writes, not

@@ -405,7 +405,25 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 })
                 .unwrap_or_default();
             let context = task_context(params);
-            let start = if params.get("governed").and_then(Value::as_bool).unwrap_or(false) {
+            let governed = params.get("governed").and_then(Value::as_bool).unwrap_or(false);
+            // How much a hosted session answers on its own. Only meaningful
+            // for a driven session, so it makes one.
+            if let Some(level) = params.get("autonomy").and_then(Value::as_str) {
+                let level = unterm_services::tool_risk::Autonomy::parse(level)
+                    .ok_or_else(|| anyhow!("autonomy is cautious, balanced or autonomous, not {level:?}"))?;
+                let id = unterm_services::agent_session::start_with_autonomy(
+                    &command,
+                    params.get("cwd").and_then(Value::as_str),
+                    &env,
+                    params.get("prompt").and_then(Value::as_str),
+                    params.get("adapter").and_then(Value::as_str),
+                    context,
+                    governed,
+                    level,
+                )?;
+                return Ok(json!({"session_id": id}));
+            }
+            let start = if governed {
                 unterm_services::agent_session::start_governed
             } else if params.get("hosted").and_then(Value::as_bool).unwrap_or(false) {
                 unterm_services::agent_session::start_hosted

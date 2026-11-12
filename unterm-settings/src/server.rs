@@ -170,7 +170,7 @@ impl Request {
 }
 
 pub(crate) struct Response {
-    status: u16,
+    pub(crate) status: u16,
     reason: &'static str,
     content_type: &'static str,
     body: Vec<u8>,
@@ -569,6 +569,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/tasks/run") => super::console_tasks::api_run(handler, &req.body),
         ("POST", "/api/console/tasks/stop") => super::console_tasks::api_stop(&req.body),
         ("POST", "/api/console/tasks/output") => super::console_tasks::api_output(&req.body),
+        ("POST", "/api/console/tasks/thread") => super::console_tasks::api_thread(&req.body),
         ("GET", "/api/console/capabilities") => super::agent_run::api_capabilities(),
         ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
         ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),

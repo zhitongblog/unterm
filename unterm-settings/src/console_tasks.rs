@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use unterm_mcp::handler::McpHandler;
 use unterm_services::agent_session;
+use unterm_services::tool_risk::{self, Autonomy};
 use unterm_tasks::{Run, RunId, State, Step, StepId, Task, TaskId, TaskStore};
 
 use super::server::Response;
@@ -42,6 +43,12 @@ const STEP_KIND: &str = "agent_turn";
 /// person -- for this long is stuck, not thinking.
 const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const POLL: Duration = Duration::from_millis(700);
+/// The most tool calls one turn keeps a line for.
+const MAX_ACTIVITY: usize = 300;
+/// Tools a CLI calls to manage itself rather than to do the work.
+const HOUSEKEEPING_TOOLS: &[&str] = &["ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool"];
+/// The most of a reply one turn keeps (bytes).
+const MAX_REPLY: usize = 64 * 1024;
 
 // ---- run settings --------------------------------------------------------
 
@@ -55,6 +62,10 @@ pub struct RunSettings {
     pub cwd: String,
     #[serde(default = "yes")]
     pub governed: bool,
+    /// How much the agent may do without asking (see
+    /// `unterm_services::tool_risk`).
+    #[serde(default)]
+    pub autonomy: Autonomy,
 }
 
 fn yes() -> bool {
@@ -63,7 +74,7 @@ fn yes() -> bool {
 
 impl Default for RunSettings {
     fn default() -> Self {
-        Self { agent: "claude-code".into(), cwd: String::new(), governed: true }
+        Self { agent: "claude-code".into(), cwd: String::new(), governed: true, autonomy: Autonomy::default() }
     }
 }
 
@@ -434,6 +445,45 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
     })
 }
 
+/// A run as one turn of the conversation: [`run_view`] and what was said
+/// both ways, and what the agent did in between.
+fn turn_view(run: &Run, step: Option<&Step>) -> Value {
+    let mut view = run_view(run, step);
+    let detail = step.map(|s| &s.detail);
+    for key in ["prompt", "reply", "activity", "continued"] {
+        view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
+    }
+    if view["activity"].is_null() {
+        view["activity"] = json!([]);
+    }
+    view
+}
+
+/// The most turns a conversation is read back with.
+const MAX_THREAD: usize = 500;
+
+/// One task as a conversation: the task, and every run oldest first, each
+/// with its prompt, the agent's whole reply and what it did.
+pub fn thread(console_id: &str) -> Result<Value> {
+    let store = store()?;
+    let task = console_task(&store, console_id)?;
+    let mut runs = store.runs(&task.id)?;
+    if runs.len() > MAX_THREAD {
+        runs.drain(..runs.len() - MAX_THREAD);
+    }
+    let mut turns = Vec::with_capacity(runs.len());
+    for run in &runs {
+        let steps = store.steps(&run.id)?;
+        turns.push(turn_view(run, steps.iter().find(|s| s.kind == STEP_KIND)));
+    }
+    let mut view = task_view(&store, &task)?;
+    if let Some(map) = view.as_object_mut() {
+        map.remove("runs");
+    }
+    view["turns"] = json!(turns);
+    Ok(view)
+}
+
 fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
     let mut runs = store.runs(&task.id)?;
     runs.reverse();
@@ -537,6 +587,24 @@ pub struct RunRequest {
     /// A session whose conversation this run continues.
     #[serde(default)]
     pub continue_from: Option<String>,
+    /// Continue the task's own conversation: the latest run's session, found
+    /// here so the caller need not know it. A new conversation when there is
+    /// none to continue.
+    #[serde(default)]
+    pub follow_up: bool,
+}
+
+/// The session of the task's latest run that can be continued: its agent
+/// named a conversation (it has a resume record).
+fn latest_conversation(store: &TaskStore, task: &Task) -> Result<Option<String>> {
+    for run in store.runs(&task.id)?.into_iter().rev() {
+        let Some(step) = store.steps(&run.id)?.into_iter().find(|s| s.kind == STEP_KIND) else { continue };
+        let Some(session) = step.detail.get("session_id").and_then(Value::as_str) else { continue };
+        if matches!(agent_session::resume_record(session), Ok(Some(_))) {
+            return Ok(Some(session.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 fn running_run(store: &TaskStore, task: &Task) -> Result<Option<(Run, Option<Step>)>> {
@@ -582,6 +650,11 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         .unwrap_or_else(|| task.title.clone());
     let settings = run_settings();
     let workdir = workdir_for(&store, &task, &settings)?;
+    let continue_from = match &request.continue_from {
+        Some(session) => Some(session.clone()),
+        None if request.follow_up => latest_conversation(&store, &task)?,
+        None => None,
+    };
     let console_run_id = request
         .run_id
         .clone()
@@ -605,10 +678,13 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         "prompt": prompt,
         "cwd": workdir,
     });
+    if request.follow_up || request.continue_from.is_some() {
+        detail["continued"] = json!(continue_from.is_some());
+    }
     let step = store.request_step_with_detail(&run.id, STEP_KIND, None, detail.clone())?.step().clone();
     store.set_step_detail(&step.id, detail.clone(), State::Running)?;
 
-    let started = match &request.continue_from {
+    let resumed = match &continue_from {
         Some(session) => {
             let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
             handler
@@ -623,15 +699,32 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                         "step_id": step_id,
                     }),
                 )
+                .map(Some)
                 .map_err(|e| e.to_string())
         }
-        None => {
+        None => Ok(None),
+    };
+    // A conversation that cannot be picked up again (its agent's own record
+    // of it is gone) is started afresh rather than failing the message.
+    let resumed = match resumed {
+        Err(message) if request.follow_up && request.continue_from.is_none() => {
+            log::warn!("console run {console_run_id}: could not continue, starting afresh: {message}");
+            detail["continued"] = json!(false);
+            Ok(None)
+        }
+        other => other,
+    };
+    let started = match resumed {
+        Ok(Some(value)) => Ok(value),
+        Err(message) => Err(message),
+        Ok(None) => {
             let governed = settings.governed && super::agent_run::supports_governed(&settings.agent);
             let mut body = json!({
                 "agent": settings.agent,
                 "prompt": prompt,
                 "hosted": true,
                 "governed": governed,
+                "autonomy": settings.autonomy.as_str(),
                 "task_id": console_task_id,
                 "run_id": console_run_id,
                 "step_id": step_id,
@@ -685,6 +778,10 @@ struct Turn {
     /// Something other than the answer came since its last words -- a tool
     /// call, a question -- so the next words are a new paragraph.
     paragraph: bool,
+    /// What the agent did, one entry per tool call, in order.
+    activity: Vec<Value>,
+    /// Where it works, for judging its edits.
+    cwd: Option<String>,
 }
 
 impl Turn {
@@ -710,14 +807,124 @@ impl Turn {
                     .map(str::to_string)
                     .or(self.error.take());
             }
-            "approval.requested" => self.waiting = true,
-            "approval.resolved" => self.waiting = false,
+            "tool_call.requested" => self.tool_requested(event),
+            "tool_call.result" => {
+                let id = event.get("external_call_id").and_then(Value::as_str);
+                if let Some(entry) =
+                    self.activity.iter_mut().rev().find(|a| id.is_some() && a["call_id"].as_str() == id)
+                {
+                    entry["ok"] = event.get("ok").cloned().unwrap_or(Value::Null);
+                }
+            }
+            "approval.requested" => {
+                self.waiting = true;
+                self.approval_requested(event);
+            }
+            "approval.resolved" => {
+                self.waiting = false;
+                self.approval_resolved(event);
+            }
             "turn.completed" | "session.closed" => {
                 self.ended = Some(event.get("state").and_then(Value::as_str).unwrap_or("finished").to_string());
             }
             _ => {}
         }
         self.paragraph = true;
+    }
+
+    fn tool_requested(&mut self, event: &Value) {
+        if self.activity.len() >= MAX_ACTIVITY {
+            return;
+        }
+        let call = &event["tool_call"];
+        let tool = call["tool"].as_str().unwrap_or("tool");
+        // The CLI looking up its own tools is not something it did.
+        if HOUSEKEEPING_TOOLS.contains(&tool) {
+            return;
+        }
+        let arguments = &call["arguments"];
+        let (verb, target) = tool_risk::describe_in(tool, arguments, self.cwd.as_deref());
+        let risk = tool_risk::classify(tool, arguments, self.cwd.as_deref());
+        self.activity.push(json!({
+            "call_id": call["external_call_id"],
+            "tool": tool,
+            "verb": verb,
+            "target": target,
+            "risk": risk.map(|r| r.as_str()),
+            "at": event.get("at").cloned().unwrap_or(Value::Null),
+        }));
+    }
+
+    /// A question about a call: matched to the call it is about (the latest
+    /// one of that tool not yet asked about), or recorded by itself when the
+    /// CLI asks before it says it is calling.
+    fn approval_requested(&mut self, event: &Value) {
+        let approval = &event["approval"];
+        let tool = approval["tool_call"]["tool"].as_str().unwrap_or("tool").to_string();
+        let request = approval["request_id"].clone();
+        let room = self.activity.len() < MAX_ACTIVITY;
+        let entry = self
+            .activity
+            .iter_mut()
+            .rev()
+            .find(|a| a["tool"].as_str() == Some(tool.as_str()) && a.get("request_id").is_none());
+        match entry {
+            Some(entry) => {
+                entry["request_id"] = request;
+                if let Some(risk) = approval.get("risk") {
+                    entry["risk"] = risk.clone();
+                }
+            }
+            None if room => {
+                let arguments = &approval["tool_call"]["arguments"];
+                let (verb, target) = tool_risk::describe_in(&tool, arguments, self.cwd.as_deref());
+                let risk = approval.get("risk").cloned().unwrap_or_else(|| {
+                    json!(tool_risk::classify(&tool, arguments, self.cwd.as_deref()).map(|r| r.as_str()))
+                });
+                self.activity.push(json!({
+                    "tool": tool,
+                    "verb": verb,
+                    "target": target,
+                    "risk": risk,
+                    "request_id": request,
+                    "at": event.get("at").cloned().unwrap_or(Value::Null),
+                }));
+            }
+            None => {}
+        }
+    }
+
+    fn approval_resolved(&mut self, event: &Value) {
+        let approval = &event["approval"];
+        let request = &approval["request_id"];
+        if let Some(entry) = self.activity.iter_mut().rev().find(|a| a.get("request_id") == Some(request)) {
+            // `caller` is whoever answered through the API: a person, at the
+            // console or in the inbox.
+            let by = match approval["decided_by"].as_str() {
+                Some("caller") | None => "person",
+                Some(other) => other,
+            };
+            entry["decided_by"] = json!(by);
+            entry["decision"] = json!(if approval["decision"] == "deny" { "deny" } else { "allow" });
+        }
+    }
+
+    /// Everything the agent said this turn, as its reply. A very long reply
+    /// keeps its beginning and its end.
+    fn reply(&self) -> String {
+        let text = self.text.trim();
+        if text.len() <= MAX_REPLY {
+            return text.to_string();
+        }
+        let mut head = MAX_REPLY / 2;
+        while !text.is_char_boundary(head) {
+            head -= 1;
+        }
+        let mut tail = text.len() - MAX_REPLY / 2;
+        while !text.is_char_boundary(tail) {
+            tail += 1;
+        }
+        format!("{}\n\n…\n\n{}", &text[..head], &text[tail..])
     }
 
     /// The agent's last words, as the run's summary.
@@ -749,9 +956,10 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     let started_at = std::time::SystemTime::now() - Duration::from_secs(2);
     let mut last_progress = Instant::now();
     let mut cursor = 0usize;
-    let mut turn = Turn::default();
+    let mut turn = Turn { cwd: detail.get("cwd").and_then(Value::as_str).map(str::to_string), ..Turn::default() };
     let mut shown_waiting = false;
     let mut shown_len = 0usize;
+    let mut shown_activity = 0usize;
     let mut idled: Option<Instant> = None;
 
     loop {
@@ -798,11 +1006,15 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
         }
         let waiting = pending || turn.waiting;
         let text_len = turn.text.len();
-        if waiting != shown_waiting || text_len >= shown_len + 200 {
+        let activity_len = turn.activity.len();
+        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity {
             shown_waiting = waiting;
             shown_len = text_len;
+            shown_activity = activity_len;
             detail["waiting"] = json!(waiting);
             detail["summary"] = json!(turn.summary());
+            detail["reply"] = json!(turn.reply());
+            detail["activity"] = json!(turn.activity);
             if let Ok(store) = store() {
                 let _ = store.set_step_detail(&step, detail.clone(), State::Running);
             }
@@ -838,6 +1050,8 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     };
     detail["waiting"] = json!(false);
     detail["summary"] = json!(turn.summary());
+    detail["reply"] = json!(turn.reply());
+    detail["activity"] = json!(turn.activity);
     detail["ended"] = json!(ended);
     detail["duration_seconds"] = json!(started.elapsed().as_secs());
     if let Some(usage) = usage.filter(|u| !u.is_null()) {
@@ -1047,16 +1261,39 @@ pub fn api_output(body: &[u8]) -> Response {
     }
 }
 
+/// POST /api/console/tasks/thread — `{task_id}`: the task as a conversation.
+pub fn api_thread(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let Some(task) = id_field(&body, "task_id") else {
+        return Response::err(400, "Bad Request", "task_id is required");
+    };
+    match thread(&task) {
+        Ok(thread) => Response::ok_json(json!({"thread": thread})),
+        Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
 /// GET /api/console/run-settings
 pub fn api_settings_get() -> Response {
     Response::ok_json(json!({"settings": run_settings()}))
 }
 
-/// POST /api/console/run-settings — `{agent, cwd, governed}`
+/// POST /api/console/run-settings — `{agent, cwd, governed, autonomy}`.
+/// A field left out keeps its current value: an older console that does
+/// not know `autonomy` must not reset it by saving the agent.
 pub fn api_settings_set(body: &[u8]) -> Response {
-    let next: RunSettings = match serde_json::from_slice(body) {
+    let mut merged = serde_json::to_value(run_settings()).unwrap_or_else(|_| json!({}));
+    match serde_json::from_slice::<Value>(body) {
+        Ok(Value::Object(given)) => {
+            for (key, value) in given {
+                merged[key] = value;
+            }
+        }
+        _ => return Response::err(400, "Bad Request", "settings are a JSON object"),
+    }
+    let next: RunSettings = match serde_json::from_value(merged) {
         Ok(next) => next,
-        Err(e) => return Response::err(400, "Bad Request", &format!("settings need an agent: {e}")),
+        Err(e) => return Response::err(400, "Bad Request", &format!("settings: {e}")),
     };
     match set_run_settings(next) {
         Ok(settings) => Response::ok_json(json!({"settings": settings})),
@@ -1273,8 +1510,64 @@ mod tests {
             agent: "codex-cli".into(),
             cwd: dir.path().display().to_string(),
             governed: false,
+            autonomy: Autonomy::Cautious,
         })
         .unwrap();
         assert_eq!(run_settings(), kept);
+        // Saving without `autonomy` (an older console) keeps it.
+        let response = api_settings_set(br#"{"agent": "claude-code", "cwd": "", "governed": true}"#);
+        assert_eq!(response.status, 200);
+        assert_eq!(run_settings().autonomy, Autonomy::Cautious);
+        assert_eq!(run_settings().agent, "claude-code");
+        api_settings_set(br#"{"autonomy": "autonomous"}"#);
+        assert_eq!(run_settings().autonomy, Autonomy::Autonomous);
+        assert_eq!(api_settings_set(br#"{"autonomy": "yolo"}"#).status, 400);
+        assert_eq!(run_settings().autonomy, Autonomy::Autonomous);
+    }
+
+    fn event(value: Value) -> Value {
+        value
+    }
+
+    #[test]
+    fn a_turn_records_what_the_agent_did_and_who_let_it() {
+        let mut turn = Turn { cwd: Some(if cfg!(windows) { r"C:\work".into() } else { "/work".into() }), ..Turn::default() };
+        for e in [
+            event(json!({"event": "turn.started"})),
+            event(json!({"event": "output.delta", "stream": "assistant", "text": "Looking."})),
+            event(json!({"event": "tool_call.requested", "tool_call": {"tool": "Read", "arguments": {"file_path": "a.md"}, "external_call_id": "c1"}})),
+            event(json!({"event": "tool_call.result", "external_call_id": "c1", "ok": true})),
+            event(json!({"event": "tool_call.requested", "tool_call": {"tool": "Bash", "arguments": {"command": "npm test"}, "external_call_id": "c2"}})),
+            event(json!({"event": "approval.requested", "approval": {"request_id": "r1", "risk": "exec", "tool_call": {"tool": "Bash", "arguments": {"command": "npm test"}}}})),
+            event(json!({"event": "approval.resolved", "approval": {"request_id": "r1", "decided_by": "autonomy", "decision": "allow_once"}})),
+            event(json!({"event": "tool_call.requested", "tool_call": {"tool": "Bash", "arguments": {"command": "git push"}, "external_call_id": "c3"}})),
+            event(json!({"event": "approval.requested", "approval": {"request_id": "r2", "risk": "external_side_effect", "tool_call": {"tool": "Bash", "arguments": {"command": "git push"}}}})),
+            event(json!({"event": "approval.resolved", "approval": {"request_id": "r2", "decided_by": "caller", "decision": "deny"}})),
+            // Asked about before the CLI said it was calling: a line of its own.
+            event(json!({"event": "approval.requested", "approval": {"request_id": "r3", "tool_call": {"tool": "mcp__unzoo__browser_navigate", "arguments": {"url": "https://example.com"}}}})),
+            event(json!({"event": "output.delta", "stream": "assistant", "text": "Done."})),
+        ] {
+            turn.read(&e);
+        }
+        let a = &turn.activity;
+        assert_eq!(a.len(), 4, "{a:#?}");
+        assert_eq!((a[0]["verb"].as_str(), a[0]["target"].as_str(), a[0]["risk"].as_str()), (Some("read"), Some("a.md"), Some("read")));
+        assert_eq!(a[0]["ok"], true);
+        assert_eq!((a[1]["decided_by"].as_str(), a[1]["decision"].as_str()), (Some("autonomy"), Some("allow")));
+        assert_eq!((a[2]["decided_by"].as_str(), a[2]["decision"].as_str()), (Some("person"), Some("deny")));
+        assert_eq!(a[2]["risk"], "external_side_effect");
+        assert_eq!((a[3]["verb"].as_str(), a[3]["target"].as_str()), (Some("open"), Some("https://example.com")));
+        assert_eq!(a[3]["risk"], "exec");
+        assert!(turn.waiting, "r3 is still open");
+        assert_eq!(turn.reply(), "Looking.\n\nDone.");
+    }
+
+    #[test]
+    fn a_very_long_reply_keeps_its_beginning_and_end() {
+        let turn = Turn { text: format!("start{}end", "é".repeat(MAX_REPLY)), ..Turn::default() };
+        let reply = turn.reply();
+        assert!(reply.starts_with("start") && reply.ends_with("end"));
+        assert!(reply.contains("\n\n…\n\n"));
+        assert!(reply.len() <= MAX_REPLY + 16);
     }
 }

@@ -15,6 +15,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod command;
+pub use command::command_risk;
+
 /// How much damage an action can do if it turns out to be a mistake.
 ///
 /// Judged on the action, never on who asked: an agent and a human running the
