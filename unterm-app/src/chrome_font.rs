@@ -27,12 +27,21 @@ const FAMILIES: &[&str] = &[
     "Segoe UI",
     // macOS
     "SF Pro Text",
+    "SF Pro",
+    ".AppleSystemUIFont",
     "Helvetica Neue",
+    "PingFang SC",
     // Linux
     "Inter",
     "Cantarell",
     "DejaVu Sans",
     "Noto Sans",
+];
+
+const CJK_FALLBACKS: &[&str] = &[
+    "PingFang SC",
+    "Microsoft YaHei UI",
+    "Noto Sans CJK SC",
 ];
 
 /// Open the chrome face at the display's scale.
@@ -44,13 +53,20 @@ pub fn open(fallbacks: &[String], scale: f32) -> anyhow::Result<TerminalFont> {
         .find(|family| !index.family(family).is_empty())
         .copied();
 
+    let mut merged_fallbacks: Vec<String> = fallbacks.to_vec();
+    for cjk in CJK_FALLBACKS {
+        if !merged_fallbacks.iter().any(|existing| existing.eq_ignore_ascii_case(cjk)) {
+            merged_fallbacks.push((*cjk).to_string());
+        }
+    }
+
     // The chrome's own line height, which is looser than a terminal's: rows
     // that breathe are the difference between a sidebar and a list of output.
     let shape = Shape {
         line_height: crate::ui_tokens::UI_LINE_HEIGHT as f32,
         cell_width: 1.0,
     };
-    Ok(TerminalFont::open_named(family, pixels, fallbacks, shape)?.as_stack(STACK))
+    Ok(TerminalFont::open_named(family, pixels, &merged_fallbacks, shape)?.as_stack(STACK))
 }
 
 /// How many pixels one point is at this scale, for the chrome's own geometry.

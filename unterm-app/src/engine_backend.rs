@@ -399,10 +399,20 @@ impl AppEngine {
                 crate::mcp_host::request_repaint,
             ) {
                 Ok(cache) => {
+                    // Dedicated client connection for the GUI window thread so
+                    // interactive keystrokes (`write_input` / `paste_input`)
+                    // never queue behind background `stats-facts` threads
+                    // calling `session.activity` on `shared.client`.
+                    let ui_client = CoreEngineClient::connect(
+                        shared.endpoint.as_str(),
+                        shared.token.clone(),
+                    )
+                    .map(std::sync::Arc::new)
+                    .unwrap_or_else(|_| shared.client.clone());
                     return AppEngine::Core {
-                        client: shared.client.clone(),
+                        client: ui_client,
                         cache,
-                    }
+                    };
                 }
                 Err(err) => {
                     eprintln!(
@@ -458,7 +468,32 @@ impl AppEngine {
     // spellings of the same request, one of which could freeze the window.
 
     pub fn pane_modes(&self, pane_id: usize) -> Result<PaneModesSnapshot> {
-        route!(self, engine => engine.pane_modes(pane_id))
+        match self {
+            Self::Local(engine) => engine.pane_modes(pane_id),
+            Self::Core { client, cache } => {
+                use std::collections::HashMap;
+                use std::sync::{Mutex, OnceLock};
+                use std::time::{Duration, Instant};
+
+                static MODES_CACHE: OnceLock<
+                    Mutex<HashMap<usize, (u64, Instant, PaneModesSnapshot)>>,
+                > = OnceLock::new();
+                let store = MODES_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+                let gen = cache.generation();
+                if let Ok(guard) = store.lock() {
+                    if let Some((cached_gen, at, modes)) = guard.get(&pane_id) {
+                        if *cached_gen == gen || at.elapsed() < Duration::from_millis(120) {
+                            return Ok(*modes);
+                        }
+                    }
+                }
+                let modes = client.pane_modes(pane_id)?;
+                if let Ok(mut guard) = store.lock() {
+                    guard.insert(pane_id, (gen, Instant::now(), modes));
+                }
+                Ok(modes)
+            }
+        }
     }
 
     /// One number that changes whenever anything drawn has.
@@ -984,19 +1019,57 @@ impl HostEngine for CoreHostEngine {
 /// for, so the call sites read the same and the only thing that changed
 /// is which process answers.
 pub mod mcp_state {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
     use unterm_mcp::handler::{InsightsMcpSnapshot, Suggestion};
+
+    const MCP_POLL_TTL: Duration = Duration::from_millis(250);
+
+    static SUGGESTIONS_CACHE: OnceLock<Mutex<HashMap<u64, (Instant, Vec<Suggestion>)>>> =
+        OnceLock::new();
+    static INSIGHTS_CACHE: OnceLock<Mutex<HashMap<usize, (Instant, InsightsMcpSnapshot)>>> =
+        OnceLock::new();
+
+    fn invalidate_mcp_caches() {
+        if let Some(lock) = SUGGESTIONS_CACHE.get() {
+            if let Ok(mut map) = lock.lock() {
+                map.clear();
+            }
+        }
+        if let Some(lock) = INSIGHTS_CACHE.get() {
+            if let Ok(mut map) = lock.lock() {
+                map.clear();
+            }
+        }
+    }
 
     pub fn pending_suggestions_for_pane(pane_id: u64) -> Vec<Suggestion> {
         match super::CORE_SHARED.get() {
             // A Core that cannot answer is reported as "nothing
             // pending" rather than as an error: this is drawn every
             // frame, and a failed fetch must not become a dialog.
-            Some(shared) => shared.client.pending_suggestions(pane_id).unwrap_or_default(),
+            Some(shared) => {
+                let cache = SUGGESTIONS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+                if let Ok(guard) = cache.lock() {
+                    if let Some((at, cached)) = guard.get(&pane_id) {
+                        if at.elapsed() < MCP_POLL_TTL {
+                            return cached.clone();
+                        }
+                    }
+                }
+                let fresh = shared.client.pending_suggestions(pane_id).unwrap_or_default();
+                if let Ok(mut guard) = cache.lock() {
+                    guard.insert(pane_id, (Instant::now(), fresh.clone()));
+                }
+                fresh
+            }
             None => unterm_mcp::handler::pending_suggestions_for_pane(pane_id),
         }
     }
 
     pub fn accept_suggestion(id: &str, run_immediately: bool) -> Result<String, String> {
+        invalidate_mcp_caches();
         match super::CORE_SHARED.get() {
             Some(shared) => shared
                 .client
@@ -1007,6 +1080,7 @@ pub mod mcp_state {
     }
 
     pub fn dismiss_suggestion(id: &str) -> Result<(), String> {
+        invalidate_mcp_caches();
         match super::CORE_SHARED.get() {
             Some(shared) => shared
                 .client
@@ -1018,7 +1092,21 @@ pub mod mcp_state {
 
     pub fn insights_mcp_snapshot(recent_audit_limit: usize) -> InsightsMcpSnapshot {
         match super::CORE_SHARED.get() {
-            Some(shared) => shared.client.insights(recent_audit_limit).unwrap_or_default(),
+            Some(shared) => {
+                let cache = INSIGHTS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+                if let Ok(guard) = cache.lock() {
+                    if let Some((at, cached)) = guard.get(&recent_audit_limit) {
+                        if at.elapsed() < MCP_POLL_TTL {
+                            return cached.clone();
+                        }
+                    }
+                }
+                let fresh = shared.client.insights(recent_audit_limit).unwrap_or_default();
+                if let Ok(mut guard) = cache.lock() {
+                    guard.insert(recent_audit_limit, (Instant::now(), fresh.clone()));
+                }
+                fresh
+            }
             None => unterm_mcp::handler::insights_mcp_snapshot(recent_audit_limit),
         }
     }

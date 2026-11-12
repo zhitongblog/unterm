@@ -75,7 +75,7 @@
   "cockpit.fleet_placeholder": "Type the task, pick a crew, Enter to launch…",
   "cockpit.fleet_title": "Launch agent fleet",
   "cockpit.fleet_worktrees": "worktrees, one each",
-  "cockpit.inbox_footer": "↑↓ select · Enter jump · Esc close",
+  "cockpit.inbox_footer": "↑↓ select · Enter jump · Y approve · N reject · C cockpit · Esc close",
   "cockpit.inbox_title": "Agents",
   "cockpit.launch_fleet": "Launch fleet…",
   "cockpit.open_review": "Open review",

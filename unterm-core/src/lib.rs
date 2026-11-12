@@ -270,12 +270,14 @@ pub enum CoreEvent {
 /// connections. Dead subscribers are dropped on the next publish.
 struct EventHub {
     subscribers: std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>,
+    waker: (std::sync::Mutex<bool>, std::sync::Condvar),
 }
 
 impl EventHub {
     fn new() -> Self {
         Self {
             subscribers: std::sync::Mutex::new(Vec::new()),
+            waker: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
         }
     }
 
@@ -285,7 +287,30 @@ impl EventHub {
             .lock()
             .expect("event hub lock poisoned")
             .push(sender);
+        self.wake();
         receiver
+    }
+
+    fn wake(&self) {
+        if let Ok(mut notified) = self.waker.0.lock() {
+            *notified = true;
+            self.waker.1.notify_all();
+        }
+    }
+
+    fn wait_timeout(&self, duration: Duration) {
+        let Ok(mut notified) = self.waker.0.lock() else {
+            std::thread::sleep(duration);
+            return;
+        };
+        if !*notified {
+            if let Ok((guard, _)) = self.waker.1.wait_timeout(notified, duration) {
+                notified = guard;
+            } else {
+                return;
+            }
+        }
+        *notified = false;
     }
 
     fn subscriber_count(&self) -> usize {
@@ -713,8 +738,8 @@ fn watch_engine_events(
             }
         }
 
-        let interval = if has_subscribers { 25 } else { 250 };
-        std::thread::sleep(Duration::from_millis(interval));
+        let interval = if has_subscribers { 6 } else { 250 };
+        hub.wait_timeout(Duration::from_millis(interval));
     }
 }
 
@@ -963,9 +988,26 @@ fn handle_stream(
             stream.flush()?;
             continue;
         }
+        let is_input = matches!(request.method.as_str(), "session.write" | "session.paste");
+        let is_lifecycle = matches!(
+            request.method.as_str(),
+            "session.create" | "session.split" | "session.close" | "core.drain"
+        );
         let response = dispatch(request, started_at, draining, exit_when_idle);
         writeln!(stream, "{response}")?;
         stream.flush()?;
+        if is_lifecycle || is_input {
+            events.wake();
+        }
+        if is_input {
+            let events = events.clone();
+            let _ = std::thread::Builder::new()
+                .name("pty-echo-push".into())
+                .spawn(move || {
+                    std::thread::sleep(Duration::from_millis(2));
+                    events.wake();
+                });
+        }
     }
     Ok(())
 }

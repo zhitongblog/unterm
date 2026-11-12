@@ -71,7 +71,7 @@ pub fn chrome(background: [f32; 4], foreground: [f32; 4]) -> Chrome {
         outer_edge: with_alpha(foreground, if is_light { 0.20 } else { 0.16 }),
         inner_highlight: with_alpha(foreground, if is_light { 0.055 } else { 0.04 }),
         selected_outline: with_alpha(foreground, if is_light { 0.12 } else { 0.09 }),
-        dim_text: with_alpha(foreground, 0.90),
+        dim_text: with_alpha(foreground, if is_light { 0.72 } else { 0.74 }),
         hover_bg,
         selected_bg,
         group_bg: mix(surface, foreground, if is_light { 0.018 } else { 0.016 }),

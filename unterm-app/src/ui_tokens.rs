@@ -28,9 +28,10 @@ pub const HEADER_FONT_SIZE: f64 = 18.0;
 /// Line-height ratio for chrome text. A touch loose (vs 1.2) so sidebar/tab
 /// rows breathe instead of reading cramped.
 pub const UI_LINE_HEIGHT: f64 = 1.30;
-/// Corner radius for selectable rows and buttons: 3pt is Fluent's 4px
-/// control radius at 96dpi.
-pub const CORNER_RADIUS: f32 = 3.0;
+/// Corner radius for selectable rows and buttons: 4.5pt is 6px at 96dpi
+/// (9px on 2x Retina), matching modern desktop developer tools (Warp, Zed,
+/// Linear) without looking overly pill-shaped.
+pub const CORNER_RADIUS: f32 = 4.5;
 /// Padding inside selectable rows. Generous so sidebar/tab rows don't read
 /// cramped, especially at the slightly larger UI font size.
 pub const ROW_PADDING: f32 = 8.0;
@@ -131,9 +132,9 @@ pub const LEFT_TAB_BAR_MIN_WIDTH: f32 = 144.0;
 pub const LEFT_TAB_BAR_RAIL_WIDTH: f32 = 36.0;
 /// Windows narrower than this (logical px) start with the strip on its rail.
 pub const LEFT_TAB_BAR_RAIL_BELOW: f32 = 900.0;
-/// The mark beside the row in front: Fluent's selection pill, 3px by 16px.
-pub const SELECTION_PILL_WIDTH: f32 = 2.25;
-pub const SELECTION_PILL_HEIGHT: f32 = 12.0;
+/// The mark beside the row in front: Fluent's selection pill, 3px by 18px.
+pub const SELECTION_PILL_WIDTH: f32 = 2.5;
+pub const SELECTION_PILL_HEIGHT: f32 = 14.0;
 /// Max width as a fraction of the window width.
 pub const LEFT_TAB_BAR_MAX_RATIO: f32 = 0.30;
 /// Width of the resize grip on the bar's right edge.

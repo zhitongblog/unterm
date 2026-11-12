@@ -348,7 +348,7 @@ pub fn agent_icon(lower_title: &str) -> Option<char> {
         '\u{273B}'
     } else if has("codex") {
         '\u{F02D8}'
-    } else if has("gemini") {
+    } else if has("gemini") || has("agy") || has("antigravity") {
         '\u{2726}'
     } else if has("aider") {
         '\u{270E}'
@@ -362,8 +362,6 @@ pub fn agent_icon(lower_title: &str) -> Option<char> {
         || has("zcode")
         || has("codegeex")
         || has("qwen")
-        || has("agy")
-        || has("antigravity")
     {
         // Known agents with no sign of their own: the generic robot
         // still says "an agent lives here", which is the point.
@@ -403,6 +401,10 @@ pub fn tab_at_or_after(rows: &[Row], at: usize) -> Option<usize> {
 pub const CLOSED: char = '\u{25B8}';
 pub const OPEN: char = '\u{25BE}';
 
+pub fn columns(text: &str) -> usize {
+    text.chars().map(crate::terminal::column_width).sum()
+}
+
 /// Shorten a label to `columns`, keeping its start.
 ///
 /// A row's beginning is its name, which is what it is identified by; a project
@@ -411,7 +413,7 @@ pub fn fit(text: &str, columns: usize) -> String {
     if columns == 0 {
         return String::new();
     }
-    let width: usize = text.chars().map(crate::terminal::column_width).sum();
+    let width = self::columns(text);
     if width <= columns {
         return text.to_string();
     }

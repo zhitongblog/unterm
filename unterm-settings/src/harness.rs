@@ -1121,6 +1121,7 @@ mod tests {
         };
 
         run_git(&["init"]);
+        run_git(&["config", "core.autocrlf", "false"]);
         run_git(&["config", "user.email", "test@unterm.dev"]);
         run_git(&["config", "user.name", "Unterm Test"]);
 

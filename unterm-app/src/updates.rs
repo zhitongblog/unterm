@@ -23,6 +23,10 @@ fn say(text: String) {
     crate::mcp_host::wake_loop();
 }
 
+pub fn notify(text: String) {
+    say(text);
+}
+
 /// The newer release the background check found, if it found one.
 pub fn available() -> Option<String> {
     let state = unterm_settings::update_check::read_state();

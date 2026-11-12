@@ -238,7 +238,10 @@ pub fn layout(
 
     for (action, icon, label_key) in ACTIONS.iter().rev() {
         let wanted = if quiet {
-            false
+            // Keep Command Palette and Settings directly reachable in the
+            // quiet bar so essential controls are always one click away even
+            // when the sidebar is collapsed or hidden.
+            matches!(action, Action::CommandPalette | Action::Settings)
         } else {
             match action {
                 Action::SplitRight => density.show_split,

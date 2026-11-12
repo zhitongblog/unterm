@@ -1052,7 +1052,7 @@ impl WindowState {
             caption_hover: None,
             caption_hover_at: std::time::Instant::now(),
             caption_left: None,
-            pointer_target: (None, None),
+            pointer_target: (None, None, None, None),
             animate_until: None,
             scroll_seen: None,
             scrolled_at: None,
@@ -1151,8 +1151,14 @@ struct WindowState {
     caption_hover_at: std::time::Instant,
     caption_left: Option<(crate::topbar::Item, std::time::Instant)>,
     /// What the pointer was last over in the chrome -- a bar item, a strip
-    /// row -- so moving onto something else asks for the frame that shows it.
-    pointer_target: (Option<crate::topbar::Item>, Option<usize>),
+    /// row, a strip footer control, or a status bar segment -- so moving onto
+    /// something else asks for the frame that shows it.
+    pointer_target: (
+        Option<crate::topbar::Item>,
+        Option<usize>,
+        Option<usize>,
+        Option<crate::statusbar::SegmentKind>,
+    ),
     /// Keep drawing until then: something on screen is still moving.
     animate_until: Option<std::time::Instant>,
     /// The scrollbar's memory: the view it last drew and when it last moved,
@@ -2182,6 +2188,7 @@ impl App {
         self.append_palette(window_width, &mut quads);
         self.append_tooltip(window_width, &mut quads);
         self.append_rail_tooltip(&mut quads);
+        self.append_sidebar_peek(&mut quads);
         self.append_quick_menu(&mut quads);
         quads.raise_since_modal(modals);
 
@@ -3501,8 +3508,9 @@ impl App {
         let tall = (crate::ui_tokens::SELECTION_PILL_HEIGHT * pt)
             .round()
             .min((tile_height - 4.0 * pt).max(wide));
+        let inset = (1.5 * pt).round().max(1.0);
         quads.backgrounds.extend(unterm_render::rounded::panel(
-            tile_left,
+            tile_left + inset,
             (tile_top + (tile_height - tall) / 2.0).round(),
             wide,
             tall,
@@ -3781,6 +3789,140 @@ impl App {
         quads.raise_since(mark);
     }
 
+    /// Hovering over a non-active tab in the expanded sidebar shows a compact
+    /// floating preview of that pane's last 5 non-empty lines of terminal output.
+    fn append_sidebar_peek(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
+        if !self.window.sidebar_open
+            || self.sidebar_on_rail()
+            || self.window.dragging_sidebar_width
+            || self.window.palette.is_some()
+            || self.window.quick_menu.is_some()
+            || self.window.inbox_open
+        {
+            return;
+        }
+        let Some((left, _top, width, _height, _)) = self.sidebar_dock() else {
+            return;
+        };
+        let (x, y) = self.window.pointer;
+        let Some(at) = self.sidebar_row_at(x, y) else {
+            return;
+        };
+        let (tab_index, header) = {
+            let rows = self.sidebar_rows();
+            let Some(crate::sidebar::Row::Tab {
+                index,
+                label,
+                subtitle,
+                active,
+                ..
+            }) = rows.get(at)
+            else {
+                return;
+            };
+            if *active {
+                return;
+            }
+            let heading = match subtitle {
+                Some(sub) => format!("{label}  \u{00b7}  {sub}"),
+                None => label.clone(),
+            };
+            (*index, heading)
+        };
+        let Some(tab_id) = self.window.tabs.tab_ids().get(tab_index).copied() else {
+            return;
+        };
+        let Some(pane_id) = self.window.tabs.active_pane(tab_id) else {
+            return;
+        };
+        let Ok(snapshot) = self.engine.read_styled_screen(pane_id) else {
+            return;
+        };
+        let mut tail: Vec<String> = snapshot
+            .lines
+            .iter()
+            .rev()
+            .filter_map(|line| {
+                let s: String = line
+                    .cells
+                    .iter()
+                    .filter(|cell| cell.width > 0)
+                    .map(|cell| cell.ch)
+                    .collect();
+                let trimmed = s.trim_end().to_string();
+                (!trimmed.trim().is_empty()).then_some(trimmed)
+            })
+            .take(5)
+            .collect();
+        tail.reverse();
+        if tail.is_empty() {
+            return;
+        }
+        let Some((row_top, row_height)) = self.sidebar_row_bounds(at) else {
+            return;
+        };
+        let metrics = self.window.font.metrics();
+        let pt = crate::chrome_font::point(self.window.scale);
+        let max_cols = 54usize;
+        let header_fitted = crate::sidebar::fit(&header, max_cols);
+        let fitted_tail: Vec<String> = tail
+            .into_iter()
+            .map(|line| crate::sidebar::fit(&line, max_cols))
+            .collect();
+        let widest = fitted_tail
+            .iter()
+            .chain(std::iter::once(&header_fitted))
+            .map(|line| crate::sidebar::columns(line))
+            .max()
+            .unwrap_or(24)
+            .max(24) as f32;
+        let pad = metrics.width * 1.25;
+        let box_width = (metrics.width * widest + pad * 2.0).round();
+        let line_step = (metrics.height * 1.22).round();
+        let box_height = (line_step * (fitted_tail.len() + 1) as f32 + pad * 1.2).round();
+        let box_left = (left + width + 8.0 * pt).round();
+        let win_height = self
+            .window
+            .state
+            .as_ref()
+            .map(|live| live.height as f32)
+            .unwrap_or(800.0);
+        let box_top = (row_top + (row_height - box_height) / 2.0)
+            .clamp(self.top_bar_height() + 4.0 * pt, (win_height - box_height - 8.0 * pt).max(0.0))
+            .round();
+        let foreground = self.window.colors.foreground;
+        let quiet = self.chrome().dim_text;
+        let mark = quads.mark();
+        self.append_flyout(
+            box_left,
+            box_top,
+            box_width,
+            box_height,
+            mix(self.window.colors.background, foreground, 0.08),
+            quads,
+        );
+        let text_top = box_top + pad * 0.6;
+        crate::terminal::append_text(
+            &header_fitted,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            foreground,
+            (box_left + pad, text_top),
+            quads,
+        );
+        for (idx, line) in fitted_tail.iter().enumerate() {
+            crate::terminal::append_text(
+                line,
+                &mut self.window.font,
+                &mut self.window.atlas,
+                quiet,
+                (box_left + pad, text_top + line_step * (idx + 1) as f32),
+                quads,
+            );
+        }
+        quads.raise_since(mark);
+    }
+
     /// Where the strip row at `index` is drawn, if it is on screen.
     fn sidebar_row_bounds(&self, index: usize) -> Option<(f32, f32)> {
         let (_left, top, _width, height, _) = self.sidebar_dock()?;
@@ -3961,6 +4103,21 @@ impl App {
     /// and the window reads as one that cannot be resized. The grid
     /// takes an I-beam for the same reason every terminal does -- that
     /// is where text is selected.
+    fn sidebar_grip_at(&self, x: f32, y: f32) -> bool {
+        if !self.window.sidebar_open {
+            return false;
+        }
+        let Some((left, top, width, height, _)) = self.sidebar_dock() else {
+            return false;
+        };
+        if y < top || y >= top + height {
+            return false;
+        }
+        let pt = self.chrome_pt();
+        let edge = left + width;
+        (x - edge).abs() <= crate::ui_tokens::LEFT_TAB_BAR_GRIP * pt / 2.0
+    }
+
     fn apply_cursor(&mut self) {
         use winit::window::CursorIcon;
         let Some((width, height)) = self
@@ -3970,12 +4127,49 @@ impl App {
         else {
             return;
         };
-        let icon = if let Some(direction) = self.resize_edge_at_pointer() {
+        let (x, y) = self.window.pointer;
+        let on_top_bar_control = matches!(
+            self.hovered_top_bar_item(),
+            Some(
+                crate::topbar::Item::Cockpit
+                    | crate::topbar::Item::Stats
+                    | crate::topbar::Item::Menu
+                    | crate::topbar::Item::Action(_)
+                    | crate::topbar::Item::Minimise
+                    | crate::topbar::Item::Maximise
+                    | crate::topbar::Item::Close
+            )
+        );
+        let on_sidebar_control = self.window.sidebar_open
+            && y >= 0.0
+            && (self.sidebar_footer_action_at(x, y).is_some()
+                || self.sidebar_row_at(x, y).is_some());
+        let on_status_control = self.status_bar_enabled
+            && y >= height - self.status_bar_height()
+            && matches!(
+                self.status_bar_segment_at_pointer(),
+                Some(
+                    crate::statusbar::SegmentKind::Cwd
+                        | crate::statusbar::SegmentKind::Project
+                        | crate::statusbar::SegmentKind::CaptureInclude
+                        | crate::statusbar::SegmentKind::CaptureExclude
+                        | crate::statusbar::SegmentKind::Theme
+                        | crate::statusbar::SegmentKind::Mcp
+                        | crate::statusbar::SegmentKind::Proxy
+                        | crate::statusbar::SegmentKind::Profile
+                        | crate::statusbar::SegmentKind::Core
+                )
+            );
+        let icon = if self.window.dragging_sidebar_width || self.sidebar_grip_at(x, y) {
+            CursorIcon::EwResize
+        } else if let Some(direction) = self.resize_edge_at_pointer() {
             crate::topbar::resize_cursor(direction)
-        } else if self.window.pointer.0 >= self.terminal_left()
-            && self.window.pointer.0 < width - self.git_panel_width()
-            && self.window.pointer.1 >= self.terminal_top()
-            && self.window.pointer.1 < height - self.status_bar_height()
+        } else if on_top_bar_control || on_sidebar_control || on_status_control {
+            CursorIcon::Pointer
+        } else if x >= self.terminal_left()
+            && x < width - self.git_panel_width()
+            && y >= self.terminal_top()
+            && y < height - self.status_bar_height()
         {
             CursorIcon::Text
         } else {
@@ -4210,10 +4404,7 @@ impl App {
             match action {
                 0 => self.new_tab(),
                 1 => self.open_shell_selector(),
-                2 => self.run_palette_command(
-                    crate::palette::Command::OpenSettings,
-                    "sidebar-settings",
-                ),
+                2 => self.open_native_settings(),
                 _ => unreachable!(),
             }
             self.window.drawn_revision = None;
@@ -4527,6 +4718,16 @@ impl App {
                         && self.window.pointer.1 >= tile_top
                         && self.window.pointer.1 < tile_top + tile_height;
                     if *active || hovered {
+                        if *active {
+                            quads.backgrounds.extend(unterm_render::rounded::panel(
+                                row_left - 1.0,
+                                tile_top - 1.0,
+                                row_width + 2.0,
+                                tile_height + 2.0,
+                                radius + 1.0,
+                                chrome.selected_outline,
+                            ));
+                        }
                         quads.backgrounds.extend(unterm_render::rounded::panel(
                             row_left,
                             tile_top,
@@ -4678,18 +4879,14 @@ impl App {
         };
         lift(footer_left, main_width, hovered == Some(0), quads);
         lift(settings_left, square, hovered == Some(2), quads);
-        // The shell picker shows itself only while the pointer is on the
-        // row: at rest the footer is two things -- new session and settings
-        // -- and the dropdown appears exactly when someone is close enough
-        // to use it. While shown it is a pill, not a stray triangle.
         let row_hovered = self.window.pointer.0 >= footer_left
             && self.window.pointer.0 < footer_left + footer_width
             && self.window.pointer.1 >= footer_top
             && self.window.pointer.1 < footer_top + row_height;
-        if row_hovered {
+        if row_hovered || hovered == Some(1) {
             let mut pill = chrome.hover_bg;
             if hovered != Some(1) {
-                pill[3] *= 0.45;
+                pill[3] *= 0.55;
             }
             quads.backgrounds.extend(unterm_render::rounded::panel(
                 picker_left,
@@ -4722,20 +4919,22 @@ impl App {
             (pen, footer_top + text_offset),
             quads,
         );
-        if row_hovered {
-            // The triangle's ink sits high in its line box; nudged down so
-            // it centres in the pill rather than floating in its upper half.
-            let wide = self.chrome_width("\u{25BE}");
-            self.append_chrome(
-                "\u{25BE}",
-                ink(hovered == Some(1)),
-                (
-                    picker_left + ((square - wide) / 2.0).max(0.0),
-                    footer_top + text_offset + 1.5 * pt,
-                ),
-                quads,
-            );
+        // Keep the shell-picker chevron subtly visible at rest so users know
+        // the dropdown exists before hovering.
+        let wide = self.chrome_width("\u{25BE}");
+        let mut picker_ink = ink(hovered == Some(1));
+        if !row_hovered && hovered != Some(1) {
+            picker_ink[3] *= 0.55;
         }
+        self.append_chrome(
+            "\u{25BE}",
+            picker_ink,
+            (
+                picker_left + ((square - wide) / 2.0).max(0.0),
+                footer_top + text_offset + 1.5 * pt,
+            ),
+            quads,
+        );
         let wide = self.chrome_width("\u{EB51}");
         self.append_chrome(
             "\u{EB51}",
@@ -5011,6 +5210,23 @@ impl App {
                 ) > 0;
             if piece.item == crate::topbar::Item::Cockpit && !piece.label.is_empty() {
                 let inset = 3.0 * pt;
+                let pill_h = height - inset * 2.0;
+                let pill_r = pill_h / 2.0;
+                let outline = if cockpit_waiting {
+                    let mut amber = crate::cockpit::Badge::NeedsYou.color();
+                    amber[3] = 0.36;
+                    amber
+                } else {
+                    chrome.selected_outline
+                };
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    piece.left - 1.0,
+                    inset - 1.0,
+                    piece.width + 2.0,
+                    pill_h + 2.0,
+                    pill_r + 1.0,
+                    outline,
+                ));
                 let mut fill = if cockpit_waiting {
                     let mut amber = crate::cockpit::Badge::NeedsYou.color();
                     amber[3] = 0.16;
@@ -5025,8 +5241,8 @@ impl App {
                     piece.left,
                     inset,
                     piece.width,
-                    height - inset * 2.0,
-                    (height - inset * 2.0) / 2.0,
+                    pill_h,
+                    pill_r,
                     fill,
                 ));
             }
@@ -5225,8 +5441,15 @@ impl App {
             // These are handles, and were taken above.
             crate::topbar::Item::Wordmark | crate::topbar::Item::Title => {}
             crate::topbar::Item::Cockpit => {
-                self.window.inbox_open = !self.window.inbox_open;
-                self.window.inbox_selected = 0;
+                if self.window.inbox_open {
+                    self.window.inbox_open = false;
+                } else if self.inbox_rows().is_empty() {
+                    self.open_console();
+                } else {
+                    self.window.inbox_open = true;
+                    self.window.inbox_selected = 0;
+                }
+                self.window.drawn_revision = None;
             }
             // The pane facts begin with the running shell. In 0.57.4 that
             // shell identity was an entry point to the shell selector; making
@@ -5265,6 +5488,16 @@ impl App {
         let target = (
             self.hovered_top_bar_item(),
             if y >= 0.0 { self.sidebar_row_at(x, y) } else { None },
+            if y >= 0.0 {
+                self.sidebar_footer_action_at(x, y)
+            } else {
+                None
+            },
+            if y >= 0.0 {
+                self.status_bar_segment_at_pointer()
+            } else {
+                None
+            },
         );
         if target == self.window.pointer_target {
             return;
@@ -5740,8 +5973,14 @@ impl App {
             Action::QuickSelect => self.open_quick_select(),
             Action::Insights => self.open_insights(),
             Action::CockpitInbox => {
-                self.window.inbox_open = !self.window.inbox_open;
-                self.window.inbox_selected = 0;
+                if self.window.inbox_open {
+                    self.window.inbox_open = false;
+                } else if self.inbox_rows().is_empty() {
+                    self.open_console();
+                } else {
+                    self.window.inbox_open = true;
+                    self.window.inbox_selected = 0;
+                }
                 self.window.drawn_revision = None;
             }
             Action::GitPanel => self.toggle_git_panel(),
@@ -5797,7 +6036,7 @@ impl App {
                 self.window.palette = Some(crate::palette::Palette::characters(entries));
                 self.window.drawn_revision = None;
             }
-            Action::Settings => self.open_settings(),
+            Action::Settings => self.open_native_settings(),
             Action::TreeSidebar => self.toggle_tree(),
             Action::FleetLaunch => {
                 let entries = self.fleet_entries();
@@ -6660,15 +6899,48 @@ impl App {
             .collect();
         // An agent that names no task in its signals usually names it in its
         // title -- the same place the strip reads it from.
-        if located.iter().any(|status| status.task_hint.is_none()) {
-            if let Ok(sessions) = unterm_engine::SessionEngine::list_sessions(&self.engine) {
-                for status in located.iter_mut().filter(|status| status.task_hint.is_none()) {
-                    status.task_hint = sessions
-                        .iter()
-                        .find(|session| session.id as u64 == status.pane_id)
-                        .and_then(|session| {
-                            crate::sidebar::task_from_title(&session.title, Some(&status.agent), &status.agent)
+        if let Ok(sessions) = unterm_engine::SessionEngine::list_sessions(&self.engine) {
+            for status in located.iter_mut().filter(|status| status.task_hint.is_none()) {
+                status.task_hint = sessions
+                    .iter()
+                    .find(|session| session.id as u64 == status.pane_id)
+                    .and_then(|session| {
+                        crate::sidebar::task_from_title(&session.title, Some(&status.agent), &status.agent)
+                    });
+            }
+            for session in &sessions {
+                if located.iter().any(|status| status.pane_id == session.id as u64) {
+                    continue;
+                }
+                let known_agent = crate::statsbar::known_facts(session.id).agent_id;
+                let running_prog = !session.shell.process_name.is_empty()
+                    && !is_a_shell(&session.shell.process_name);
+                if let Some(agent) = known_agent.or_else(|| {
+                    running_prog.then(|| crate::statusbar::shell_label(&session.shell.process_name))
+                }) {
+                    let task_hint = crate::sidebar::task_from_title(&session.title, Some(&agent), &agent)
+                        .or_else(|| {
+                            session
+                                .shell
+                                .cwd
+                                .as_deref()
+                                .map(crate::sidebar::project_name)
+                                .filter(|name| !name.is_empty())
                         });
+                    located.push(crate::cockpit::LocatedStatus {
+                        pane_id: session.id as u64,
+                        instance_id: instance_id.clone(),
+                        window_title: window_title.clone(),
+                        tab_id: self
+                            .window
+                            .tabs
+                            .tab_of_pane(session.id)
+                            .map(|id| id as u64),
+                        agent,
+                        state: unterm_services::cockpit::status::AgentState::Working,
+                        age_seconds: 0,
+                        task_hint,
+                    });
                 }
             }
         }
@@ -6696,6 +6968,36 @@ impl App {
 
         match &event.logical_key {
             WinitKey::Named(NamedKey::Escape) => self.window.inbox_open = false,
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("c") => {
+                self.window.inbox_open = false;
+                self.open_console();
+            }
+            WinitKey::Character(ch)
+                if (ch.eq_ignore_ascii_case("y") || ch.eq_ignore_ascii_case("n")) && count > 0 =>
+            {
+                let approve = ch.eq_ignore_ascii_case("y");
+                let selected = rows[self.window.inbox_selected].clone();
+                let pane_id = selected.pane_id as usize;
+                let current_instance =
+                    unterm_services::server_info::current_instance_id().unwrap_or_default();
+                if selected.instance_id.is_empty() || selected.instance_id == current_instance {
+                    let payload = if approve { "y\r" } else { "n\r" };
+                    let verb = if approve { "Approved" } else { "Rejected" };
+                    crate::engine_backend::mcp_state::audit_gui_write(
+                        if approve {
+                            "inbox.quick_approve"
+                        } else {
+                            "inbox.quick_reject"
+                        },
+                        pane_id as u64,
+                        verb,
+                    );
+                    let _ = self.engine.write_input(pane_id, payload);
+                    self.show_notice(format!(
+                        "\u{2713} {verb} \u{00b7} pane {pane_id}"
+                    ));
+                }
+            }
             WinitKey::Named(NamedKey::ArrowUp) if count > 0 => {
                 self.window.inbox_selected =
                     crate::cockpit::step_selection(self.window.inbox_selected, count, false);
@@ -7160,12 +7462,40 @@ impl App {
                 (crate::cockpit::badge(row.state), task, detail)
             })
             .collect();
+        let selected_tail: Vec<String> = rows
+            .get(self.window.inbox_selected)
+            .filter(|row| row.instance_id.is_empty() || row.instance_id == here)
+            .and_then(|row| self.engine.read_styled_screen(row.pane_id as usize).ok())
+            .map(|snapshot| {
+                let mut tail: Vec<String> = snapshot
+                    .lines
+                    .iter()
+                    .rev()
+                    .filter_map(|line| {
+                        let s: String = line
+                            .cells
+                            .iter()
+                            .filter(|cell| cell.width > 0)
+                            .map(|cell| cell.ch)
+                            .collect();
+                        let trimmed = s.trim_end().to_string();
+                        (!trimmed.trim().is_empty()).then_some(trimmed)
+                    })
+                    .take(3)
+                    .collect();
+                tail.reverse();
+                tail
+            })
+            .unwrap_or_default();
+        let footer = unterm_services::i18n::t("cockpit.inbox_footer");
         let widest = lines
             .iter()
-            .map(|(_, task, detail)| task.chars().count() + detail.chars().count() + 6)
+            .map(|(_, task, detail)| crate::sidebar::columns(task) + crate::sidebar::columns(detail) + 6)
+            .chain(selected_tail.iter().map(|line| crate::sidebar::columns(line) + 4))
+            .chain(std::iter::once(crate::sidebar::columns(&footer) + 4))
             .max()
             .unwrap_or(0)
-            .max(40) as f32;
+            .max(46) as f32;
         // Over the terminal, not the whole window: a card straddling the
         // strip's edge reads as misplaced.
         let area_left = self.terminal_left();
@@ -7176,10 +7506,16 @@ impl App {
             .min(window_width);
         let left = (area_left + (area - width) / 2.0).max(0.0);
         let row_height = (metrics.height * 1.5).round();
+        let preview_rows = if selected_tail.is_empty() {
+            0.0
+        } else {
+            selected_tail.len() as f32 + 0.6
+        };
         let top = self.terminal_top() + metrics.height;
-        let height = row_height * (shown.max(1) + 1) as f32 + metrics.height * 0.5;
+        let height =
+            row_height * (shown.max(1) + 2) as f32 + metrics.height * (0.5 + preview_rows * 1.15);
         let foreground = self.window.colors.foreground;
-        let quiet = mix(foreground, self.window.colors.background, 0.45);
+        let quiet = self.chrome().dim_text;
         self.append_flyout(
             left,
             top,
@@ -7212,7 +7548,7 @@ impl App {
             &mut self.window.atlas,
             quiet,
             (
-                left + pad + metrics.width * (heading.chars().count() as f32 + 2.0),
+                left + pad + metrics.width * (crate::sidebar::columns(&heading) as f32 + 2.0),
                 top + text_nudge + metrics.height * 0.25,
             ),
             quads,
@@ -7223,14 +7559,16 @@ impl App {
         for (index, (badge, task, detail)) in lines.iter().enumerate() {
             let row_top = first + row_height * index as f32;
             if index == self.window.inbox_selected {
+                let row_left = left + metrics.width * 0.5;
                 quads.backgrounds.extend(unterm_render::rounded::panel(
-                    left + metrics.width * 0.5,
+                    row_left,
                     row_top,
                     width - metrics.width,
                     row_height,
                     radius,
                     mix(self.window.colors.background, foreground, 0.18),
                 ));
+                self.append_selection_pill(row_left, row_top, row_height, quads);
             }
             let text_top = row_top + text_nudge;
             if let Some(badge) = badge {
@@ -7243,8 +7581,9 @@ impl App {
                     quads,
                 );
             }
-            let task_room = columns.saturating_sub(detail.chars().count().min(columns / 2) + 2);
-            let task = crate::sidebar::fit(task, task_room.max(8));
+            let detail_cols = crate::sidebar::columns(detail).min(columns / 2);
+            let task_room = columns.saturating_sub(detail_cols + 3).max(8);
+            let task = crate::sidebar::fit(task, task_room);
             let task_left = left + pad + metrics.width * 3.0;
             crate::terminal::append_text(
                 &task,
@@ -7254,17 +7593,61 @@ impl App {
                 (task_left, text_top),
                 quads,
             );
-            let used = task.chars().count() + 2;
-            let detail = crate::sidebar::fit(detail, columns.saturating_sub(used).max(4));
+            let used = crate::sidebar::columns(&task) + 2;
+            let fitted_detail = crate::sidebar::fit(detail, columns.saturating_sub(used).max(4));
+            let fitted_detail_cols = crate::sidebar::columns(&fitted_detail) as f32;
+            let detail_left = (left + width - pad - metrics.width * fitted_detail_cols)
+                .max(task_left + metrics.width * used as f32);
             crate::terminal::append_text(
-                &detail,
+                &fitted_detail,
                 &mut self.window.font,
                 &mut self.window.atlas,
                 quiet,
-                (task_left + metrics.width * used as f32, text_top),
+                (detail_left, text_top),
                 quads,
             );
         }
+        let mut footer_base = first + row_height * shown.max(1) as f32;
+        if !selected_tail.is_empty() {
+            let preview_left = left + metrics.width;
+            let preview_top = footer_base + metrics.height * 0.25;
+            let preview_line_h = (metrics.height * 1.15).round();
+            let preview_height =
+                preview_line_h * selected_tail.len() as f32 + metrics.height * 0.4;
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                preview_left,
+                preview_top,
+                width - metrics.width * 2.0,
+                preview_height,
+                radius,
+                mix(self.window.colors.background, foreground, 0.05),
+            ));
+            for (idx, line) in selected_tail.iter().enumerate() {
+                let fitted = crate::sidebar::fit(line, columns.saturating_sub(2).max(12));
+                crate::terminal::append_text(
+                    &fitted,
+                    &mut self.window.font,
+                    &mut self.window.atlas,
+                    quiet,
+                    (
+                        preview_left + metrics.width,
+                        preview_top + metrics.height * 0.2 + preview_line_h * idx as f32,
+                    ),
+                    quads,
+                );
+            }
+            footer_base = preview_top + preview_height + metrics.height * 0.15;
+        }
+        let footer_top = footer_base + text_nudge;
+        let fitted_footer = crate::sidebar::fit(&footer, columns.max(20));
+        crate::terminal::append_text(
+            &fitted_footer,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            quiet,
+            (left + pad, footer_top),
+            quads,
+        );
     }
 
     /// Start quick select, if there is anything worth labelling.
@@ -8482,7 +8865,7 @@ impl App {
             // The chip is the switch, as 0.57.4's was; the settings page is a
             // right press away.
             Some(crate::statusbar::SegmentKind::Proxy) => self.toggle_proxy(),
-            Some(crate::statusbar::SegmentKind::Profile) => self.open_settings(),
+            Some(crate::statusbar::SegmentKind::Profile) => self.open_native_settings(),
             // The chip says the arrangement is wrong; the press says why. The
             // reason is the handshake's own words -- which name the offending
             // Core and its version -- because "unavailable" alone leaves the
@@ -8652,29 +9035,194 @@ impl App {
         self.show_notice(unterm_services::i18n::t("scrollshot.started"));
     }
 
+    fn resolve_settings_http_port() -> u16 {
+        let current = unterm_services::server_info::read_current();
+        if current.http_port != 0 {
+            return current.http_port;
+        }
+        let active = unterm_services::server_info::read();
+        if active.http_port != 0 {
+            return active.http_port;
+        }
+        unterm_core::read_discovery()
+            .ok()
+            .flatten()
+            .and_then(|core| core.http_port)
+            .unwrap_or(0)
+    }
+
     fn open_settings(&mut self) {
-        let info = unterm_services::server_info::read();
-        if info.http_port == 0 {
+        let port = Self::resolve_settings_http_port();
+        if port == 0 {
             log::warn!("the settings server has not started yet");
             return;
         }
-        let url = format!("http://127.0.0.1:{}", info.http_port);
-        if let Err(err) = crate::links::open(&url) {
-            log::warn!("could not open {url}: {err}");
+        let url = format!("http://127.0.0.1:{port}");
+        match crate::links::open(&url) {
+            Ok(()) => self.show_notice(format!("Settings \u{00b7} {url}")),
+            Err(err) => log::warn!("could not open {url}: {err}"),
         }
+    }
+
+    /// Instant in-window Native Settings Center: zero browser jump for common
+    /// preferences (theme, font size, shell, sidebar, AI MCP auto-connect),
+    /// while keeping full Web Settings one row away.
+    fn open_native_settings(&mut self) {
+        let entries = self.native_settings_entries();
+        let title = unterm_services::i18n::t("command.settings");
+        self.window.palette = Some(crate::palette::Palette::new(entries).titled(title));
+        self.window.drawn_revision = None;
+    }
+
+    fn native_settings_entries(&self) -> Vec<crate::palette::Entry> {
+        use unterm_services::i18n::t;
+        let current_theme = self
+            .theme_id
+            .as_deref()
+            .and_then(crate::theme::by_id)
+            .map(|theme| theme.name.to_string())
+            .unwrap_or_else(|| "Default".to_string());
+        let font_pt = format!("{:.0} pt", self.window.font_points);
+        let port = Self::resolve_settings_http_port();
+        let web_hint = if port != 0 {
+            format!("http://127.0.0.1:{port}")
+        } else {
+            t("settings.menu.web_settings.hint")
+        };
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let mcp_label = if is_zh {
+            "一键接入本机 AI 助手 (MCP 自动配置)".to_string()
+        } else {
+            "Auto-Configure AI Agents (MCP)".to_string()
+        };
+        let mcp_hint = "Claude \u{00b7} Codex \u{00b7} Gemini \u{00b7} Agy \u{00b7} Cursor".to_string();
+        let mut entries = vec![
+            crate::palette::Entry {
+                label: t("command.theme"),
+                hint: format!(
+                    "{current_theme}  {}",
+                    crate::keys::chord_hint(crate::keys::Action::ThemePicker).unwrap_or_default()
+                )
+                .trim()
+                .to_string(),
+                command: crate::palette::Command::Action(crate::keys::Action::ThemePicker),
+            },
+            crate::palette::Entry {
+                label: t("command.font_bigger"),
+                hint: format!(
+                    "{font_pt}  {}",
+                    crate::keys::chord_hint(crate::keys::Action::IncreaseFontSize)
+                        .unwrap_or_default()
+                )
+                .trim()
+                .to_string(),
+                command: crate::palette::Command::Action(crate::keys::Action::IncreaseFontSize),
+            },
+            crate::palette::Entry {
+                label: t("command.font_smaller"),
+                hint: format!(
+                    "{font_pt}  {}",
+                    crate::keys::chord_hint(crate::keys::Action::DecreaseFontSize)
+                        .unwrap_or_default()
+                )
+                .trim()
+                .to_string(),
+                command: crate::palette::Command::Action(crate::keys::Action::DecreaseFontSize),
+            },
+            crate::palette::Entry {
+                label: t("command.font_reset"),
+                hint: crate::keys::chord_hint(crate::keys::Action::ResetFontSize)
+                    .unwrap_or_default(),
+                command: crate::palette::Command::Action(crate::keys::Action::ResetFontSize),
+            },
+            crate::palette::Entry {
+                label: t("menu.select_shell"),
+                hint: self.status().shell,
+                command: crate::palette::Command::OpenShellSelector,
+            },
+            crate::palette::Entry {
+                label: t("command.left_tab_bar"),
+                hint: crate::keys::chord_hint(crate::keys::Action::LeftTabBar).unwrap_or_default(),
+                command: crate::palette::Command::Action(crate::keys::Action::LeftTabBar),
+            },
+            crate::palette::Entry {
+                label: t("command.file_tree"),
+                hint: crate::keys::chord_hint(crate::keys::Action::TreeSidebar).unwrap_or_default(),
+                command: crate::palette::Command::Action(crate::keys::Action::TreeSidebar),
+            },
+            crate::palette::Entry {
+                label: mcp_label,
+                hint: mcp_hint,
+                command: crate::palette::Command::SetupAiAgents,
+            },
+            crate::palette::Entry {
+                label: t("command.agent_inbox"),
+                hint: crate::keys::chord_hint(crate::keys::Action::CockpitInbox)
+                    .unwrap_or_default(),
+                command: crate::palette::Command::Action(crate::keys::Action::CockpitInbox),
+            },
+            crate::palette::Entry {
+                label: t("settings.menu.web_settings"),
+                hint: web_hint,
+                command: crate::palette::Command::OpenSettings,
+            },
+        ];
+        if unterm_settings::console_dir().is_some() {
+            entries.push(crate::palette::Entry {
+                label: t("settings.menu.console"),
+                hint: t("settings.menu.console.hint"),
+                command: crate::palette::Command::OpenConsole,
+            });
+        }
+        entries
+    }
+
+    fn setup_ai_agents(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        self.show_notice(if is_zh {
+            "正在配置 AI Agent MCP 接入…".to_string()
+        } else {
+            "Configuring AI Agent MCP integrations…".to_string()
+        });
+        let _ = std::thread::Builder::new()
+            .name("setup-ai-agents".to_string())
+            .spawn(move || {
+                let cli = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|dir| dir.join("unterm-cli")))
+                    .filter(|path| path.is_file())
+                    .unwrap_or_else(|| std::path::PathBuf::from("unterm-cli"));
+                match std::process::Command::new(&cli).arg("setup-ai").output() {
+                    Ok(out) if out.status.success() => {
+                        crate::updates::notify(if is_zh {
+                            "\u{2713} AI Agent MCP 自动配置已完成".to_string()
+                        } else {
+                            "\u{2713} AI Agent MCP configured".to_string()
+                        });
+                    }
+                    Ok(out) => {
+                        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        crate::updates::notify(format!("setup-ai failed: {err}"));
+                    }
+                    Err(err) => {
+                        crate::updates::notify(format!("setup-ai error: {err}"));
+                    }
+                }
+            });
     }
 
     /// Open the Unzoo One console. Same HTTP server as the settings page,
     /// off `/console/`.
     fn open_console(&mut self) {
-        let info = unterm_services::server_info::read();
-        if info.http_port == 0 {
+        let port = Self::resolve_settings_http_port();
+        if port == 0 {
             log::warn!("the settings server has not started yet");
             return;
         }
-        let url = format!("http://127.0.0.1:{}/console/", info.http_port);
-        if let Err(err) = crate::links::open(&url) {
-            log::warn!("could not open {url}: {err}");
+        let url = format!("http://127.0.0.1:{port}/console/");
+        match crate::links::open(&url) {
+            Ok(()) => self.show_notice(format!("Console \u{00b7} {url}")),
+            Err(err) => log::warn!("could not open {url}: {err}"),
         }
     }
 
@@ -9075,20 +9623,22 @@ impl App {
         {
             let row_top = menu.top + visible_index as f32 * menu.row_height;
             if hover == Some(index) {
-                quads.backgrounds.push(unterm_render::quads::Quad {
-                    left: menu.left,
-                    top: row_top,
-                    width: menu.width,
-                    height: menu.row_height,
-                    color: chrome.hover_bg,
-                });
-                quads.backgrounds.push(unterm_render::quads::Quad {
-                    left: menu.left,
-                    top: row_top,
-                    width: 2.0 * pt,
-                    height: menu.row_height,
-                    color: chrome.focus_rail,
-                });
+                let row_inset = (4.0 * pt).round();
+                let row_radius = crate::ui_tokens::CORNER_RADIUS * pt;
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    menu.left + row_inset,
+                    row_top + 1.0,
+                    (menu.width - row_inset * 2.0).max(1.0),
+                    (menu.row_height - 2.0).max(1.0),
+                    row_radius,
+                    chrome.hover_bg,
+                ));
+                self.append_selection_pill(
+                    menu.left + row_inset,
+                    row_top + 1.0,
+                    (menu.row_height - 2.0).max(1.0),
+                    quads,
+                );
             }
             let foreground = self.chrome_foreground();
             self.append_chrome(
@@ -9724,6 +10274,7 @@ impl App {
             }
             crate::palette::Command::OpenTabRename { index } => self.open_tab_rename(index),
             crate::palette::Command::SelectCaptureRegion => self.start_system_capture(false),
+            crate::palette::Command::SetupAiAgents => self.setup_ai_agents(),
             // Information rows: reading them was the point.
             crate::palette::Command::Nothing => {}
             crate::palette::Command::Browse { path, then } => {
@@ -10493,25 +11044,21 @@ impl App {
         let metrics = self.window.font.metrics();
         let view = palette.view;
         let window_start = palette.window_start(crate::palette::MAX_ROWS);
-        let rows: Vec<(String, bool)> = palette
+        let rows: Vec<(String, String, bool)> = palette
             .visible()
             .iter()
             .skip(window_start)
             .take(crate::palette::MAX_ROWS)
             .enumerate()
             .map(|(index, entry)| {
-                let hint = if entry.hint.is_empty() {
-                    String::new()
-                } else {
-                    format!("   {}", entry.hint)
-                };
                 let prefix = if view == crate::palette::View::ShellSelector {
                     format!("{}  ", window_start + index + 1)
                 } else {
                     String::new()
                 };
                 (
-                    format!("{prefix}{}{hint}", entry.label),
+                    format!("{prefix}{}", entry.label),
+                    entry.hint.clone(),
                     window_start + index == palette.selected,
                 )
             })
@@ -10551,9 +11098,21 @@ impl App {
         // under it, which reads as a rendering fault rather than as a
         // row that was too long.
         let columns = ((width / metrics.width.max(1.0)) as usize).saturating_sub(2);
-        let rows: Vec<(String, bool)> = rows
+        let rows: Vec<(String, String, bool)> = rows
             .into_iter()
-            .map(|(text, selected)| (crate::sidebar::fit(&text, columns), selected))
+            .map(|(label, hint, selected)| {
+                if hint.is_empty() {
+                    (crate::sidebar::fit(&label, columns), String::new(), selected)
+                } else {
+                    let hint_cols = crate::sidebar::columns(&hint);
+                    let max_label_cols = columns.saturating_sub(hint_cols + 3).max(8);
+                    let fitted_label = crate::sidebar::fit(&label, max_label_cols);
+                    let max_hint_cols = columns
+                        .saturating_sub(crate::sidebar::columns(&fitted_label) + 2);
+                    let fitted_hint = crate::sidebar::fit(&hint, max_hint_cols);
+                    (fitted_label, fitted_hint, selected)
+                }
+            })
             .collect();
 
         if matches!(
@@ -10684,42 +11243,33 @@ impl App {
             });
         }
 
-        for (index, (text, selected)) in rows.iter().enumerate() {
+        let hint_ink = self.chrome().dim_text;
+        for (index, (text, hint, selected)) in rows.iter().enumerate() {
             let row_top = top + metrics.height * (index + card.leading_rows) as f32;
             if *selected {
-                quads.backgrounds.push(unterm_render::quads::Quad {
-                    left: left + metrics.width * 0.5,
-                    top: row_top,
-                    width: width - metrics.width,
-                    height: metrics.height,
-                    color: match view {
+                let pt = self.chrome_pt();
+                let row_radius = crate::ui_tokens::CORNER_RADIUS * pt;
+                let row_left = left + metrics.width * 0.5;
+                let row_width = (width - metrics.width).max(1.0);
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    row_left,
+                    row_top,
+                    row_width,
+                    metrics.height,
+                    row_radius,
+                    match view {
                         crate::palette::View::ShellSelector => [0.176, 0.176, 0.176, 1.0],
                         // A decision's default answer has to be obvious
                         // at a glance: this is the one that Enter takes.
                         crate::palette::View::Confirm => {
-                            mix(self.window.colors.background, self.window.colors.foreground, 0.42)
+                            mix(self.window.colors.background, self.window.colors.foreground, 0.36)
                         }
                         crate::palette::View::Search => {
-                            mix(self.window.colors.background, self.window.colors.foreground, 0.30)
+                            mix(self.window.colors.background, self.window.colors.foreground, 0.24)
                         }
                     },
-                });
-                if matches!(
-                    view,
-                    crate::palette::View::ShellSelector | crate::palette::View::Confirm
-                ) {
-                    quads.backgrounds.push(unterm_render::quads::Quad {
-                        left: left + metrics.width * 0.5,
-                        top: row_top,
-                        width: (metrics.width * 0.22).max(2.0),
-                        height: metrics.height,
-                        color: if view == crate::palette::View::Confirm {
-                            crate::cockpit::Badge::NeedsYou.color()
-                        } else {
-                            [0.38, 0.69, 0.94, 1.0]
-                        },
-                    });
-                }
+                ));
+                self.append_selection_pill(row_left, row_top, metrics.height, quads);
             }
             // The answer that cannot be taken back is drawn as one:
             // a row that ends every running shell must not look like
@@ -10743,6 +11293,19 @@ impl App {
                 (left + metrics.width, row_top),
                 quads,
             );
+            if !hint.is_empty() {
+                let hint_cols = crate::sidebar::columns(hint) as f32;
+                let hint_left = (left + width - metrics.width * (hint_cols + 1.5))
+                    .max(left + metrics.width * (crate::sidebar::columns(text) as f32 + 2.5));
+                crate::terminal::append_text(
+                    hint,
+                    &mut self.window.font,
+                    &mut self.window.atlas,
+                    hint_ink,
+                    (hint_left, row_top),
+                    quads,
+                );
+            }
         }
 
         // Visible, clickable affordances for a result set larger than the
@@ -10944,9 +11507,14 @@ impl App {
         };
         use unterm_engine::next_core::tab_title::{render, TabContext, TabTitleRules};
 
-        let shell = unterm_engine::SessionEngine::shell(&self.engine, live.session_id).ok();
-        let process_path = shell.map(|shell| shell.process_name).unwrap_or_default();
-        let pane_title = unterm_engine::SessionEngine::get_session(&self.engine, live.session_id)
+        let cached_session = unterm_engine::SessionEngine::list_sessions(&self.engine)
+            .ok()
+            .and_then(|sessions| sessions.into_iter().find(|s| s.id == live.session_id));
+        let process_path = cached_session
+            .as_ref()
+            .map(|session| session.shell.process_name.clone())
+            .unwrap_or_default();
+        let pane_title = cached_session
             .map(|session| session.title)
             .unwrap_or_default();
 
@@ -12436,16 +13004,15 @@ impl ApplicationHandler for App {
                     }
                     let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
                     if self.engine.write_input(pane, &text).is_ok() {
-                        if crate::ghost::observe_key(
+                        let _ = crate::ghost::observe_key(
                             pane as u64,
                             &event.logical_key,
                             self.window.ctrl_held,
                             self.window.alt_held,
-                        ) {
-                            self.window.drawn_revision = None;
-                            if let Some(live) = self.window.state.as_ref() {
-                                live.window.request_redraw();
-                            }
+                        );
+                        self.window.drawn_revision = None;
+                        if let Some(live) = self.window.state.as_ref() {
+                            live.window.request_redraw();
                         }
                         if text == unterm_services::interrupt::INTERRUPT_BYTE {
                             self.interrupt(pane);
@@ -12700,6 +13267,28 @@ impl ApplicationHandler for App {
                             self.window.pointer.0, self.window.pointer.1, secondary, self.window.ctrl_held, row,
                         ));
                     }
+                }
+                if state == ElementState::Released && self.window.dragging_sidebar_width {
+                    self.window.dragging_sidebar_width = false;
+                    let prefs = crate::sidebar::Prefs::new(
+                        self.window.sidebar_points,
+                        self.window.sidebar_rail,
+                    );
+                    if prefs != self.window.sidebar_saved {
+                        prefs.save();
+                        self.window.sidebar_saved = prefs;
+                    }
+                    self.apply_cursor();
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && !secondary
+                    && self.sidebar_grip_at(self.window.pointer.0, self.window.pointer.1)
+                {
+                    self.window.dragging_sidebar_width = true;
+                    self.apply_cursor();
+                    return;
                 }
                 if self.window.sidebar_open
                     && state == ElementState::Pressed
