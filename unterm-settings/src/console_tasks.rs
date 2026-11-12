@@ -549,7 +549,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs"] {
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
     for key in ["activity", "terminals", "tabs"] {
@@ -693,6 +693,10 @@ pub struct RunRequest {
     /// none to continue.
     #[serde(default)]
     pub follow_up: bool,
+    /// Ask the agent to write what this conversation did as a skill, and take
+    /// it in when the turn ends. Implies `follow_up`.
+    #[serde(default)]
+    pub save_skill: bool,
 }
 
 /// The session of the task's latest run that can be continued: its agent
@@ -742,6 +746,11 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
     if running_run(&store, &task)?.is_some() {
         bail!("{} is already running", request.task_id);
     }
+    let mut request = request;
+    if request.save_skill {
+        request.prompt = Some(super::skills::save_prompt());
+        request.follow_up = true;
+    }
     let prompt = request
         .prompt
         .clone()
@@ -781,6 +790,9 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
     });
     if request.follow_up || request.continue_from.is_some() {
         detail["continued"] = json!(continue_from.is_some());
+    }
+    if request.save_skill {
+        detail["purpose"] = json!("save_skill");
     }
     let step = store.request_step_with_detail(&run.id, STEP_KIND, None, detail.clone())?.step().clone();
     store.set_step_detail(&step.id, detail.clone(), State::Running)?;
@@ -1207,6 +1219,14 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
         detail["usage"] = usage;
     }
     if let Some(dir) = detail.get("cwd").and_then(Value::as_str).map(std::path::PathBuf::from) {
+        // Asked to save a skill: take in what it wrote before the folder is
+        // scanned, so the skill's files are not listed as deliverables.
+        if detail.get("purpose").and_then(Value::as_str) == Some("save_skill") && state == State::Succeeded {
+            match super::skills::import_saved(&dir) {
+                Ok(names) => detail["saved_skills"] = json!(names),
+                Err(error) => detail["skill_error"] = json!(format!("{error:#}")),
+            }
+        }
         detail["outputs"] = json!(outputs_since(&dir, started_at));
     }
     if state == State::Failed {
@@ -1450,6 +1470,47 @@ pub fn api_tab(body: &[u8]) -> Response {
     match id_field(&body_json(body), "tab_id") {
         Some(tab) => computer_reply(tab_view(&tab)),
         None => Response::err(400, "Bad Request", "tab_id is required"),
+    }
+}
+
+/// GET /api/console/skills
+pub fn api_skills() -> Response {
+    Response::ok_json(json!({"skills": super::skills::list()}))
+}
+
+/// POST /api/console/skills/toggle — `{name, enabled}`.
+pub fn api_skill_toggle(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let (Some(name), Some(enabled)) = (id_field(&body, "name"), body.get("enabled").and_then(Value::as_bool)) else {
+        return Response::err(400, "Bad Request", "name and enabled are required");
+    };
+    match super::skills::set_enabled(&name, enabled) {
+        Ok(()) => api_skills(),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/skills/delete — `{name}`.
+pub fn api_skill_delete(body: &[u8]) -> Response {
+    let Some(name) = id_field(&body_json(body), "name") else {
+        return Response::err(400, "Bad Request", "name is required");
+    };
+    match super::skills::delete(&name) {
+        Ok(()) => api_skills(),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/skills/import — `{path, replace?}`: a folder holding a SKILL.md.
+pub fn api_skill_import(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let Some(path) = body.get("path").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()) else {
+        return Response::err(400, "Bad Request", "path is required");
+    };
+    let replace = body.get("replace").and_then(Value::as_bool).unwrap_or(false);
+    match super::skills::import(std::path::Path::new(path), replace) {
+        Ok(name) => Response::ok_json(json!({"imported": name, "skills": super::skills::list()})),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
     }
 }
 

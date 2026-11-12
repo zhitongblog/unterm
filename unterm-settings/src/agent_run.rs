@@ -278,6 +278,19 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
         Some(governed) => command.extend(governed.iter().map(|arg| json!(arg))),
         None => command.extend(args.iter().map(|arg| json!(arg))),
     }
+    // The enabled skills, as a plugin for this session only. Claude Code is
+    // the CLI that loads one from a folder; a skill that cannot be laid out
+    // is not a reason to refuse the run.
+    if agent_id == "claude-code" {
+        match super::skills::prepare_plugin() {
+            Ok(Some(dir)) => {
+                command.push(json!("--plugin-dir"));
+                command.push(json!(dir.display().to_string()));
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!("skills were not loaded for this run: {error:#}"),
+        }
+    }
 
     let mut params = serde_json::Map::new();
     params.insert("command".into(), Value::Array(command));

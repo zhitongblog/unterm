@@ -328,6 +328,8 @@ pub enum Verb {
     Download,
     Upload,
     Plan,
+    /// Loaded a skill.
+    Skill,
     /// Anything else, named by its tool.
     Use,
 }
@@ -453,6 +455,7 @@ fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
         }
         "delete" | "delete_file" => (Verb::Delete, field(&["path", "file_path"])),
         "todowrite" | "todo_write" | "update_plan" | "todoread" | "exitplanmode" => (Verb::Plan, String::new()),
+        "skill" => (Verb::Skill, field(&["skill", "command", "name"])),
         _ => (Verb::Use, tool.to_string()),
     }
 }
@@ -567,6 +570,7 @@ mod tests {
             (Verb::Run, "cargo build".into())
         );
         assert_eq!(describe("TodoWrite", &json!({"todos": []})).0, Verb::Plan);
+        assert_eq!(describe("Skill", &json!({"skill": "unzoo-one:unzoo-browser"})), (Verb::Skill, "unzoo-one:unzoo-browser".into()));
         // Inside the folder it works in, paths are written relative to it.
         let file = Path::new(CWD).join("out").join("a.md").display().to_string();
         let (_, short) = describe_in("Write", &json!({"file_path": file}), Some(CWD));
