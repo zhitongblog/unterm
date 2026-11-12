@@ -319,6 +319,95 @@ pub fn read_output(task_id: &str, console_run: &str, path: &str) -> Result<Value
     }))
 }
 
+// ---- the agent's computer ------------------------------------------------
+
+/// A terminal session or tab id as an argument gives it: a string or a number.
+fn scalar_id(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+/// The value after `"key":` in a tool's output, which reaches us as text --
+/// often JSON inside JSON, its quotes escaped. Letters, digits, `_` and `-`.
+pub(crate) fn id_after(text: &str, key: &str) -> Option<String> {
+    let needle = key;
+    let mut from = 0;
+    while let Some(found) = text[from..].find(&needle) {
+        let after = from + found + needle.len();
+        let rest = &text[after..];
+        let trimmed = rest.trim_start_matches(|c: char| c == '\\' || c == '"' || c == ' ');
+        if let Some(value) = trimmed.strip_prefix(':') {
+            let value = value.trim_start_matches(|c: char| c == '\\' || c == '"' || c == ' ');
+            let id: String = value.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+            if !id.is_empty() {
+                return Some(id);
+            }
+        }
+        from = after;
+    }
+    None
+}
+
+/// Whether an agent run here used this terminal session (`"terminals"`) or
+/// tab (`"tabs"`). The console shows only those: its token reaches the whole
+/// runtime, but this view is for watching the agents, not for reading every
+/// terminal and tab on the machine.
+fn used_by_an_agent(kind: &str, id: &str) -> Result<bool> {
+    let store = store()?;
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        for run in store.runs(&task.id)? {
+            for step in store.steps(&run.id)? {
+                if step.detail.get(kind).and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id)) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// What is on an agent's terminal now.
+pub fn terminal_screen(handler: &McpHandler, session: &str) -> Result<Value> {
+    if !used_by_an_agent("terminals", session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    let screen = handler
+        .handle(&ctx, "screen.text", &json!({"session_id": session}))
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(json!({"session_id": session, "lines": screen.get("lines").cloned().unwrap_or(json!([])),
+              "cols": screen.get("cols").cloned().unwrap_or(Value::Null)}))
+}
+
+/// Bring an agent's terminal to the front of an Unzoo One terminal window,
+/// for a person to take over.
+pub fn focus_terminal(handler: &McpHandler, session: &str) -> Result<Value> {
+    if !used_by_an_agent("terminals", session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    handler.handle(&ctx, "session.focus", &json!({"session_id": session})).map_err(|e| anyhow!("{e}"))
+}
+
+/// What an agent's tab shows now: its address, title and a picture.
+pub fn tab_view(tab: &str) -> Result<Value> {
+    if !used_by_an_agent("tabs", tab)? {
+        bail!("{tab} is not a tab an agent used");
+    }
+    super::browser::tab_view(tab)
+}
+
+/// Bring an agent's tab to the front of Unzoo Browser.
+pub fn activate_tab(tab: &str) -> Result<Value> {
+    if !used_by_an_agent("tabs", tab)? {
+        bail!("{tab} is not a tab an agent used");
+    }
+    super::browser::activate_tab(tab)
+}
+
 // ---- schedules -----------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -460,11 +549,13 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued"] {
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
-    if view["activity"].is_null() {
-        view["activity"] = json!([]);
+    for key in ["activity", "terminals", "tabs"] {
+        if view[key].is_null() {
+            view[key] = json!([]);
+        }
     }
     view
 }
@@ -793,6 +884,10 @@ struct Turn {
     activity: Vec<Value>,
     /// Where it works, for judging its edits.
     cwd: Option<String>,
+    /// Terminal sessions it used (Unterm's ids), in the order first seen.
+    terminals: Vec<String>,
+    /// Unzoo Browser tabs it used.
+    tabs: Vec<String>,
 }
 
 impl Turn {
@@ -821,10 +916,25 @@ impl Turn {
             "tool_call.requested" => self.tool_requested(event),
             "tool_call.result" => {
                 let id = event.get("external_call_id").and_then(Value::as_str);
+                let mut tool = None;
                 if let Some(entry) =
                     self.activity.iter_mut().rev().find(|a| id.is_some() && a["call_id"].as_str() == id)
                 {
                     entry["ok"] = event.get("ok").cloned().unwrap_or(Value::Null);
+                    tool = entry["tool"].as_str().map(str::to_string);
+                }
+                // What a terminal or a tab was opened as is only in the
+                // answer: `session.create` and `tab_create` name it there.
+                if let (Some(tool), Some(output)) = (tool, event.get("output").and_then(Value::as_str)) {
+                    if tool.starts_with("mcp__unterm__") {
+                        if let Some(session) = id_after(output, "session_id") {
+                            self.note_terminal(&session);
+                        }
+                    } else if tool.starts_with("mcp__unzoo__") {
+                        if let Some(tab) = id_after(output, "tab_id") {
+                            self.note_tab(&tab);
+                        }
+                    }
                 }
             }
             "approval.requested" => {
@@ -854,6 +964,18 @@ impl Turn {
             return;
         }
         let arguments = &call["arguments"];
+        if tool.starts_with("mcp__unterm__") {
+            for key in ["session_id", "pane_id", "id"] {
+                if let Some(session) = scalar_id(&arguments[key]) {
+                    self.note_terminal(&session);
+                    break;
+                }
+            }
+        } else if tool.starts_with("mcp__unzoo__") {
+            if let Some(tab) = scalar_id(&arguments["tab_id"]) {
+                self.note_tab(&tab);
+            }
+        }
         let (verb, target) = tool_risk::describe_in(tool, arguments, self.cwd.as_deref());
         let risk = tool_risk::classify(tool, arguments, self.cwd.as_deref());
         self.activity.push(json!({
@@ -917,6 +1039,18 @@ impl Turn {
             };
             entry["decided_by"] = json!(by);
             entry["decision"] = json!(if approval["decision"] == "deny" { "deny" } else { "allow" });
+        }
+    }
+
+    fn note_terminal(&mut self, session: &str) {
+        if !self.terminals.iter().any(|known| known == session) && self.terminals.len() < 32 {
+            self.terminals.push(session.to_string());
+        }
+    }
+
+    fn note_tab(&mut self, tab: &str) {
+        if !self.tabs.iter().any(|known| known == tab) && self.tabs.len() < 32 {
+            self.tabs.push(tab.to_string());
         }
     }
 
@@ -1026,6 +1160,8 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             detail["summary"] = json!(turn.summary());
             detail["reply"] = json!(turn.reply());
             detail["activity"] = json!(turn.activity);
+            detail["terminals"] = json!(turn.terminals);
+            detail["tabs"] = json!(turn.tabs);
             if let Ok(store) = store() {
                 let _ = store.set_step_detail(&step, detail.clone(), State::Running);
             }
@@ -1063,6 +1199,8 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     detail["summary"] = json!(turn.summary());
     detail["reply"] = json!(turn.reply());
     detail["activity"] = json!(turn.activity);
+    detail["terminals"] = json!(turn.terminals);
+    detail["tabs"] = json!(turn.tabs);
     detail["ended"] = json!(ended);
     detail["duration_seconds"] = json!(started.elapsed().as_secs());
     if let Some(usage) = usage.filter(|u| !u.is_null()) {
@@ -1281,6 +1419,45 @@ pub fn api_thread(body: &[u8]) -> Response {
     match thread(&task) {
         Ok(thread) => Response::ok_json(json!({"thread": thread})),
         Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
+fn computer_reply(result: Result<Value>) -> Response {
+    match result {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(404, "Not Found", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/computer/terminal — `{session_id}`: the screen's lines.
+pub fn api_terminal(handler: &McpHandler, body: &[u8]) -> Response {
+    match id_field(&body_json(body), "session_id") {
+        Some(session) => computer_reply(terminal_screen(handler, &session)),
+        None => Response::err(400, "Bad Request", "session_id is required"),
+    }
+}
+
+/// POST /api/console/computer/terminal/focus — `{session_id}`.
+pub fn api_terminal_focus(handler: &McpHandler, body: &[u8]) -> Response {
+    match id_field(&body_json(body), "session_id") {
+        Some(session) => computer_reply(focus_terminal(handler, &session)),
+        None => Response::err(400, "Bad Request", "session_id is required"),
+    }
+}
+
+/// POST /api/console/computer/tab — `{tab_id}`: address, title, screenshot.
+pub fn api_tab(body: &[u8]) -> Response {
+    match id_field(&body_json(body), "tab_id") {
+        Some(tab) => computer_reply(tab_view(&tab)),
+        None => Response::err(400, "Bad Request", "tab_id is required"),
+    }
+}
+
+/// POST /api/console/computer/tab/activate — `{tab_id}`.
+pub fn api_tab_activate(body: &[u8]) -> Response {
+    match id_field(&body_json(body), "tab_id") {
+        Some(tab) => computer_reply(activate_tab(&tab)),
+        None => Response::err(400, "Bad Request", "tab_id is required"),
     }
 }
 
@@ -1572,6 +1749,39 @@ mod tests {
         assert_eq!(a[3]["risk"], "exec");
         assert!(turn.waiting, "r3 is still open");
         assert_eq!(turn.reply(), "Looking.\n\nDone.");
+    }
+
+    #[test]
+    fn ids_are_found_in_tool_output_even_inside_escaped_json() {
+        assert_eq!(id_after(r#"{"session_id":"17","cols":120}"#, "session_id").as_deref(), Some("17"));
+        assert_eq!(
+            id_after(r#"[{"type":"text","text":"{\"tab_id\": 1030143360, \"url\": \"x\"}"}]"#, "tab_id").as_deref(),
+            Some("1030143360")
+        );
+        assert_eq!(id_after("no ids here", "tab_id"), None);
+        assert_eq!(id_after(r#"{"tab_id": null}"#, "tab_id").as_deref(), Some("null"));
+    }
+
+    #[test]
+    fn a_turn_remembers_the_terminals_and_tabs_its_agent_used() {
+        let mut turn = Turn::default();
+        for e in [
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unterm__session_create", "arguments": {}, "external_call_id": "c1"}}),
+            json!({"event": "tool_call.result", "external_call_id": "c1", "ok": true,
+                   "output": r#"[{"type":"text","text":"{\"session_id\":\"5\"}"}]"#}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unterm__exec_run_wait", "arguments": {"session_id": "5", "command": "dir"}, "external_call_id": "c2"}}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unterm__screen_text", "arguments": {"session_id": 9}, "external_call_id": "c3"}}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unzoo__tab_create", "arguments": {"url": "https://x"}, "external_call_id": "c4"}}),
+            json!({"event": "tool_call.result", "external_call_id": "c4", "ok": true, "output": r#"{"tab_id": 77}"#}),
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "mcp__unzoo__browser_get_title", "arguments": {"tab_id": 77}, "external_call_id": "c5"}}),
+            // Another program's output naming a session is not a terminal.
+            json!({"event": "tool_call.requested", "tool_call": {"tool": "Bash", "arguments": {"command": "echo"}, "external_call_id": "c6"}}),
+            json!({"event": "tool_call.result", "external_call_id": "c6", "ok": true, "output": r#"{"session_id":"99"}"#}),
+        ] {
+            turn.read(&e);
+        }
+        assert_eq!(turn.terminals, vec!["5".to_string(), "9".to_string()]);
+        assert_eq!(turn.tabs, vec!["77".to_string()]);
     }
 
     #[test]

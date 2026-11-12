@@ -143,6 +143,37 @@ pub fn status(installed: bool, chosen: &str) -> Value {
     }
 }
 
+fn tab_number(tab: &str) -> Result<u64> {
+    tab.trim().parse().map_err(|_| anyhow!("not a tab id: {tab}"))
+}
+
+/// One tab's address and title (from Unzoo's tab list -- this tab only) and
+/// a screenshot of it.
+pub fn tab_view(tab: &str) -> Result<Value> {
+    let id = tab_number(tab)?;
+    let listing = call("GET", "/api/v1/tabs", None)?;
+    let found = listing
+        .pointer("/data/tabs")
+        .and_then(Value::as_array)
+        .and_then(|tabs| tabs.iter().find(|t| t.get("tab_id").and_then(Value::as_u64) == Some(id)).cloned())
+        .ok_or_else(|| anyhow!("the tab is closed"))?;
+    let shot = call("POST", "/api/v1/screenshot", Some(&json!({"tab_id": id})))?;
+    Ok(json!({
+        "tab_id": tab,
+        "url": found.get("url").cloned().unwrap_or(Value::Null),
+        "title": found.get("title").cloned().unwrap_or(Value::Null),
+        "format": shot.pointer("/data/format").cloned().unwrap_or(json!("png")),
+        "image_base64": shot.pointer("/data/image_base64").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+/// Bring a tab to the front of Unzoo Browser.
+pub fn activate_tab(tab: &str) -> Result<Value> {
+    let id = tab_number(tab)?;
+    call("POST", "/api/v1/tabs/activate", Some(&json!({"tab_id": id})))?;
+    Ok(json!({"tab_id": tab, "activated": true}))
+}
+
 /// What an agent is told when it browses in a profile chosen for it rather
 /// than its own. Unzoo routes a call with a profile but no tab to one of
 /// that profile's existing tabs -- which may be the one the person is
