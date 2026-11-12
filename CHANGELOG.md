@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.71.26 — 2026-11-12
+
+### Added
+
+- **Zero-stall input pipeline (`ui_client` dedicated IPC channel, condvar wakeup & memory caches).**
+  - Separates high-priority keyboard/mouse input (`write_input`, `resize_pane`, `send_mouse`) onto a dedicated persistent IPC connection (`ui_client`) in `EngineBackend`, completely isolating typing from background status, inbox, and sidebar polling on `client`.
+  - Adds a `Condvar`-backed wakeup (`EventHub::wake` / `EventHub::wait_timeout`) in `unterm-core`, lowers active event cadence from `16ms` to `6ms` (~165 Hz), and triggers an immediate `2ms` post-write echo wake so TUI agents (`agy`, `claude`, `codex`) reflect typed characters without frame stalls.
+  - Caches `pane_modes` (`bracketed_paste`, `app_cursor`, `mouse_mode`, `alt_screen`) and `mcp_state` in memory (updated via `EventHub` push events + 500ms background refresh), removing synchronous IPC round-trips from the keyboard hot path and per-frame status bar rendering.
+- **Native in-window Settings Center (`⚙` / `Cmd+,`).**
+  - Replaces the external browser redirect on clicking the title-bar `⚙` button or pressing `Cmd+,` with an instant, keyboard-driven native in-window Settings Center (`open_native_settings`), grouping Appearance, Font & Cursor, Opacity & Blur, AI Agent one-click MCP setup (`Command::SetupAiAgents`), Keybindings, and Config Reload, while keeping **Web Console & Advanced Settings** one keystroke away.
+- **Active Agent Inspection, cross-pane `Y/N` Quick Approve & Sidebar Hover Peek.**
+  - Upgrades `Ctrl+Shift+I` into an **Agent & Task Inspection (`智能体与任务巡检`)** overlay that scans all background panes across tabs/splits, attaches a live 2-line terminal tail preview to every active agent (`agy`, `claude`, `codex`, `gemini`, `opencode`, `qwen`, `kimi`), and highlights panes waiting for `[y/n]` confirmation with amber badges.
+  - Supports pressing `Y` or `N` directly inside the inspection overlay to send `y\r` / `n\r` to a background agent pane without switching tabs, and adds hover preview cards (`append_sidebar_peek`) when hovering background tabs in the left sidebar.
+  - Adds a bespoke 4-point sparkle vector icon (`✦`) for Antigravity (`agy`) in the sidebar and status bar, and refines tab, status-bar, and inspection-card geometry against Windows Terminal Fluent 2 and macOS HIG specifications.
+- **Risk-graded autonomy, multi-turn Console task threads, dedicated managed browser, local agent sign-in & skill plugins (#68–#72).**
+  - Adds risk-graded `Autonomy` (`PauseOnWrite`, `PauseOnDestructive`, `Autonomous`) with unified `tool_risk` and shell `command_risk` classification across hosted sessions and Console tasks (#68).
+  - Adds multi-turn conversation threads (`follow_up`), structured outputs (`extract_outputs`), and explicit stop endpoints for Console tasks (#69).
+  - Launches a dedicated managed browser profile (`~/.unterm/browser-profile`) for Unterm tasks so users can log in once without CDP conflicts with their daily browser (#70).
+  - Supports starting local CLI sign-in flows (`claude`, `codex`, `gemini`, `agy`) directly from Web Settings (`POST /api/agents/<id>/sign-in`) and installing curated skill plugins (`~/.unterm/skills/<id>/SKILL.md`) into agent prompts (#71).
+  - Keeps `unterm-core` alive while hosted sessions, Console task runs, or task schedules are active even after the last GUI window closes (#72).
+
+### Fixed
+
+- **Windows Git checkpoint test (`core.autocrlf`) in `unterm-settings`.**
+  - Forces `core.autocrlf = false` in `hidden_git_checkpoint_creates_lists_diffs_and_restores_without_touching_branch` so Windows CI restores LF fixtures byte-for-byte identically.
+
 ## v0.71.25 — 2026-11-11
 
 ### Added
