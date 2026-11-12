@@ -66,6 +66,10 @@ pub struct RunSettings {
     /// `unterm_services::tool_risk`).
     #[serde(default)]
     pub autonomy: Autonomy,
+    /// The Unzoo Browser profile the agents browse in. Empty: their own
+    /// (`browser::RESERVED_PROFILE`).
+    #[serde(default)]
+    pub browser_profile: String,
 }
 
 fn yes() -> bool {
@@ -74,7 +78,13 @@ fn yes() -> bool {
 
 impl Default for RunSettings {
     fn default() -> Self {
-        Self { agent: "claude-code".into(), cwd: String::new(), governed: true, autonomy: Autonomy::default() }
+        Self {
+            agent: "claude-code".into(),
+            cwd: String::new(),
+            governed: true,
+            autonomy: Autonomy::default(),
+            browser_profile: String::new(),
+        }
     }
 }
 
@@ -725,6 +735,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                 "hosted": true,
                 "governed": governed,
                 "autonomy": settings.autonomy.as_str(),
+                "browser_profile": settings.browser_profile,
                 "task_id": console_task_id,
                 "run_id": console_run_id,
                 "step_id": step_id,
@@ -1511,6 +1522,7 @@ mod tests {
             cwd: dir.path().display().to_string(),
             governed: false,
             autonomy: Autonomy::Cautious,
+            browser_profile: String::new(),
         })
         .unwrap();
         assert_eq!(run_settings(), kept);

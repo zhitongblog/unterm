@@ -571,6 +571,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/tasks/output") => super::console_tasks::api_output(&req.body),
         ("POST", "/api/console/tasks/thread") => super::console_tasks::api_thread(&req.body),
         ("GET", "/api/console/capabilities") => super::agent_run::api_capabilities(),
+        ("GET", "/api/console/browser") => super::agent_run::api_browser(),
         ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
         ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
