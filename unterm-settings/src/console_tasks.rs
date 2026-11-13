@@ -357,10 +357,13 @@ pub(crate) fn id_after(text: &str, key: &str) -> Option<String> {
 /// terminal and tab on the machine.
 fn used_by_an_agent(kind: &str, id: &str) -> Result<bool> {
     let store = store()?;
+    let lists = |detail: &Value| detail.get(kind).and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id));
     for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
         for run in store.runs(&task.id)? {
             for step in store.steps(&run.id)? {
-                if step.detail.get(kind).and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id)) {
+                // The conversation's agent, or a helper it handed work to.
+                let helpers = step.detail.get("helpers").and_then(Value::as_array);
+                if lists(&step.detail) || helpers.is_some_and(|all| all.iter().any(lists)) {
                     return Ok(true);
                 }
             }
@@ -549,10 +552,10 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error"] {
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
-    for key in ["activity", "terminals", "tabs"] {
+    for key in ["activity", "terminals", "tabs", "helpers"] {
         if view[key].is_null() {
             view[key] = json!([]);
         }
@@ -1096,6 +1099,97 @@ impl Turn {
     }
 }
 
+/// A helper the conversation's agent handed work to, as the console follows
+/// it: what it did and said, read from its own events.
+struct Followed {
+    session: String,
+    agent: String,
+    prompt: String,
+    cursor: usize,
+    turn: Turn,
+    waiting: bool,
+    /// Something to write down since the step was last saved.
+    changed: bool,
+}
+
+/// Read every helper's new events. True when any of them got on, or waits
+/// for a person -- the conversation's agent is waiting on them, not stuck.
+fn follow_helpers(hub: &str, followed: &mut Vec<Followed>, cwd: Option<&str>) -> bool {
+    for helper in super::helpers::of(hub) {
+        match followed.iter_mut().find(|f| f.session == helper.session_id) {
+            Some(known) => {
+                if known.prompt != helper.prompt {
+                    // Continued with more work: a new turn of the same helper.
+                    known.prompt = helper.prompt;
+                    known.turn.ended = None;
+                    known.turn.text.clear();
+                    known.changed = true;
+                }
+            }
+            None => followed.push(Followed {
+                session: helper.session_id,
+                agent: helper.agent,
+                prompt: helper.prompt,
+                cursor: 0,
+                turn: Turn { cwd: cwd.map(str::to_string), ..Turn::default() },
+                waiting: false,
+                changed: true,
+            }),
+        }
+    }
+    let mut progressed = false;
+    for helper in followed.iter_mut() {
+        if let Ok((events, next)) = agent_session::events(&helper.session, helper.cursor) {
+            if !events.is_empty() {
+                progressed = true;
+                helper.changed = true;
+            }
+            helper.cursor = next;
+            for event in &events {
+                helper.turn.read(event);
+            }
+            let pending = agent_session::pending_approvals(&helper.session).is_ok_and(|p| !p.is_empty());
+            let waiting = pending || helper.turn.waiting;
+            if waiting != helper.waiting {
+                helper.waiting = waiting;
+                helper.changed = true;
+            }
+            progressed |= waiting;
+        }
+    }
+    progressed
+}
+
+fn helpers_view(followed: &mut [Followed]) -> Value {
+    Value::Array(
+        followed
+            .iter_mut()
+            .map(|helper| {
+                helper.changed = false;
+                let state = match helper.turn.ended.as_deref() {
+                    None if helper.waiting => "waiting",
+                    None => "working",
+                    Some("finished" | "exited" | "succeeded") => "done",
+                    Some("interrupted" | "cancelled") => "stopped",
+                    Some(_) => "failed",
+                };
+                json!({
+                    "session_id": helper.session,
+                    "agent": helper.agent,
+                    "prompt": helper.prompt,
+                    "state": state,
+                    "waiting": helper.waiting,
+                    "reply": helper.turn.reply(),
+                    "error": helper.turn.error,
+                    "activity": helper.turn.activity,
+                    "terminals": helper.turn.terminals,
+                    "tabs": helper.turn.tabs,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// How a session's ending reads as a run's verdict.
 fn verdict(ended: &str, stopped_for_idling: bool) -> State {
     match ended {
@@ -1118,9 +1212,13 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     let mut shown_len = 0usize;
     let mut shown_activity = 0usize;
     let mut idled: Option<Instant> = None;
+    let mut helpers: Vec<Followed> = Vec::new();
 
     loop {
         std::thread::sleep(POLL);
+        if follow_helpers(&session, &mut helpers, turn.cwd.as_deref()) {
+            last_progress = Instant::now();
+        }
         match agent_session::events(&session, cursor) {
             Ok((events, next)) => {
                 if !events.is_empty() {
@@ -1161,10 +1259,11 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             // Waiting for a person is not being stuck.
             last_progress = Instant::now();
         }
-        let waiting = pending || turn.waiting;
+        let waiting = pending || turn.waiting || helpers.iter().any(|h| h.waiting);
         let text_len = turn.text.len();
         let activity_len = turn.activity.len();
-        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity {
+        let helpers_changed = helpers.iter().any(|h| h.changed);
+        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity || helpers_changed {
             shown_waiting = waiting;
             shown_len = text_len;
             shown_activity = activity_len;
@@ -1174,6 +1273,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             detail["activity"] = json!(turn.activity);
             detail["terminals"] = json!(turn.terminals);
             detail["tabs"] = json!(turn.tabs);
+            if !helpers.is_empty() {
+                detail["helpers"] = helpers_view(&mut helpers);
+            }
             if let Ok(store) = store() {
                 let _ = store.set_step_detail(&step, detail.clone(), State::Running);
             }
@@ -1195,6 +1297,14 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     }
 
     let usage = agent_session::status(&session).ok().and_then(|s| s.get("usage").cloned());
+    // Its helpers' last words, then they stop with it: nobody is left to
+    // read what they would say next.
+    follow_helpers(&session, &mut helpers, turn.cwd.as_deref());
+    super::helpers::release(&session);
+    for helper in helpers.iter_mut().filter(|h| h.turn.ended.is_none()) {
+        helper.turn.ended = Some("interrupted".into());
+        helper.waiting = false;
+    }
     // A hosted agent outlives its turn, waiting for the next message. This
     // run is over; the conversation is kept by the CLI and continued, when
     // asked, in a new session.
@@ -1213,6 +1323,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     detail["activity"] = json!(turn.activity);
     detail["terminals"] = json!(turn.terminals);
     detail["tabs"] = json!(turn.tabs);
+    if !helpers.is_empty() {
+        detail["helpers"] = helpers_view(&mut helpers);
+    }
     detail["ended"] = json!(ended);
     detail["duration_seconds"] = json!(started.elapsed().as_secs());
     if let Some(usage) = usage.filter(|u| !u.is_null()) {

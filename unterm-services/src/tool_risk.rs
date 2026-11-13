@@ -237,6 +237,22 @@ fn unterm_method_risk(name: &str, input: &Value) -> Option<Risk> {
     }
     let method_risk = candidates.iter().filter_map(|method| risk_of(method).map(|r| (method, r))).max_by_key(|(_, r)| *r)?;
     let (method, mut risk) = (method_risk.0.clone(), method_risk.1);
+    // Starting an agent of its own choosing, on its own terms, or answering
+    // for the person stands in for the person's authority: never unasked.
+    // Handing work on is `agent_session.delegate`, which keeps the asking
+    // agent's terms and is judged as running a program.
+    const ACTS_FOR_THE_PERSON: &[&str] = &[
+        "agent_session.start",
+        "agent_session.resume",
+        "agent_session.submit_input",
+        "agent_session.decide",
+        "approval.decide",
+        "agent.trust",
+        "agent.untrust",
+    ];
+    if ACTS_FOR_THE_PERSON.contains(&method.as_str()) {
+        risk = risk.max(Risk::CredentialAccess);
+    }
     // A command run through the terminal is judged on what it runs, as one
     // run through the agent's own shell would be.
     if method.starts_with("exec.") || method == "session.input" || method == "session.paste" {
@@ -330,6 +346,8 @@ pub enum Verb {
     Plan,
     /// Loaded a skill.
     Skill,
+    /// Handed work to another agent.
+    Delegate,
     /// Anything else, named by its tool.
     Use,
 }
@@ -401,6 +419,11 @@ fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
         let (server, name) = rest.split_once("__").unwrap_or(("", rest));
         let pretty = name.replace('_', " ");
         if server == "unterm" {
+            if name.replace('.', "_") == "agent_session_delegate" {
+                let task = field(&["prompt"]);
+                let agent = field(&["agent", "session_id"]);
+                return (Verb::Delegate, if task.is_empty() { agent } else { format!("{agent}: {task}") });
+            }
             if name.starts_with("exec_") || name == "session_input" || name == "session_paste" {
                 let command = command_of(input).unwrap_or_else(|| field(&["text", "input", "data"]));
                 return (Verb::Run, command);
@@ -524,6 +547,22 @@ mod tests {
     }
 
     #[test]
+    fn handing_work_on_is_running_a_program_but_acting_for_the_person_is_always_asked() {
+        let delegate = risk("mcp__unterm__agent_session_delegate", json!({"agent": "codex", "prompt": "x"}));
+        assert_eq!(delegate, Some(Risk::Exec));
+        assert!(Autonomy::Balanced.allows(Risk::Exec));
+        for tool in [
+            "mcp__unterm__agent_session_start",
+            "mcp__unterm__agent_session_decide",
+            "mcp__unterm__approval_decide",
+            "mcp__unterm__agent_trust",
+        ] {
+            let level = risk(tool, json!({"command": ["claude", "--dangerously-skip-permissions"]})).unwrap();
+            assert!(!Autonomy::Autonomous.allows(level), "{tool} ran unasked at {level:?}");
+        }
+    }
+
+    #[test]
     fn codex_and_acp_tools() {
         assert_eq!(risk("shell", json!({"command": ["bash", "-lc", "cargo test"]})), Some(Risk::Exec));
         assert_eq!(risk("shell", json!({"command": ["bash", "-lc", "git reset --hard"]})), Some(Risk::Destructive));
@@ -571,6 +610,11 @@ mod tests {
         );
         assert_eq!(describe("TodoWrite", &json!({"todos": []})).0, Verb::Plan);
         assert_eq!(describe("Skill", &json!({"skill": "unzoo-one:unzoo-browser"})), (Verb::Skill, "unzoo-one:unzoo-browser".into()));
+        assert_eq!(
+            describe("mcp__unterm__agent_session_delegate", &json!({"agent": "codex", "prompt": "fix the tests"})),
+            (Verb::Delegate, "codex: fix the tests".into())
+        );
+        assert_eq!(describe("mcp__unterm__agent_session_delegate", &json!({"session_id": "as_1"})).1, "as_1");
         // Inside the folder it works in, paths are written relative to it.
         let file = Path::new(CWD).join("out").join("a.md").display().to_string();
         let (_, short) = describe_in("Write", &json!({"file_path": file}), Some(CWD));

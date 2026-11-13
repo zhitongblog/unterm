@@ -195,6 +195,8 @@ struct Live {
     cwd: Option<String>,
     /// A governed session's grant, revoked when it closes.
     grant: Option<String>,
+    /// How much it answers on its own, for a helper it hands work to.
+    autonomy: Option<crate::tool_risk::Autonomy>,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -761,9 +763,32 @@ fn start_with(
             turn,
             cwd: cwd.map(str::to_string),
             grant,
+            autonomy,
         },
     );
     Ok(id)
+}
+
+/// What a live session works under: its workspace, how much it answers on
+/// its own, and the task it belongs to. A helper it hands work to is
+/// started under the same, so delegating never widens what runs unasked.
+#[derive(Clone, Debug, Default)]
+pub struct Standing {
+    pub cwd: Option<String>,
+    pub autonomy: Option<crate::tool_risk::Autonomy>,
+    pub governed: bool,
+    pub context: TaskContext,
+}
+
+pub fn standing(id: &str) -> Option<Standing> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions.get(id)?;
+    Some(Standing {
+        cwd: live.cwd.clone(),
+        autonomy: live.autonomy,
+        governed: live.grant.is_some(),
+        context: live.context.clone(),
+    })
 }
 
 /// One brain event as this surface's vocabulary.
@@ -1153,6 +1178,7 @@ pub fn close(id: &str) -> Result<Value> {
         turn,
         cwd: _,
         grant,
+        autonomy: _,
     } = live;
     // First thing: from here on nothing this session's agent sends through
     // Unterm counts as already approved.

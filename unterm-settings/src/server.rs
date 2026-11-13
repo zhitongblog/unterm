@@ -61,6 +61,8 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     let handler = Arc::new(McpHandler::new());
     // Console tasks run on schedule whether or not a console page is open.
     crate::console_tasks::start_scheduler(Arc::clone(&handler));
+    // The agents it runs may hand work to other agents on this machine.
+    unterm_mcp::records::set_delegator(crate::helpers::delegate);
     if crate::remote::load_or_init_config().enabled {
         crate::remote::ensure_remote_server_started(Arc::clone(&handler));
     }

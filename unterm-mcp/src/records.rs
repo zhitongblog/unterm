@@ -46,6 +46,7 @@ pub const METHODS: &[&str] = &[
     "agent_session.close",
     "agent_session.decide",
     "agent_session.resume",
+    "agent_session.delegate",
     "terminal.manifest",
     "terminal.health",
     "terminal.capabilities",
@@ -103,7 +104,36 @@ pub fn dispatch_with(
     if method == "terminal.invoke" {
         return invoke(handler, connection, params);
     }
+    if method == "agent_session.delegate" {
+        return delegate(handler, params);
+    }
     dispatch(method, params)
+}
+
+/// Starts a helper agent for the hosted session that asks, and waits for its
+/// turn: `(handler, the asking session, the call's params)`. The host that
+/// knows how to launch each agent CLI sets it; without one there is nobody
+/// to hand work to.
+pub type Delegator = fn(&crate::handler::McpHandler, &str, &Value) -> Result<Value>;
+
+static DELEGATOR: std::sync::OnceLock<Delegator> = std::sync::OnceLock::new();
+
+pub fn set_delegator(delegator: Delegator) {
+    let _ = DELEGATOR.set(delegator);
+}
+
+/// Only an agent this Unterm hosts may hand work on: the helper is started
+/// under that session's workspace, autonomy and task, so delegating never
+/// widens what runs unasked, and the helper's questions go to the same
+/// person. Anybody else could pick its own terms.
+fn delegate(handler: &crate::handler::McpHandler, params: &Value) -> Result<Value> {
+    let parent = crate::handler::McpHandler::hosted_session().ok_or_else(|| {
+        anyhow!("only an agent Unterm runs can hand work to another agent; start the helper yourself with agent_session.start")
+    })?;
+    let delegator = DELEGATOR
+        .get()
+        .ok_or_else(|| anyhow!("this Unterm has nothing that starts helper agents"))?;
+    delegator(handler, &parent, params)
 }
 
 fn invoke(
@@ -537,6 +567,8 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
 
         "terminal.cancel" => unterm_services::terminal_provider::cancel(&text(params, "call_id")?),
 
+        // Answered by `dispatch_with`: it is about who is asking.
+        "agent_session.delegate" => Err(anyhow!("agent_session.delegate is answered for a connection")),
         other => Err(anyhow!("records dispatch reached {other}")),
     }
 }

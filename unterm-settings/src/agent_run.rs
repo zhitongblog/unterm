@@ -178,6 +178,10 @@ exec.run_wait and read their output from the result. For anything in a web brows
 unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
 refused, say what you needed it for instead of trying another way.";
 
+/// Said to a governed agent that may hand work on (not to a helper, which
+/// may not).
+const HELPERS_PROMPT: &str = "Another agent on this machine can take a self-contained piece of the work, for example a long coding job while you work the browser, or when the user names one: hand it over with the unterm MCP tool agent_session.delegate (agent: codex-cli, claude-code, opencode or agy; the call says so if one is not installed). Write its prompt so it stands on its own, since the helper has not seen this conversation. It works in the same folder under the same approvals and its report comes back to you; when the call says it is still working, call again with its session_id. Wait for every helper before you finish, because they stop when your turn ends. Never start agents yourself with agent_session.start.";
+
 /// The governed preset for Claude Code: hosted, its own shell and fetch
 /// switched off, Unterm's MCP (and Unzoo Browser's, when installed) mounted
 /// in their place, and a note saying so. Every command it runs then goes
@@ -270,7 +274,14 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
     let governed_args = if governed {
         match governed_args(agent_id, string_field(body, "browser_profile")) {
-            Ok(args) => Some(args),
+            Ok(mut args) => {
+                let helper = body.get("helper").and_then(Value::as_bool).unwrap_or(false);
+                if let (false, Some(prompt)) = (helper, args.last_mut()) {
+                    prompt.push(' ');
+                    prompt.push_str(HELPERS_PROMPT);
+                }
+                Some(args)
+            }
             Err(why) => return Err((400, "Bad Request", why.to_string())),
         }
     } else {

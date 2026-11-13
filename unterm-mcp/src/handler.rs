@@ -247,6 +247,7 @@ fn method_is_mutating(method: &str) -> bool {
             | "agent_session.close"
             | "agent_session.decide"
             | "agent_session.resume"
+            | "agent_session.delegate"
             | "terminal.invoke"
             | "terminal.accept_lease"
             | "terminal.cancel"
@@ -5881,7 +5882,7 @@ impl McpHandler {
 
     /// The hosted session whose host approves this connection's calls --
     /// if its grant is still live right now.
-    fn hosted_session() -> Option<String> {
+    pub(crate) fn hosted_session() -> Option<String> {
         let conn_id = CURRENT_CONN_ID.with(|cell| *cell.borrow())?;
         let token = mcp_state().lock().hosted_by_connection.get(&conn_id).cloned()?;
         unterm_services::hosted_grant::verify(&token).map(|grant| grant.session_id)
