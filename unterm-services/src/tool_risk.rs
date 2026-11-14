@@ -287,8 +287,10 @@ fn unzoo_risk(name: &str) -> Option<Risk> {
         "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "tab_create",
         "tab_activate", "download_url", "media_download_smart", "ytdlp_download", "lease_request",
     ];
+    // A script run in the agent's own tab can do what a click can (and is how
+    // agents usually read a page in one go): working the page, not more.
     const WORKS_THE_PAGE: &[&str] = &[
-        "browser_click", "browser_double_click", "browser_type", "browser_input_text", "browser_fill_form",
+        "browser_evaluate", "browser_click", "browser_double_click", "browser_type", "browser_input_text", "browser_fill_form",
         "browser_select_option", "browser_check", "browser_press_key", "browser_hover", "browser_focus",
         "browser_drag_and_drop", "browser_dismiss_blocking_dialog", "browser_print_pdf", "page_click",
         "page_type", "page_select", "page_batch_actions", "page_cleanup", "human_click", "human_type",
@@ -605,10 +607,45 @@ mod tests {
         assert_eq!(risk("mcp__unzoo__browser_a11y_snapshot", json!({})), Some(Risk::Read));
         assert_eq!(risk("mcp__unzoo__browser_navigate", json!({"url": "https://x"})), Some(Risk::Exec));
         assert_eq!(risk("mcp__unzoo__browser_click", json!({"ref": "ref=3"})), Some(Risk::LocalMutation));
+        let evaluate = risk("mcp__unzoo__browser_evaluate", json!({"expression": "document.title"}));
+        assert_eq!(evaluate, Some(Risk::LocalMutation));
+        assert!(Autonomy::Balanced.allows(evaluate.unwrap()));
         assert_eq!(risk("mcp__unzoo__browser_upload_trusted", json!({})), Some(Risk::ExternalSideEffect));
         assert_eq!(risk("mcp__unzoo__cookie_get_all", json!({})), Some(Risk::CredentialAccess));
         assert_eq!(risk("mcp__unzoo__lease_grant", json!({})), Some(Risk::Destructive));
         assert_eq!(risk("mcp__unzoo__brand_new_tool", json!({})), None);
+    }
+
+    /// Every tool Unzoo Browser offers has a risk: one left out is asked
+    /// about on every call, whatever the person chose.
+    #[test]
+    fn every_unzoo_tool_is_classified() {
+        const TOOLS: &[&str] = &[
+            "browser_a11y_snapshot", "browser_check", "browser_click", "browser_delay",
+            "browser_dismiss_blocking_dialog", "browser_double_click", "browser_drag_and_drop",
+            "browser_element_exists", "browser_evaluate", "browser_fill_form", "browser_find", "browser_focus",
+            "browser_get_attribute", "browser_get_bounding_box", "browser_get_console_messages", "browser_get_html",
+            "browser_get_network_requests", "browser_get_text", "browser_get_title", "browser_get_url",
+            "browser_hover", "browser_input_text", "browser_navigate", "browser_navigate_back",
+            "browser_navigate_forward", "browser_network_wait_for", "browser_press_key", "browser_print_pdf",
+            "browser_query_selector_all", "browser_reload", "browser_screenshot", "browser_scroll",
+            "browser_select_option", "browser_set_input_files", "browser_snapshot", "browser_type",
+            "browser_upload_trusted", "browser_wait_for", "browser_wait_for_navigation",
+            "browser_wait_for_network_idle", "browser_wait_for_selector", "cookie", "cookie_delete",
+            "cookie_get_all", "cookie_import", "cookie_set", "download_url", "download_with_cookies",
+            "extract_form_fields", "extract_images", "extract_links", "extract_structured",
+            "extract_structured_data", "extract_table", "file_list", "file_read", "file_write", "human_click",
+            "human_profile_get", "human_profile_set", "human_select", "human_status", "human_task", "human_type",
+            "human_upload", "human_wait", "lease_grant", "lease_list", "lease_request", "media_capture_get",
+            "media_capture_list", "media_capture_remove", "media_capture_start", "media_capture_stop",
+            "media_deps_ensure", "media_deps_status", "media_download_smart", "page_analyze", "page_batch_actions",
+            "page_cleanup", "page_click", "page_select", "page_type", "profile_get_current", "profile_list",
+            "service_status", "service_version", "session_clear", "session_info", "skill_get", "skill_list",
+            "tab_activate", "tab_close", "tab_create", "tab_get_info", "tab_list", "tool_profile_set",
+            "workspace_set", "youtube_transcript", "ytdlp_download",
+        ];
+        let missing: Vec<&str> = TOOLS.iter().copied().filter(|name| unzoo_risk(name).is_none()).collect();
+        assert!(missing.is_empty(), "no risk for {missing:?}");
     }
 
     #[test]
