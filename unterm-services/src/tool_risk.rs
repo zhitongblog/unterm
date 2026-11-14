@@ -74,6 +74,13 @@ impl Autonomy {
     }
 }
 
+/// A CLI's built-in tool for putting a question to the user (Claude Code's
+/// `AskUserQuestion`). Not a risk: it does nothing but ask, and a hosted
+/// session has no screen for it -- see `agent_session`.
+pub fn asks_the_person(tool: &str) -> bool {
+    matches!(tool, "AskUserQuestion")
+}
+
 /// The risk of one tool call, or `None` for a tool this does not know.
 pub fn classify(tool: &str, input: &Value, cwd: Option<&str>) -> Option<Risk> {
     if let Some(rest) = tool.strip_prefix("mcp__") {

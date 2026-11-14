@@ -709,13 +709,20 @@ fn start_with(
                     }
                     let mut ruled = None;
                     let mut judged = None;
+                    let mut redirected = None;
                     let mut asked_risk = None;
                     if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
                         let risk = crate::tool_risk::classify(tool, input, cwd.as_deref());
                         asked_risk = risk;
-                        // A standing rule answers without asking anyone; the
-                        // question and its answer are both on the record.
-                        if let (Some(host), Some(rule)) = (
+                        // The CLI's own "ask the user" tool has no screen
+                        // here: put to a person it is a permission card with
+                        // nothing to answer, and the turn stays open so the
+                        // reply box is closed too. Sent back at once, the
+                        // agent asks in its reply and ends the turn; the
+                        // person answers in their next message.
+                        if let (Some(host), true) = (&host, crate::tool_risk::asks_the_person(tool)) {
+                            redirected = Some((request_id.clone(), host.clone(), input.clone()));
+                        } else if let (Some(host), Some(rule)) = (
                             &host,
                             crate::agent_policy::evaluate(cwd.as_deref(), tool, input),
                         ) {
@@ -747,6 +754,15 @@ fn start_with(
                         }
                         let mut resolved = resolution(&request_id, &Decision::Allow, "autonomy");
                         resolved["approval"]["risk"] = json!(risk.as_str());
+                        turn.stamp_now(&mut resolved);
+                        push(&events, &context, &id, resolved);
+                    }
+                    if let Some((request_id, host, input)) = redirected {
+                        let decision = Decision::Deny { message: ASK_IN_REPLY.to_string(), interrupt: false };
+                        for line in host.permission_reply(&request_id, &decision, &input) {
+                            let _ = writer.write_line(&line);
+                        }
+                        let mut resolved = resolution(&request_id, &decision, "unterm");
                         turn.stamp_now(&mut resolved);
                         push(&events, &context, &id, resolved);
                     }
@@ -1076,6 +1092,11 @@ fn decide_inner(
     push(&live.events, &live.context, id, resolved.clone());
     Ok(resolved)
 }
+
+/// What an agent is told when it reaches for its CLI's question tool.
+pub const ASK_IN_REPLY: &str = "This app has no screen for that tool, so the person cannot see or answer it. \
+Ask your question in plain words in your reply, then end your turn: they answer in their next message. \
+Do not go ahead with what you wanted to ask about until they have.";
 
 /// The `approval.resolved` event for a decision.
 ///
@@ -2409,6 +2430,37 @@ read -r rest || exit 0
         let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
         assert!(!events.iter().any(|e| e["event"] == "approval.resolved"), "{events:#?}");
         assert_eq!(pending_approvals(&id).unwrap(), ["r1"]);
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn the_cli_question_tool_is_sent_back_to_ask_in_the_reply() {
+        let _dir = isolate();
+        let script = HOSTED_CLAUDE.replace(
+            r#""tool_name":"Bash","input":{"command":"echo hi > out.txt"},"description":"Write hi""#,
+            r#""tool_name":"AskUserQuestion","input":{"questions":[{"question":"Submit the PR?"}]}"#,
+        );
+        assert!(script.contains("AskUserQuestion"));
+        // Even the most careful level: there is nothing to approve, and a
+        // card nobody can answer would hold the turn open.
+        let id = start_with_autonomy(
+            &a_codex_like_agent(&script),
+            None,
+            &[],
+            Some("make a PR"),
+            Some("claude"),
+            TaskContext::default(),
+            false,
+            crate::tool_risk::Autonomy::Cautious,
+        )
+        .unwrap();
+        let events = wait_for(&id, |e| said(e, "denied"));
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decided_by"], "unterm", "{resolved}");
+        assert_eq!(resolved["approval"]["decision"], "deny");
+        assert!(resolved["approval"].get("interrupt").is_none(), "{resolved}");
+        assert_eq!(resolved["approval"]["message"], ASK_IN_REPLY);
+        assert!(pending_approvals(&id).unwrap().is_empty());
         close(&id).unwrap();
     }
 
