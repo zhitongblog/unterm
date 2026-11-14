@@ -540,6 +540,13 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 params.get("prompt").and_then(Value::as_str),
                 &env,
                 given.then_some(context),
+                match params.get("autonomy").and_then(Value::as_str) {
+                    Some(level) => Some(
+                        unterm_services::tool_risk::Autonomy::parse(level)
+                            .ok_or_else(|| anyhow::anyhow!("autonomy must be cautious, balanced or autonomous"))?,
+                    ),
+                    None => None,
+                },
             )?;
             Ok(json!({"session_id": id, "resumed_from": text(params, "session_id")?}))
         }

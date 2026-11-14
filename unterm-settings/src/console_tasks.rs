@@ -810,6 +810,8 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                     &json!({
                         "session_id": session,
                         "prompt": prompt,
+                        // Today's level, not the one the conversation began under.
+                        "autonomy": settings.autonomy.as_str(),
                         "task_id": console_task_id,
                         "run_id": console_run_id,
                         "step_id": step_id,
