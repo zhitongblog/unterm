@@ -846,11 +846,18 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
     let resumed = match &continue_from {
         Some(session) => {
             let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+            // The environment is not kept from the earlier session; the
+            // skills it was handed are handed again.
+            let skills = agent_session::resume_record(session)
+                .ok()
+                .flatten()
+                .and_then(|record| super::agent_run::skill_env(&record.adapter));
             handler
                 .handle(
                     &ctx,
                     "agent_session.resume",
                     &json!({
+                        "env": skills,
                         "session_id": session,
                         "prompt": prompt,
                         // Today's level, not the one the conversation began under.

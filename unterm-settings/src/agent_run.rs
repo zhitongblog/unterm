@@ -235,6 +235,31 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>) -> Result<Vec<St
 
 /// The adapter a run of this agent is read with. Said back to the console
 /// so it knows which vocabulary the events came from.
+/// The enabled skills for a CLI that is not Claude Code, as the session
+/// environment that hands them over for this session only -- nothing is
+/// written into the person's own configuration. Codex's app server is told
+/// the folder at start (`skills/extraRoots/set`); OpenCode reads it from its
+/// inline configuration. `None` when there is nothing to hand over, or the
+/// CLI has no way to take it.
+pub(crate) fn skill_env(adapter: &str) -> Option<Value> {
+    if adapter != "codex" && adapter != "opencode" {
+        return None;
+    }
+    let dir = match super::skills::prepare_plugin() {
+        Ok(Some(dir)) => dir.join("skills"),
+        Ok(None) => return None,
+        Err(error) => {
+            log::warn!("skills were not loaded for this run: {error:#}");
+            return None;
+        }
+    };
+    let dir = dir.display().to_string();
+    Some(match adapter {
+        "codex" => json!({ unterm_services::agent_session::SKILL_ROOTS_ENV: dir }),
+        _ => json!({ "OPENCODE_CONFIG_CONTENT": json!({"skills": {"paths": [dir]}}).to_string() }),
+    })
+}
+
 fn adapter_of(agent_id: &str) -> &'static str {
     match agent_id {
         "claude-code" => "claude",
@@ -365,6 +390,9 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     let mut params = serde_json::Map::new();
     params.insert("command".into(), Value::Array(command));
     params.insert("prompt".into(), json!(prompt));
+    if let Some(env) = skill_env(adapter_of(agent_id)) {
+        params.insert("env".into(), env);
+    }
     if hosted {
         params.insert("hosted".into(), json!(true));
     }

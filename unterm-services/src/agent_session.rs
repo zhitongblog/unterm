@@ -516,6 +516,11 @@ pub fn resume(
     )
 }
 
+/// In a session's environment: folders of skills to offer it, as a path
+/// list. For a CLI that is told its skills at start (Codex's app server);
+/// the others find them by their own configuration.
+pub const SKILL_ROOTS_ENV: &str = "UNTERM_SKILL_ROOTS";
+
 fn start_with(
     command: &[String],
     cwd: Option<&str>,
@@ -583,6 +588,13 @@ fn start_with(
     match (&host, prompt) {
         (Some(host), prompt) => {
             spec = spec.keep_stdin_open();
+            if let Some((_, roots)) = env.iter().find(|(key, _)| key == SKILL_ROOTS_ENV) {
+                let roots: Vec<String> = std::env::split_paths(roots)
+                    .map(|p| p.display().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                host.use_skill_roots(&roots);
+            }
             let mut first = host.opening(cwd);
             if let Some(prompt) = prompt {
                 first.extend(host.user_message(prompt));
