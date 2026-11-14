@@ -263,8 +263,8 @@ mod tests {
         // offline reference an agent reads must describe the same surface
         // the server publishes, or `unterm-cli reference` becomes a document
         // about a previous version.
-        assert_eq!(payload["mcp_method_count"], 154);
-        assert_eq!(payload["mcp_tool_count"], 153);
+        assert_eq!(payload["mcp_method_count"], 156);
+        assert_eq!(payload["mcp_tool_count"], 155);
         assert_eq!(payload["mcp_tool_exclusions"], json!(["meta.surface"]));
     }
 
@@ -280,8 +280,8 @@ mod tests {
             .get("mcp_methods")
             .and_then(|v| v.as_array())
             .is_some_and(|items| items.len() == 1));
-        assert_eq!(scoped["mcp_method_count"], 154);
-        assert_eq!(scoped["mcp_tool_count"], 153);
+        assert_eq!(scoped["mcp_method_count"], 156);
+        assert_eq!(scoped["mcp_tool_count"], 155);
         assert_eq!(scoped["mcp_tool_exclusions"], json!(["meta.surface"]));
         assert!(scoped.get("cli_commands").is_none());
         assert!(scoped.get("keybindings").is_none());

@@ -443,6 +443,8 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         "agent_session.decide",
         // Starts an agent again, as agent_session.start does.
         "agent_session.resume",
+        // Starts a helper agent, under the asking session's own terms.
+        "agent_session.delegate",
         // The envelope runs whatever it carries; the method inside is judged
         // on its own terms as well.
         "terminal.invoke",
@@ -566,6 +568,8 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         "system.diagnostics",
         "agent_session.events",
         "agent_session.status",
+        // Asking the person to do something themselves runs nothing.
+        "agent_session.handover",
         // Describing yourself reveals nothing an orchestrator could not ask
         // for method by method.
         "terminal.manifest",

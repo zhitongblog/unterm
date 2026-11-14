@@ -46,6 +46,8 @@ pub const METHODS: &[&str] = &[
     "agent_session.close",
     "agent_session.decide",
     "agent_session.resume",
+    "agent_session.delegate",
+    "agent_session.handover",
     "terminal.manifest",
     "terminal.health",
     "terminal.capabilities",
@@ -103,7 +105,69 @@ pub fn dispatch_with(
     if method == "terminal.invoke" {
         return invoke(handler, connection, params);
     }
+    if method == "agent_session.delegate" {
+        return delegate(handler, params);
+    }
+    if method == "agent_session.handover" {
+        return handover(params);
+    }
     dispatch(method, params)
+}
+
+/// Starts a helper agent for the hosted session that asks, and waits for its
+/// turn: `(handler, the asking session, the call's params)`. The host that
+/// knows how to launch each agent CLI sets it; without one there is nobody
+/// to hand work to.
+pub type Delegator = fn(&crate::handler::McpHandler, &str, &Value) -> Result<Value>;
+
+static DELEGATOR: std::sync::OnceLock<Delegator> = std::sync::OnceLock::new();
+
+pub fn set_delegator(delegator: Delegator) {
+    let _ = DELEGATOR.set(delegator);
+}
+
+/// Only an agent this Unterm hosts may hand work on: the helper is started
+/// under that session's workspace, autonomy and task, so delegating never
+/// widens what runs unasked, and the helper's questions go to the same
+/// person. Anybody else could pick its own terms.
+fn delegate(handler: &crate::handler::McpHandler, params: &Value) -> Result<Value> {
+    let parent = crate::handler::McpHandler::hosted_session().ok_or_else(|| {
+        anyhow!("only an agent Unterm runs can hand work to another agent; start the helper yourself with agent_session.start")
+    })?;
+    let delegator = DELEGATOR
+        .get()
+        .ok_or_else(|| anyhow!("this Unterm has nothing that starts helper agents"))?;
+    delegator(handler, &parent, params)
+}
+
+/// How long one `agent_session.handover` call waits for the person.
+pub const HANDOVER_WAIT_SECONDS: u64 = 300;
+
+/// A hosted agent asking the person to take over -- sign in, solve a
+/// captcha -- and waiting for them. Only a hosted session: its question
+/// appears in its own conversation, which is where the person is looking.
+fn handover(params: &Value) -> Result<Value> {
+    let session = crate::handler::McpHandler::hosted_session()
+        .ok_or_else(|| anyhow!("only an agent Unzoo One runs can hand over to the person; ask them in your reply instead"))?;
+    let what = params.get("what").and_then(Value::as_str).unwrap_or_default();
+    let tab = params.get("tab_id").and_then(|v| match v {
+        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    });
+    let id = params.get("handover_id").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+    let wait = params
+        .get("wait_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(HANDOVER_WAIT_SECONDS)
+        .min(unterm_services::agent_session::HANDOVER_WAIT_MAX_SECONDS);
+    unterm_services::agent_session::request_handover(
+        &session,
+        what,
+        tab.as_deref(),
+        id,
+        std::time::Duration::from_secs(wait),
+    )
 }
 
 fn invoke(
@@ -510,6 +574,22 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 params.get("prompt").and_then(Value::as_str),
                 &env,
                 given.then_some(context),
+                match params.get("autonomy").and_then(Value::as_str) {
+                    Some(level) => Some(
+                        unterm_services::tool_risk::Autonomy::parse(level)
+                            .ok_or_else(|| anyhow::anyhow!("autonomy must be cautious, balanced or autonomous"))?,
+                    ),
+                    None => None,
+                },
+                // Today's command line for the same agent, when the caller
+                // has one: the conversation continues, the instructions are
+                // current.
+                match params.get("command") {
+                    Some(Value::Array(parts)) => {
+                        Some(parts.iter().filter_map(|part| part.as_str().map(str::to_string)).collect())
+                    }
+                    _ => None,
+                },
             )?;
             Ok(json!({"session_id": id, "resumed_from": text(params, "session_id")?}))
         }
@@ -537,6 +617,9 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
 
         "terminal.cancel" => unterm_services::terminal_provider::cancel(&text(params, "call_id")?),
 
+        // Answered by `dispatch_with`: it is about who is asking.
+        "agent_session.delegate" => Err(anyhow!("agent_session.delegate is answered for a connection")),
+        "agent_session.handover" => Err(anyhow!("agent_session.handover is answered for a connection")),
         other => Err(anyhow!("records dispatch reached {other}")),
     }
 }

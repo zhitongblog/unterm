@@ -376,6 +376,9 @@ struct HostState {
     queued: Vec<String>,
     /// Open questions: the id as Codex wrote it, the method, and the params.
     asked: HashMap<String, (Value, String, Value)>,
+    /// Skill folders for this app server only (`skills/extraRoots/set`),
+    /// so nothing is written into the person's own `~/.codex`.
+    skill_roots: Vec<String>,
 }
 
 /// Drives `codex app-server`.
@@ -433,6 +436,10 @@ impl HostProtocol for CodexAppHost {
         }
         self.state.lock().unwrap().resume = Some(external_id.to_string());
         Ok(command)
+    }
+
+    fn use_skill_roots(&self, roots: &[String]) {
+        self.state.lock().unwrap().skill_roots = roots.to_vec();
     }
 
     /// Only `initialize`: the thread is started once it has been answered.
@@ -494,7 +501,13 @@ impl HostProtocol for CodexAppHost {
                         ),
                     }
                     .1;
-                    return vec![json!({"jsonrpc": "2.0", "method": "initialized"}).to_string(), start];
+                    let mut lines = vec![json!({"jsonrpc": "2.0", "method": "initialized"}).to_string()];
+                    if !state.skill_roots.is_empty() {
+                        let roots = state.skill_roots.clone();
+                        lines.push(Self::request(&mut state, "skills/extraRoots/set", json!({"extraRoots": roots})).1);
+                    }
+                    lines.push(start);
+                    return lines;
                 }
                 let Some(thread) = message["result"]["thread"]["id"].as_str().map(str::to_string) else {
                     return Vec::new();
@@ -734,6 +747,20 @@ mod tests {
             .iter()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn skill_roots_are_set_for_this_server_before_the_thread_starts() {
+        let host = CodexAppHost::new();
+        host.use_skill_roots(&["C:/state/skills".to_string()]);
+        let opening = parsed(host.opening(Some("C:/w")));
+        let after_init = parsed(host.observe(&json!({"id": opening[0]["id"], "result": {}}).to_string()));
+        assert_eq!(after_init[0]["method"], "initialized");
+        assert_eq!(after_init[1]["method"], "skills/extraRoots/set");
+        assert_eq!(after_init[1]["params"], json!({"extraRoots": ["C:/state/skills"]}));
+        assert_eq!(after_init[2]["method"], "thread/start");
+        // Its answer is not a thread: nothing is sent for it.
+        assert!(host.observe(&json!({"id": after_init[1]["id"], "result": {}}).to_string()).is_empty());
     }
 
     #[test]

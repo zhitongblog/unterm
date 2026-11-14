@@ -6428,6 +6428,7 @@ dependencies = [
  "sha2",
  "socket2 0.5.10",
  "tempfile",
+ "toml 0.8.2",
  "unterm-agents",
  "unterm-brain",
  "unterm-engine",

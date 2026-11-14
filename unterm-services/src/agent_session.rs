@@ -195,6 +195,8 @@ struct Live {
     cwd: Option<String>,
     /// A governed session's grant, revoked when it closes.
     grant: Option<String>,
+    /// How much it answers on its own, for a helper it hands work to.
+    autonomy: Option<crate::tool_risk::Autonomy>,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -469,11 +471,25 @@ pub fn resume_record(session_id: &str) -> Result<Option<ResumeRecord>> {
 /// continue (the CLI never named one) or the protocol cannot: a new
 /// conversation that looks like the old one loses exactly what the caller
 /// asked to keep.
+///
+/// `autonomy` is how much the continued session may do unasked; without it
+/// the earlier session's level carries over. The person's level today is
+/// the one that counts, so the console always gives it: a conversation begun
+/// before levels existed would otherwise ask about every read.
+///
+/// `command` is the agent's command line as it would be started today; the
+/// earlier session's is used without it. Its instructions (which browser
+/// profile, how to hand over, what is asked) are the product's, not part of
+/// the conversation, and a conversation continued on last week's would
+/// browse in the person's own profile because last week's did not say
+/// otherwise. The conversation itself is the agent's own, named by id.
 pub fn resume(
     previous_id: &str,
     prompt: Option<&str>,
     env: &[(String, String)],
     context: Option<TaskContext>,
+    autonomy: Option<crate::tool_risk::Autonomy>,
+    command: Option<Vec<String>>,
 ) -> Result<String> {
     let record = resume_record(previous_id)?.ok_or_else(|| {
         anyhow!("session {previous_id} cannot be resumed: it was not hosted, or its agent never named a conversation")
@@ -494,8 +510,9 @@ pub fn resume(
             ..TaskContext::default()
         },
     };
+    let command = command.filter(|c| !c.is_empty()).unwrap_or_else(|| record.command.clone());
     start_with(
-        &record.command,
+        &command,
         record.cwd.as_deref(),
         env,
         prompt,
@@ -504,9 +521,14 @@ pub fn resume(
         true,
         record.governed,
         Some(&record.external_id),
-        record.autonomy,
+        autonomy.or(record.autonomy),
     )
 }
+
+/// In a session's environment: folders of skills to offer it, as a path
+/// list. For a CLI that is told its skills at start (Codex's app server);
+/// the others find them by their own configuration.
+pub const SKILL_ROOTS_ENV: &str = "UNTERM_SKILL_ROOTS";
 
 fn start_with(
     command: &[String],
@@ -575,6 +597,13 @@ fn start_with(
     match (&host, prompt) {
         (Some(host), prompt) => {
             spec = spec.keep_stdin_open();
+            if let Some((_, roots)) = env.iter().find(|(key, _)| key == SKILL_ROOTS_ENV) {
+                let roots: Vec<String> = std::env::split_paths(roots)
+                    .map(|p| p.display().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                host.use_skill_roots(&roots);
+            }
             let mut first = host.opening(cwd);
             if let Some(prompt) = prompt {
                 first.extend(host.user_message(prompt));
@@ -680,13 +709,20 @@ fn start_with(
                     }
                     let mut ruled = None;
                     let mut judged = None;
+                    let mut redirected = None;
                     let mut asked_risk = None;
                     if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
                         let risk = crate::tool_risk::classify(tool, input, cwd.as_deref());
                         asked_risk = risk;
-                        // A standing rule answers without asking anyone; the
-                        // question and its answer are both on the record.
-                        if let (Some(host), Some(rule)) = (
+                        // The CLI's own "ask the user" tool has no screen
+                        // here: put to a person it is a permission card with
+                        // nothing to answer, and the turn stays open so the
+                        // reply box is closed too. Sent back at once, the
+                        // agent asks in its reply and ends the turn; the
+                        // person answers in their next message.
+                        if let (Some(host), true) = (&host, crate::tool_risk::asks_the_person(tool)) {
+                            redirected = Some((request_id.clone(), host.clone(), input.clone()));
+                        } else if let (Some(host), Some(rule)) = (
                             &host,
                             crate::agent_policy::evaluate(cwd.as_deref(), tool, input),
                         ) {
@@ -718,6 +754,15 @@ fn start_with(
                         }
                         let mut resolved = resolution(&request_id, &Decision::Allow, "autonomy");
                         resolved["approval"]["risk"] = json!(risk.as_str());
+                        turn.stamp_now(&mut resolved);
+                        push(&events, &context, &id, resolved);
+                    }
+                    if let Some((request_id, host, input)) = redirected {
+                        let decision = Decision::Deny { message: ASK_IN_REPLY.to_string(), interrupt: false };
+                        for line in host.permission_reply(&request_id, &decision, &input) {
+                            let _ = writer.write_line(&line);
+                        }
+                        let mut resolved = resolution(&request_id, &decision, "unterm");
                         turn.stamp_now(&mut resolved);
                         push(&events, &context, &id, resolved);
                     }
@@ -761,9 +806,32 @@ fn start_with(
             turn,
             cwd: cwd.map(str::to_string),
             grant,
+            autonomy,
         },
     );
     Ok(id)
+}
+
+/// What a live session works under: its workspace, how much it answers on
+/// its own, and the task it belongs to. A helper it hands work to is
+/// started under the same, so delegating never widens what runs unasked.
+#[derive(Clone, Debug, Default)]
+pub struct Standing {
+    pub cwd: Option<String>,
+    pub autonomy: Option<crate::tool_risk::Autonomy>,
+    pub governed: bool,
+    pub context: TaskContext,
+}
+
+pub fn standing(id: &str) -> Option<Standing> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions.get(id)?;
+    Some(Standing {
+        cwd: live.cwd.clone(),
+        autonomy: live.autonomy,
+        governed: live.grant.is_some(),
+        context: live.context.clone(),
+    })
 }
 
 /// One brain event as this surface's vocabulary.
@@ -1025,6 +1093,11 @@ fn decide_inner(
     Ok(resolved)
 }
 
+/// What an agent is told when it reaches for its CLI's question tool.
+pub const ASK_IN_REPLY: &str = "This app has no screen for that tool, so the person cannot see or answer it. \
+Ask your question in plain words in your reply, then end your turn: they answer in their next message. \
+Do not go ahead with what you wanted to ask about until they have.";
+
 /// The `approval.resolved` event for a decision.
 ///
 /// `allow_once` and `deny` are the contract's approval words: this answers
@@ -1153,6 +1226,7 @@ pub fn close(id: &str) -> Result<Value> {
         turn,
         cwd: _,
         grant,
+        autonomy: _,
     } = live;
     // First thing: from here on nothing this session's agent sends through
     // Unterm counts as already approved.
@@ -1278,6 +1352,127 @@ pub fn live_ids() -> Vec<String> {
 /// not succeed and did not fail, and silence reads exactly like success.
 pub fn interrupt_orphans() -> Result<Vec<String>> {
     store()?.interrupt_orphan_sessions("the Core that was hosting this session stopped")
+}
+
+// ---- handing the screen to the person -------------------------------------
+
+/// A hosted agent asking the person to do something only they should: sign
+/// in, solve a captcha, confirm on their phone. The agent waits; the person
+/// does it in the real browser or terminal and says done (or that they
+/// cannot). Nothing is run on the person's behalf, which is why asking is
+/// never a question of autonomy.
+struct Handover {
+    session: String,
+    answer: Option<(bool, String)>,
+}
+
+fn handovers() -> &'static (Mutex<HashMap<String, Handover>>, std::sync::Condvar) {
+    static HANDOVERS: OnceLock<(Mutex<HashMap<String, Handover>>, std::sync::Condvar)> = OnceLock::new();
+    HANDOVERS.get_or_init(|| (Mutex::new(HashMap::new()), std::sync::Condvar::new()))
+}
+
+/// The longest one call waits for the person; past it the agent is told to
+/// ask again with the same id, so the question stays where they see it.
+pub const HANDOVER_WAIT_MAX_SECONDS: u64 = 600;
+
+fn push_to(session: &str, mut event: Value) -> Result<()> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions.get(session).ok_or_else(|| anyhow!("session {session} is not live"))?;
+    live.turn.stamp_now(&mut event);
+    push(&live.events, &live.context, session, event);
+    Ok(())
+}
+
+/// Ask the person to take over, and wait up to `wait` for them. With
+/// `handover_id`, keep waiting on a question asked before. Answers
+/// `{handover_id, state: done | cannot | waiting, note?}`.
+pub fn request_handover(
+    session: &str,
+    what: &str,
+    tab_id: Option<&str>,
+    handover_id: Option<&str>,
+    wait: std::time::Duration,
+) -> Result<Value> {
+    let (lock, ready) = handovers();
+    let id = match handover_id {
+        Some(id) => {
+            let open = lock.lock().unwrap();
+            match open.get(id) {
+                Some(h) if h.session == session => id.to_string(),
+                _ => return Err(anyhow!("no open handover {id} for this session: ask again without handover_id")),
+            }
+        }
+        None => {
+            let what = what.trim();
+            if what.is_empty() {
+                return Err(anyhow!("say what the person should do"));
+            }
+            let id = format!("ho_{}", uuid::Uuid::new_v4().simple());
+            lock.lock().unwrap().insert(id.clone(), Handover { session: session.to_string(), answer: None });
+            let asked = json!({
+                "event": "handover.requested",
+                "handover": {"id": id, "what": what, "tab_id": tab_id},
+            });
+            if let Err(e) = push_to(session, asked) {
+                lock.lock().unwrap().remove(&id);
+                return Err(e);
+            }
+            id
+        }
+    };
+
+    let deadline = std::time::Instant::now() + wait;
+    let mut open = lock.lock().unwrap();
+    loop {
+        if let Some((done, note)) = open.get(&id).and_then(|h| h.answer.clone()) {
+            open.remove(&id);
+            drop(open);
+            let state = if done { "done" } else { "cannot" };
+            let _ = push_to(
+                session,
+                json!({"event": "handover.resolved", "handover": {"id": id, "state": state, "note": note}}),
+            );
+            let mut answer = json!({"handover_id": id, "state": state});
+            if !note.is_empty() {
+                answer["note"] = json!(note);
+            }
+            return Ok(answer);
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(json!({
+                "handover_id": id,
+                "state": "waiting",
+                "hint": "The person has not answered yet. Call again with this handover_id to keep waiting.",
+            }));
+        }
+        // Wake now and then to notice the session closing under us.
+        let slice = (deadline - now).min(std::time::Duration::from_secs(2));
+        open = ready.wait_timeout(open, slice).unwrap().0;
+        if !sessions().lock().unwrap().contains_key(session) {
+            open.remove(&id);
+            return Err(anyhow!("session {session} closed while waiting for the person"));
+        }
+    }
+}
+
+/// The person's answer to a handover: `done`, or that they cannot, with
+/// what they want the agent to know.
+pub fn answer_handover(session: &str, handover_id: &str, done: bool, note: Option<&str>) -> Result<()> {
+    let (lock, ready) = handovers();
+    let mut open = lock.lock().unwrap();
+    let handover = open
+        .get_mut(handover_id)
+        .filter(|h| h.session == session)
+        .ok_or_else(|| anyhow!("no open handover {handover_id} in session {session}: already answered, or the agent stopped waiting"))?;
+    handover.answer = Some((done, note.unwrap_or_default().trim().to_string()));
+    ready.notify_all();
+    Ok(())
+}
+
+/// Whether a session has a handover the person has not answered.
+pub fn has_open_handover(session: &str) -> bool {
+    handovers().0.lock().unwrap().values().any(|h| h.session == session && h.answer.is_none())
 }
 
 #[cfg(test)]
@@ -1850,6 +2045,47 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
 "#;
 
+    #[test]
+    fn a_handover_waits_for_the_person_and_says_what_they_did() {
+        let _dir = isolate();
+        let id = hosted_fake();
+        let asking = {
+            let id = id.clone();
+            std::thread::spawn(move || {
+                request_handover(&id, "Sign in to GitHub", Some("42"), None, std::time::Duration::from_secs(20))
+            })
+        };
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "handover.requested"));
+        let asked = events.iter().find(|e| e["event"] == "handover.requested").unwrap();
+        assert_eq!(asked["handover"]["what"], "Sign in to GitHub");
+        assert_eq!(asked["handover"]["tab_id"], "42");
+        let first = asked["handover"]["id"].as_str().unwrap().to_string();
+        assert!(has_open_handover(&id));
+        assert!(answer_handover("ags_someoneelse", &first, true, None).is_err(), "only its own session answers");
+
+        answer_handover(&id, &first, true, Some("signed in")).unwrap();
+        let answer = asking.join().unwrap().unwrap();
+        assert_eq!((answer["state"].as_str(), answer["note"].as_str()), (Some("done"), Some("signed in")));
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "handover.resolved"));
+        let resolved = events.iter().find(|e| e["event"] == "handover.resolved").unwrap();
+        assert_eq!(resolved["handover"]["state"], "done");
+        assert!(!has_open_handover(&id));
+        assert!(answer_handover(&id, &first, true, None).is_err(), "answered once");
+
+        // Not answered in time: still open, and waited on again by its id.
+        let waited = request_handover(&id, "Solve the captcha", None, None, std::time::Duration::from_millis(200)).unwrap();
+        assert_eq!(waited["state"], "waiting");
+        let second = waited["handover_id"].as_str().unwrap().to_string();
+        assert!(has_open_handover(&id));
+        answer_handover(&id, &second, false, None).unwrap();
+        let again = request_handover(&id, "", None, Some(&second), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(again["state"], "cannot");
+
+        assert!(request_handover(&id, "  ", None, None, std::time::Duration::from_millis(10)).is_err(), "says what");
+        assert!(request_handover("ags_nosuch", "x", None, None, std::time::Duration::from_millis(10)).is_err());
+        close(&id).unwrap();
+    }
+
     fn hosted_fake() -> String {
         let id = start_hosted(
             &a_codex_like_agent(HOSTED_CLAUDE),
@@ -2198,6 +2434,37 @@ read -r rest || exit 0
     }
 
     #[test]
+    fn the_cli_question_tool_is_sent_back_to_ask_in_the_reply() {
+        let _dir = isolate();
+        let script = HOSTED_CLAUDE.replace(
+            r#""tool_name":"Bash","input":{"command":"echo hi > out.txt"},"description":"Write hi""#,
+            r#""tool_name":"AskUserQuestion","input":{"questions":[{"question":"Submit the PR?"}]}"#,
+        );
+        assert!(script.contains("AskUserQuestion"));
+        // Even the most careful level: there is nothing to approve, and a
+        // card nobody can answer would hold the turn open.
+        let id = start_with_autonomy(
+            &a_codex_like_agent(&script),
+            None,
+            &[],
+            Some("make a PR"),
+            Some("claude"),
+            TaskContext::default(),
+            false,
+            crate::tool_risk::Autonomy::Cautious,
+        )
+        .unwrap();
+        let events = wait_for(&id, |e| said(e, "denied"));
+        let resolved = events.iter().find(|e| e["event"] == "approval.resolved").expect("resolved");
+        assert_eq!(resolved["approval"]["decided_by"], "unterm", "{resolved}");
+        assert_eq!(resolved["approval"]["decision"], "deny");
+        assert!(resolved["approval"].get("interrupt").is_none(), "{resolved}");
+        assert_eq!(resolved["approval"]["message"], ASK_IN_REPLY);
+        assert!(pending_approvals(&id).unwrap().is_empty());
+        close(&id).unwrap();
+    }
+
+    #[test]
     fn a_standing_rule_outranks_the_autonomy_level() {
         let _dir = isolate();
         let rule = a_rule("*", Some("echo"), crate::agent_policy::RuleDecision::Deny);
@@ -2294,7 +2561,7 @@ read -r rest || exit 0
         assert_eq!(record.task_id.as_deref(), Some("task_resume"));
         assert!(!record.command.iter().any(|w| w == "--input-format"), "the caller's command, not the rewritten one");
 
-        let second = resume(&first, Some("again"), &[], None).unwrap();
+        let second = resume(&first, Some("again"), &[], None, None, None).unwrap();
         let events = wait_for(&second, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("args:"))));
         let args = events.iter().find_map(|e| e["text"].as_str().filter(|t| t.starts_with("args:"))).unwrap();
         assert!(args.contains("--resume s1"), "{args}");
@@ -2307,15 +2574,37 @@ read -r rest || exit 0
             Some("once more"),
             &[],
             Some(TaskContext { run_id: Some("run_next".into()), ..TaskContext::default() }),
+            None,
+            None,
         )
         .unwrap();
         let events = wait_for(&third, |e| e.iter().any(|e| e["event"] == "turn.completed"));
         assert!(events.iter().all(|e| e["task_id"] == "task_resume" && e["run_id"] == "run_next"), "{events:#?}");
         close(&third).unwrap();
 
+        // Begun before autonomy levels existed: continued under the level
+        // given now, not under none (which asks about every read).
+        assert_eq!(record.autonomy, None);
+        let fourth = resume(&first, Some("and again"), &[], None, Some(crate::tool_risk::Autonomy::Balanced), None).unwrap();
+        wait_for(&fourth, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        close(&fourth).unwrap();
+        let continued = resume_record(&fourth).unwrap().expect("named again");
+        assert_eq!(continued.autonomy, Some(crate::tool_risk::Autonomy::Balanced));
+
+        // Continued on today's command line: the same conversation, with the
+        // instructions as they are now rather than as they were then.
+        let mut today = record.command.clone();
+        today.push("--today".into());
+        let fifth = resume(&first, Some("today"), &[], None, None, Some(today.clone())).unwrap();
+        let events = wait_for(&fifth, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("args:"))));
+        let args = events.iter().find_map(|e| e["text"].as_str().filter(|t| t.starts_with("args:"))).unwrap();
+        assert!(args.contains("--resume s1"), "the same conversation: {args}");
+        close(&fifth).unwrap();
+        assert_eq!(resume_record(&fifth).unwrap().expect("named again").command, today, "started on the command given, and kept for next time");
+
         // Nothing to continue: an error, never a fresh conversation.
-        assert!(resume("ags_nosuchsession", None, &[], None).is_err());
-        assert!(resume("../escape", None, &[], None).is_err());
+        assert!(resume("ags_nosuchsession", None, &[], None, None, None).is_err());
+        assert!(resume("../escape", None, &[], None, None, None).is_err());
         let plain = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), TaskContext::default()).unwrap();
         close(&plain).unwrap();
         assert!(resume_record(&plain).unwrap().is_none(), "only hosted sessions are kept for resuming");
