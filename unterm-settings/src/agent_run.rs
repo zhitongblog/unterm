@@ -260,6 +260,17 @@ pub(crate) fn skill_env(adapter: &str) -> Option<Value> {
     })
 }
 
+/// The agent a session's adapter belongs to: [`adapter_of`] read backwards.
+pub(crate) fn agent_of(adapter: &str) -> Option<&'static str> {
+    match adapter {
+        "claude" => Some("claude-code"),
+        "codex" => Some("codex-cli"),
+        "opencode" => Some("opencode"),
+        "agy" => Some("agy"),
+        _ => None,
+    }
+}
+
 fn adapter_of(agent_id: &str) -> &'static str {
     match agent_id {
         "claude-code" => "claude",
@@ -300,6 +311,65 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     let Some(prompt) = string_field(body, "prompt") else {
         return Err((400, "Bad Request", "prompt is required".to_string()));
     };
+    let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
+    let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
+    let command = session_command(agent_id, body)?;
+
+    let mut params = serde_json::Map::new();
+    params.insert("command".into(), Value::Array(command));
+    params.insert("prompt".into(), json!(prompt));
+    if let Some(env) = skill_env(adapter_of(agent_id)) {
+        params.insert("env".into(), env);
+    }
+    if hosted {
+        params.insert("hosted".into(), json!(true));
+    }
+    if governed {
+        params.insert("governed".into(), json!(true));
+    }
+    // How much it may do unasked: only a hosted agent asks anything.
+    if let Some(level) = string_field(body, "autonomy") {
+        if !hosted {
+            return Err((400, "Bad Request", "autonomy needs a hosted session".to_string()));
+        }
+        params.insert("autonomy".into(), json!(level));
+    }
+    // Where the agent works: the workspace the console has open. Only an
+    // existing directory -- it decides where the agent reads and writes, not
+    // what runs, but a typo should fail here rather than at spawn.
+    if let Some(cwd) = string_field(body, "cwd") {
+        if !std::path::Path::new(cwd).is_dir() {
+            return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
+        }
+        params.insert("cwd".into(), json!(cwd));
+    }
+    // Carried onto every event and log line, so the console can thread them
+    // back onto the task they belong to.
+    for key in ["task_id", "run_id", "step_id", "idempotency_key"] {
+        if let Some(value) = string_field(body, key) {
+            params.insert(key.into(), json!(value));
+        }
+    }
+
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    match handler.handle(&ctx, "agent_session.start", &Value::Object(params)) {
+        Ok(value) => Ok(json!({
+            "agent": agent_id,
+            "adapter": adapter_of(agent_id),
+            "hosted": hosted,
+            "governed": governed,
+            "session": value,
+        })),
+        Err(e) => Err((400, "Bad Request", e.to_string())),
+    }
+}
+
+/// The agent's command line for a start body (`agent`, `governed`,
+/// `hosted`, `browser_profile`, `helper`): its program, the mode's
+/// arguments, the governed instructions and the skills. What a new
+/// conversation is started with and what a continued one is continued
+/// with, so both follow the instructions as they are today.
+pub(crate) fn session_command(agent_id: &str, body: &Value) -> Result<Vec<Value>, StartError> {
     let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
     let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
     let governed_args = if governed {
@@ -387,53 +457,7 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
         }
     }
 
-    let mut params = serde_json::Map::new();
-    params.insert("command".into(), Value::Array(command));
-    params.insert("prompt".into(), json!(prompt));
-    if let Some(env) = skill_env(adapter_of(agent_id)) {
-        params.insert("env".into(), env);
-    }
-    if hosted {
-        params.insert("hosted".into(), json!(true));
-    }
-    if governed {
-        params.insert("governed".into(), json!(true));
-    }
-    // How much it may do unasked: only a hosted agent asks anything.
-    if let Some(level) = string_field(body, "autonomy") {
-        if !hosted {
-            return Err((400, "Bad Request", "autonomy needs a hosted session".to_string()));
-        }
-        params.insert("autonomy".into(), json!(level));
-    }
-    // Where the agent works: the workspace the console has open. Only an
-    // existing directory -- it decides where the agent reads and writes, not
-    // what runs, but a typo should fail here rather than at spawn.
-    if let Some(cwd) = string_field(body, "cwd") {
-        if !std::path::Path::new(cwd).is_dir() {
-            return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
-        }
-        params.insert("cwd".into(), json!(cwd));
-    }
-    // Carried onto every event and log line, so the console can thread them
-    // back onto the task they belong to.
-    for key in ["task_id", "run_id", "step_id", "idempotency_key"] {
-        if let Some(value) = string_field(body, key) {
-            params.insert(key.into(), json!(value));
-        }
-    }
-
-    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
-    match handler.handle(&ctx, "agent_session.start", &Value::Object(params)) {
-        Ok(value) => Ok(json!({
-            "agent": agent_id,
-            "adapter": adapter_of(agent_id),
-            "hosted": hosted,
-            "governed": governed,
-            "session": value,
-        })),
-        Err(e) => Err((400, "Bad Request", e.to_string())),
-    }
+    Ok(command)
 }
 
 /// The rest of a session's life: events, status, input, interrupt, close.

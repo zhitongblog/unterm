@@ -848,16 +848,31 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
             let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
             // The environment is not kept from the earlier session; the
             // skills it was handed are handed again.
-            let skills = agent_session::resume_record(session)
+            let record = agent_session::resume_record(session).ok().flatten();
+            let skills = record.as_ref().and_then(|record| super::agent_run::skill_env(&record.adapter));
+            // Today's command line for the same agent: the conversation is
+            // continued, the instructions (its own browser profile, handing
+            // over, what is asked) are the ones a new conversation gets.
+            let command = record.as_ref().and_then(|record| {
+                let agent = super::agent_run::agent_of(&record.adapter)?;
+                super::agent_run::session_command(
+                    agent,
+                    &json!({
+                        "governed": record.governed,
+                        "hosted": true,
+                        "browser_profile": settings.browser_profile,
+                    }),
+                )
+                .map_err(|(_, _, why)| log::warn!("continued on the earlier command line: {why}"))
                 .ok()
-                .flatten()
-                .and_then(|record| super::agent_run::skill_env(&record.adapter));
+            });
             handler
                 .handle(
                     &ctx,
                     "agent_session.resume",
                     &json!({
                         "env": skills,
+                        "command": command,
                         "session_id": session,
                         "prompt": prompt,
                         // Today's level, not the one the conversation began under.

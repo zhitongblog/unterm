@@ -581,6 +581,15 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                     ),
                     None => None,
                 },
+                // Today's command line for the same agent, when the caller
+                // has one: the conversation continues, the instructions are
+                // current.
+                match params.get("command") {
+                    Some(Value::Array(parts)) => {
+                        Some(parts.iter().filter_map(|part| part.as_str().map(str::to_string)).collect())
+                    }
+                    _ => None,
+                },
             )?;
             Ok(json!({"session_id": id, "resumed_from": text(params, "session_id")?}))
         }

@@ -476,12 +476,20 @@ pub fn resume_record(session_id: &str) -> Result<Option<ResumeRecord>> {
 /// the earlier session's level carries over. The person's level today is
 /// the one that counts, so the console always gives it: a conversation begun
 /// before levels existed would otherwise ask about every read.
+///
+/// `command` is the agent's command line as it would be started today; the
+/// earlier session's is used without it. Its instructions (which browser
+/// profile, how to hand over, what is asked) are the product's, not part of
+/// the conversation, and a conversation continued on last week's would
+/// browse in the person's own profile because last week's did not say
+/// otherwise. The conversation itself is the agent's own, named by id.
 pub fn resume(
     previous_id: &str,
     prompt: Option<&str>,
     env: &[(String, String)],
     context: Option<TaskContext>,
     autonomy: Option<crate::tool_risk::Autonomy>,
+    command: Option<Vec<String>>,
 ) -> Result<String> {
     let record = resume_record(previous_id)?.ok_or_else(|| {
         anyhow!("session {previous_id} cannot be resumed: it was not hosted, or its agent never named a conversation")
@@ -502,8 +510,9 @@ pub fn resume(
             ..TaskContext::default()
         },
     };
+    let command = command.filter(|c| !c.is_empty()).unwrap_or_else(|| record.command.clone());
     start_with(
-        &record.command,
+        &command,
         record.cwd.as_deref(),
         env,
         prompt,
@@ -2500,7 +2509,7 @@ read -r rest || exit 0
         assert_eq!(record.task_id.as_deref(), Some("task_resume"));
         assert!(!record.command.iter().any(|w| w == "--input-format"), "the caller's command, not the rewritten one");
 
-        let second = resume(&first, Some("again"), &[], None, None).unwrap();
+        let second = resume(&first, Some("again"), &[], None, None, None).unwrap();
         let events = wait_for(&second, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("args:"))));
         let args = events.iter().find_map(|e| e["text"].as_str().filter(|t| t.starts_with("args:"))).unwrap();
         assert!(args.contains("--resume s1"), "{args}");
@@ -2514,6 +2523,7 @@ read -r rest || exit 0
             &[],
             Some(TaskContext { run_id: Some("run_next".into()), ..TaskContext::default() }),
             None,
+            None,
         )
         .unwrap();
         let events = wait_for(&third, |e| e.iter().any(|e| e["event"] == "turn.completed"));
@@ -2523,15 +2533,26 @@ read -r rest || exit 0
         // Begun before autonomy levels existed: continued under the level
         // given now, not under none (which asks about every read).
         assert_eq!(record.autonomy, None);
-        let fourth = resume(&first, Some("and again"), &[], None, Some(crate::tool_risk::Autonomy::Balanced)).unwrap();
+        let fourth = resume(&first, Some("and again"), &[], None, Some(crate::tool_risk::Autonomy::Balanced), None).unwrap();
         wait_for(&fourth, |e| e.iter().any(|e| e["event"] == "turn.completed"));
         close(&fourth).unwrap();
         let continued = resume_record(&fourth).unwrap().expect("named again");
         assert_eq!(continued.autonomy, Some(crate::tool_risk::Autonomy::Balanced));
 
+        // Continued on today's command line: the same conversation, with the
+        // instructions as they are now rather than as they were then.
+        let mut today = record.command.clone();
+        today.push("--today".into());
+        let fifth = resume(&first, Some("today"), &[], None, None, Some(today.clone())).unwrap();
+        let events = wait_for(&fifth, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("args:"))));
+        let args = events.iter().find_map(|e| e["text"].as_str().filter(|t| t.starts_with("args:"))).unwrap();
+        assert!(args.contains("--resume s1"), "the same conversation: {args}");
+        close(&fifth).unwrap();
+        assert_eq!(resume_record(&fifth).unwrap().expect("named again").command, today, "started on the command given, and kept for next time");
+
         // Nothing to continue: an error, never a fresh conversation.
-        assert!(resume("ags_nosuchsession", None, &[], None, None).is_err());
-        assert!(resume("../escape", None, &[], None, None).is_err());
+        assert!(resume("ags_nosuchsession", None, &[], None, None, None).is_err());
+        assert!(resume("../escape", None, &[], None, None, None).is_err());
         let plain = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), TaskContext::default()).unwrap();
         close(&plain).unwrap();
         assert!(resume_record(&plain).unwrap().is_none(), "only hosted sessions are kept for resuming");
