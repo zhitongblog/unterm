@@ -92,6 +92,10 @@ pub fn start_mcp_server_with_version(product_version: &str) -> (u16, String) {
 /// a steady-state launch does nothing. Entirely best-effort: any failure is
 /// logged and ignored — discovery is a convenience, never a reason to block.
 fn maybe_register_ai_agents() {
+    if !registers_itself(&unterm_protocol::product_name()) {
+        log::info!("setup-ai: skipped; the host application connects AI clients itself");
+        return;
+    }
     let Some(stamp) = unterm_protocol::state_path("setup-ai.stamp") else {
         return;
     };
@@ -147,6 +151,15 @@ fn maybe_register_ai_agents() {
             }
         })
         .ok();
+}
+
+/// Whether first-run discovery is this terminal's job. Not when another
+/// application ships it as one of its features (it says so with
+/// `UNTERM_PRODUCT_NAME`): that application decides which AI clients get
+/// connected, under its own name, and writing `unterm` entries and context
+/// notes into every client behind its back would contradict it.
+fn registers_itself(product_name: &str) -> bool {
+    product_name == "Unterm"
 }
 
 /// Honor the `UNTERM_STARTUP_PROFILE` env var (set by `unterm --profile X`)
@@ -398,4 +411,15 @@ fn make_error_response(id: serde_json::Value, code: i32, message: &str) -> serde
             "message": message,
         },
     })
+}
+
+#[cfg(test)]
+mod setup_ai_tests {
+    use super::registers_itself;
+
+    #[test]
+    fn only_the_standalone_terminal_registers_itself_with_ai_clients() {
+        assert!(registers_itself("Unterm"));
+        assert!(!registers_itself("Unzoo One"));
+    }
 }

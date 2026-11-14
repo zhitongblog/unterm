@@ -106,6 +106,60 @@ pub(crate) fn api_browser() -> Response {
     Response::ok_json(super::browser::status(unzoo_service_path().is_some(), &chosen))
 }
 
+/// GET /api/console/clients — the AI clients on this machine, and whether
+/// each can use this terminal and Unzoo Browser.
+pub(crate) fn api_clients() -> Response {
+    let cli = unterm_cli_path().map(|p| p.display().to_string());
+    Response::ok_json(json!({
+        "server": super::clients::server_name(),
+        "terminal_ready": cli.is_some(),
+        "browser_installed": unzoo_service_path().is_some(),
+        "clients": super::clients::status(cli.as_deref()),
+    }))
+}
+
+/// POST /api/console/clients/connect — `{id, connect}`: put this terminal in
+/// that client's MCP servers, or take it out.
+pub(crate) fn api_client_connect(body: &[u8]) -> Response {
+    let body = parse_body(body);
+    let (Some(id), Some(connect)) = (string_field(&body, "id"), body.get("connect").and_then(Value::as_bool)) else {
+        return Response::err(400, "Bad Request", "id and connect are required");
+    };
+    let Some(cli) = unterm_cli_path() else {
+        return Response::err(503, "Service Unavailable", "unterm-cli is not next to this service");
+    };
+    match super::clients::set(id, &cli.display().to_string(), connect) {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/clients/browser — run Unzoo Browser's own setup, which
+/// adds its server to every AI client it knows. Its server is its to manage;
+/// this only starts the program that does.
+pub(crate) fn api_client_browser() -> Response {
+    let script = unzoo_service_path()
+        .and_then(|service| service.parent().and_then(|dir| dir.parent()).map(|root| root.join("setup-mcp.ps1")))
+        .filter(|script| script.is_file());
+    let Some(script) = script else {
+        return Response::err(404, "Not Found", "Unzoo Browser's setup (setup-mcp.ps1) was not found");
+    };
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Silent")
+        .output();
+    match output {
+        Ok(out) if out.status.success() => Response::ok_json(json!({"ok": true})),
+        Ok(out) => Response::err(
+            500,
+            "Internal Server Error",
+            &format!("Unzoo Browser's setup failed: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        ),
+        Err(e) => Response::err(500, "Internal Server Error", &format!("could not run Unzoo Browser's setup: {e}")),
+    }
+}
+
 fn capabilities() -> Value {
     let browser = unzoo_service_path();
     json!({
@@ -123,6 +177,10 @@ server: open a terminal with its session.create tool when you need one, run comm
 exec.run_wait and read their output from the result. For anything in a web browser use the \
 unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
 refused, say what you needed it for instead of trying another way.";
+
+/// Said to a governed agent that may hand work on (not to a helper, which
+/// may not).
+const HELPERS_PROMPT: &str = "Another agent on this machine can take a self-contained piece of the work, for example a long coding job while you work the browser, or when the user names one: hand it over with the unterm MCP tool agent_session.delegate (agent: codex-cli, claude-code, opencode or agy; the call says so if one is not installed). Write its prompt so it stands on its own, since the helper has not seen this conversation. It works in the same folder under the same approvals and its report comes back to you; when the call says it is still working, call again with its session_id. Wait for every helper before you finish, because they stop when your turn ends. Never start agents yourself with agent_session.start.";
 
 /// The governed preset for Claude Code: hosted, its own shell and fetch
 /// switched off, Unterm's MCP (and Unzoo Browser's, when installed) mounted
@@ -216,7 +274,14 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
     let governed_args = if governed {
         match governed_args(agent_id, string_field(body, "browser_profile")) {
-            Ok(args) => Some(args),
+            Ok(mut args) => {
+                let helper = body.get("helper").and_then(Value::as_bool).unwrap_or(false);
+                if let (false, Some(prompt)) = (helper, args.last_mut()) {
+                    prompt.push(' ');
+                    prompt.push_str(HELPERS_PROMPT);
+                }
+                Some(args)
+            }
             Err(why) => return Err((400, "Bad Request", why.to_string())),
         }
     } else {

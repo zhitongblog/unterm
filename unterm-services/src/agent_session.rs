@@ -195,6 +195,8 @@ struct Live {
     cwd: Option<String>,
     /// A governed session's grant, revoked when it closes.
     grant: Option<String>,
+    /// How much it answers on its own, for a helper it hands work to.
+    autonomy: Option<crate::tool_risk::Autonomy>,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -469,11 +471,17 @@ pub fn resume_record(session_id: &str) -> Result<Option<ResumeRecord>> {
 /// continue (the CLI never named one) or the protocol cannot: a new
 /// conversation that looks like the old one loses exactly what the caller
 /// asked to keep.
+///
+/// `autonomy` is how much the continued session may do unasked; without it
+/// the earlier session's level carries over. The person's level today is
+/// the one that counts, so the console always gives it: a conversation begun
+/// before levels existed would otherwise ask about every read.
 pub fn resume(
     previous_id: &str,
     prompt: Option<&str>,
     env: &[(String, String)],
     context: Option<TaskContext>,
+    autonomy: Option<crate::tool_risk::Autonomy>,
 ) -> Result<String> {
     let record = resume_record(previous_id)?.ok_or_else(|| {
         anyhow!("session {previous_id} cannot be resumed: it was not hosted, or its agent never named a conversation")
@@ -504,7 +512,7 @@ pub fn resume(
         true,
         record.governed,
         Some(&record.external_id),
-        record.autonomy,
+        autonomy.or(record.autonomy),
     )
 }
 
@@ -761,9 +769,32 @@ fn start_with(
             turn,
             cwd: cwd.map(str::to_string),
             grant,
+            autonomy,
         },
     );
     Ok(id)
+}
+
+/// What a live session works under: its workspace, how much it answers on
+/// its own, and the task it belongs to. A helper it hands work to is
+/// started under the same, so delegating never widens what runs unasked.
+#[derive(Clone, Debug, Default)]
+pub struct Standing {
+    pub cwd: Option<String>,
+    pub autonomy: Option<crate::tool_risk::Autonomy>,
+    pub governed: bool,
+    pub context: TaskContext,
+}
+
+pub fn standing(id: &str) -> Option<Standing> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions.get(id)?;
+    Some(Standing {
+        cwd: live.cwd.clone(),
+        autonomy: live.autonomy,
+        governed: live.grant.is_some(),
+        context: live.context.clone(),
+    })
 }
 
 /// One brain event as this surface's vocabulary.
@@ -1153,6 +1184,7 @@ pub fn close(id: &str) -> Result<Value> {
         turn,
         cwd: _,
         grant,
+        autonomy: _,
     } = live;
     // First thing: from here on nothing this session's agent sends through
     // Unterm counts as already approved.
@@ -2294,7 +2326,7 @@ read -r rest || exit 0
         assert_eq!(record.task_id.as_deref(), Some("task_resume"));
         assert!(!record.command.iter().any(|w| w == "--input-format"), "the caller's command, not the rewritten one");
 
-        let second = resume(&first, Some("again"), &[], None).unwrap();
+        let second = resume(&first, Some("again"), &[], None, None).unwrap();
         let events = wait_for(&second, |e| e.iter().any(|e| e["text"].as_str().is_some_and(|t| t.starts_with("args:"))));
         let args = events.iter().find_map(|e| e["text"].as_str().filter(|t| t.starts_with("args:"))).unwrap();
         assert!(args.contains("--resume s1"), "{args}");
@@ -2307,15 +2339,25 @@ read -r rest || exit 0
             Some("once more"),
             &[],
             Some(TaskContext { run_id: Some("run_next".into()), ..TaskContext::default() }),
+            None,
         )
         .unwrap();
         let events = wait_for(&third, |e| e.iter().any(|e| e["event"] == "turn.completed"));
         assert!(events.iter().all(|e| e["task_id"] == "task_resume" && e["run_id"] == "run_next"), "{events:#?}");
         close(&third).unwrap();
 
+        // Begun before autonomy levels existed: continued under the level
+        // given now, not under none (which asks about every read).
+        assert_eq!(record.autonomy, None);
+        let fourth = resume(&first, Some("and again"), &[], None, Some(crate::tool_risk::Autonomy::Balanced)).unwrap();
+        wait_for(&fourth, |e| e.iter().any(|e| e["event"] == "turn.completed"));
+        close(&fourth).unwrap();
+        let continued = resume_record(&fourth).unwrap().expect("named again");
+        assert_eq!(continued.autonomy, Some(crate::tool_risk::Autonomy::Balanced));
+
         // Nothing to continue: an error, never a fresh conversation.
-        assert!(resume("ags_nosuchsession", None, &[], None).is_err());
-        assert!(resume("../escape", None, &[], None).is_err());
+        assert!(resume("ags_nosuchsession", None, &[], None, None).is_err());
+        assert!(resume("../escape", None, &[], None, None).is_err());
         let plain = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), TaskContext::default()).unwrap();
         close(&plain).unwrap();
         assert!(resume_record(&plain).unwrap().is_none(), "only hosted sessions are kept for resuming");

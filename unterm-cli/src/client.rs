@@ -36,6 +36,18 @@ pub fn set_target_instance(id: Option<&str>) {
     }
 }
 
+/// How long a delegated turn is waited for when the caller does not say,
+/// and at most. The server keeps the same numbers.
+pub const DELEGATE_WAIT_SECONDS: u64 = 240;
+pub const DELEGATE_WAIT_MAX_SECONDS: u64 = 600;
+
+/// How long a reply may take: the server's confirmation wait and a margin.
+fn default_read_timeout() -> Duration {
+    Duration::from_millis(unterm_services::settings::current().mcp_confirmation_timeout_ms)
+        .saturating_add(Duration::from_secs(15))
+        .max(Duration::from_secs(30))
+}
+
 /// Windows reports a socket read timeout as `TimedOut`, but some stacks
 /// surface it as `WouldBlock`; both mean the same thing here.
 fn is_timeout(err: &std::io::Error) -> bool {
@@ -76,15 +88,7 @@ impl McpClient {
         // question timed out") was never delivered and the CLI invented a
         // connection failure instead. The margin makes the server's answer
         // always win the race.
-        let confirm_wait =
-            Duration::from_millis(unterm_services::settings::current().mcp_confirmation_timeout_ms);
-        stream
-            .set_read_timeout(Some(
-                confirm_wait
-                    .saturating_add(Duration::from_secs(15))
-                    .max(Duration::from_secs(30)),
-            ))
-            .ok();
+        stream.set_read_timeout(Some(default_read_timeout())).ok();
         stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
         stream.set_nodelay(true).ok();
 
@@ -168,8 +172,21 @@ impl McpClient {
             .map_err(|e| anyhow!("MCP write failed ({}); {}", e, NOT_RUNNING_HINT))?;
         self.writer.flush().ok();
 
+        // A call that is meant to wait -- for a helper agent's turn -- gets
+        // that long and a margin, so its answer is not mistaken for silence.
+        let long_wait = (method == "agent_session.delegate").then(|| {
+            let wait = req["params"]["wait_seconds"].as_u64().unwrap_or(DELEGATE_WAIT_SECONDS);
+            Duration::from_secs(wait.min(DELEGATE_WAIT_MAX_SECONDS) + 30)
+        });
+        if let Some(wait) = long_wait {
+            self.reader.get_ref().set_read_timeout(Some(wait)).ok();
+        }
         let mut buf = String::new();
-        let n = self.reader.read_line(&mut buf).map_err(|e| {
+        let read = self.reader.read_line(&mut buf);
+        if long_wait.is_some() {
+            self.reader.get_ref().set_read_timeout(Some(default_read_timeout())).ok();
+        }
+        let n = read.map_err(|e| {
             // A read timeout means the server took the request and never
             // answered -- the opposite situation from "nothing is
             // listening", and pointing at the wrong one sends people to

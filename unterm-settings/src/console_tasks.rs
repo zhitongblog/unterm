@@ -357,10 +357,13 @@ pub(crate) fn id_after(text: &str, key: &str) -> Option<String> {
 /// terminal and tab on the machine.
 fn used_by_an_agent(kind: &str, id: &str) -> Result<bool> {
     let store = store()?;
+    let lists = |detail: &Value| detail.get(kind).and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id));
     for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
         for run in store.runs(&task.id)? {
             for step in store.steps(&run.id)? {
-                if step.detail.get(kind).and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id)) {
+                // The conversation's agent, or a helper it handed work to.
+                let helpers = step.detail.get("helpers").and_then(Value::as_array);
+                if lists(&step.detail) || helpers.is_some_and(|all| all.iter().any(lists)) {
                     return Ok(true);
                 }
             }
@@ -369,17 +372,60 @@ fn used_by_an_agent(kind: &str, id: &str) -> Result<bool> {
     Ok(false)
 }
 
-/// What is on an agent's terminal now.
-pub fn terminal_screen(handler: &McpHandler, session: &str) -> Result<Value> {
+/// How much of a terminal's history the console shows: enough to scroll
+/// back through what an agent did, little enough to send every second.
+const TERMINAL_HISTORY_ROWS: i64 = 1500;
+
+/// The most a person types in one go (a paste is more than a keystroke).
+const TERMINAL_INPUT_MAX: usize = 16 * 1024;
+
+/// What an agent's terminal printed: the output exactly as the terminal
+/// received it, escapes and all, cut into lines -- replayed by a terminal
+/// emulator it draws the same screen, colours and cursor. `from_line` asks
+/// only for what came since (the line given included, since the last one may
+/// have grown); without it, the recent history.
+pub fn terminal_screen(handler: &McpHandler, session: &str, from_line: Option<i64>) -> Result<Value> {
     if !used_by_an_agent("terminals", session)? {
         bail!("{session} is not a terminal an agent used");
     }
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
-    let screen = handler
-        .handle(&ctx, "screen.text", &json!({"session_id": session}))
+    // The cursor first: it needs the terminal itself, where reading the
+    // history of a closed one falls back to whichever is in front.
+    let cursor = handler
+        .handle(&ctx, "screen.cursor", &json!({"session_id": session}))
+        .map_err(|e| anyhow!("{session} is closed: {e}"))?;
+    let history = handler
+        .handle(
+            &ctx,
+            "screen.scrollback_text",
+            &match from_line {
+                Some(from) => json!({"session_id": session, "escapes": true, "start_line": from.max(0)}),
+                None => json!({"session_id": session, "escapes": true, "tail_lines": TERMINAL_HISTORY_ROWS}),
+            },
+        )
         .map_err(|e| anyhow!("{e}"))?;
-    Ok(json!({"session_id": session, "lines": screen.get("lines").cloned().unwrap_or(json!([])),
-              "cols": screen.get("cols").cloned().unwrap_or(Value::Null)}))
+    let field = |name: &str| history.get(name).cloned().unwrap_or(Value::Null);
+    Ok(json!({
+        "session_id": session,
+        "text": field("text"),
+        "first_row": field("first_row"),
+        "row_count": field("row_count"),
+        "cols": field("cols"),
+        "rows": field("viewport_rows"),
+        "cursor": cursor,
+    }))
+}
+
+/// Keys the person typed into an agent's terminal from the console.
+pub fn terminal_input(handler: &McpHandler, session: &str, input: &str) -> Result<Value> {
+    if input.is_empty() || input.len() > TERMINAL_INPUT_MAX {
+        bail!("input must be 1 to {TERMINAL_INPUT_MAX} bytes");
+    }
+    if !used_by_an_agent("terminals", session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    handler.person_input(session, input)?;
+    Ok(json!({"session_id": session, "written": input.len()}))
 }
 
 /// Bring an agent's terminal to the front of an Unzoo One terminal window,
@@ -549,10 +595,10 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error"] {
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
-    for key in ["activity", "terminals", "tabs"] {
+    for key in ["activity", "terminals", "tabs", "helpers"] {
         if view[key].is_null() {
             view[key] = json!([]);
         }
@@ -807,6 +853,8 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                     &json!({
                         "session_id": session,
                         "prompt": prompt,
+                        // Today's level, not the one the conversation began under.
+                        "autonomy": settings.autonomy.as_str(),
                         "task_id": console_task_id,
                         "run_id": console_run_id,
                         "step_id": step_id,
@@ -1096,6 +1144,97 @@ impl Turn {
     }
 }
 
+/// A helper the conversation's agent handed work to, as the console follows
+/// it: what it did and said, read from its own events.
+struct Followed {
+    session: String,
+    agent: String,
+    prompt: String,
+    cursor: usize,
+    turn: Turn,
+    waiting: bool,
+    /// Something to write down since the step was last saved.
+    changed: bool,
+}
+
+/// Read every helper's new events. True when any of them got on, or waits
+/// for a person -- the conversation's agent is waiting on them, not stuck.
+fn follow_helpers(hub: &str, followed: &mut Vec<Followed>, cwd: Option<&str>) -> bool {
+    for helper in super::helpers::of(hub) {
+        match followed.iter_mut().find(|f| f.session == helper.session_id) {
+            Some(known) => {
+                if known.prompt != helper.prompt {
+                    // Continued with more work: a new turn of the same helper.
+                    known.prompt = helper.prompt;
+                    known.turn.ended = None;
+                    known.turn.text.clear();
+                    known.changed = true;
+                }
+            }
+            None => followed.push(Followed {
+                session: helper.session_id,
+                agent: helper.agent,
+                prompt: helper.prompt,
+                cursor: 0,
+                turn: Turn { cwd: cwd.map(str::to_string), ..Turn::default() },
+                waiting: false,
+                changed: true,
+            }),
+        }
+    }
+    let mut progressed = false;
+    for helper in followed.iter_mut() {
+        if let Ok((events, next)) = agent_session::events(&helper.session, helper.cursor) {
+            if !events.is_empty() {
+                progressed = true;
+                helper.changed = true;
+            }
+            helper.cursor = next;
+            for event in &events {
+                helper.turn.read(event);
+            }
+            let pending = agent_session::pending_approvals(&helper.session).is_ok_and(|p| !p.is_empty());
+            let waiting = pending || helper.turn.waiting;
+            if waiting != helper.waiting {
+                helper.waiting = waiting;
+                helper.changed = true;
+            }
+            progressed |= waiting;
+        }
+    }
+    progressed
+}
+
+fn helpers_view(followed: &mut [Followed]) -> Value {
+    Value::Array(
+        followed
+            .iter_mut()
+            .map(|helper| {
+                helper.changed = false;
+                let state = match helper.turn.ended.as_deref() {
+                    None if helper.waiting => "waiting",
+                    None => "working",
+                    Some("finished" | "exited" | "succeeded") => "done",
+                    Some("interrupted" | "cancelled") => "stopped",
+                    Some(_) => "failed",
+                };
+                json!({
+                    "session_id": helper.session,
+                    "agent": helper.agent,
+                    "prompt": helper.prompt,
+                    "state": state,
+                    "waiting": helper.waiting,
+                    "reply": helper.turn.reply(),
+                    "error": helper.turn.error,
+                    "activity": helper.turn.activity,
+                    "terminals": helper.turn.terminals,
+                    "tabs": helper.turn.tabs,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// How a session's ending reads as a run's verdict.
 fn verdict(ended: &str, stopped_for_idling: bool) -> State {
     match ended {
@@ -1118,9 +1257,13 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     let mut shown_len = 0usize;
     let mut shown_activity = 0usize;
     let mut idled: Option<Instant> = None;
+    let mut helpers: Vec<Followed> = Vec::new();
 
     loop {
         std::thread::sleep(POLL);
+        if follow_helpers(&session, &mut helpers, turn.cwd.as_deref()) {
+            last_progress = Instant::now();
+        }
         match agent_session::events(&session, cursor) {
             Ok((events, next)) => {
                 if !events.is_empty() {
@@ -1161,10 +1304,11 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             // Waiting for a person is not being stuck.
             last_progress = Instant::now();
         }
-        let waiting = pending || turn.waiting;
+        let waiting = pending || turn.waiting || helpers.iter().any(|h| h.waiting);
         let text_len = turn.text.len();
         let activity_len = turn.activity.len();
-        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity {
+        let helpers_changed = helpers.iter().any(|h| h.changed);
+        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity || helpers_changed {
             shown_waiting = waiting;
             shown_len = text_len;
             shown_activity = activity_len;
@@ -1174,6 +1318,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             detail["activity"] = json!(turn.activity);
             detail["terminals"] = json!(turn.terminals);
             detail["tabs"] = json!(turn.tabs);
+            if !helpers.is_empty() {
+                detail["helpers"] = helpers_view(&mut helpers);
+            }
             if let Ok(store) = store() {
                 let _ = store.set_step_detail(&step, detail.clone(), State::Running);
             }
@@ -1195,6 +1342,14 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     }
 
     let usage = agent_session::status(&session).ok().and_then(|s| s.get("usage").cloned());
+    // Its helpers' last words, then they stop with it: nobody is left to
+    // read what they would say next.
+    follow_helpers(&session, &mut helpers, turn.cwd.as_deref());
+    super::helpers::release(&session);
+    for helper in helpers.iter_mut().filter(|h| h.turn.ended.is_none()) {
+        helper.turn.ended = Some("interrupted".into());
+        helper.waiting = false;
+    }
     // A hosted agent outlives its turn, waiting for the next message. This
     // run is over; the conversation is kept by the CLI and continued, when
     // asked, in a new session.
@@ -1213,6 +1368,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     detail["activity"] = json!(turn.activity);
     detail["terminals"] = json!(turn.terminals);
     detail["tabs"] = json!(turn.tabs);
+    if !helpers.is_empty() {
+        detail["helpers"] = helpers_view(&mut helpers);
+    }
     detail["ended"] = json!(ended);
     detail["duration_seconds"] = json!(started.elapsed().as_secs());
     if let Some(usage) = usage.filter(|u| !u.is_null()) {
@@ -1449,11 +1607,29 @@ fn computer_reply(result: Result<Value>) -> Response {
     }
 }
 
-/// POST /api/console/computer/terminal — `{session_id}`: the screen's lines.
+/// POST /api/console/computer/terminal — `{session_id, from_line?}`: its output.
 pub fn api_terminal(handler: &McpHandler, body: &[u8]) -> Response {
-    match id_field(&body_json(body), "session_id") {
-        Some(session) => computer_reply(terminal_screen(handler, &session)),
+    let body = body_json(body);
+    match id_field(&body, "session_id") {
+        Some(session) => {
+            let from = body.get("from_line").and_then(Value::as_i64);
+            computer_reply(terminal_screen(handler, &session, from))
+        }
         None => Response::err(400, "Bad Request", "session_id is required"),
+    }
+}
+
+/// POST /api/console/computer/terminal/input — `{session_id, input}`: keys
+/// the person typed, as the bytes a terminal sends.
+pub fn api_terminal_input(handler: &McpHandler, body: &[u8]) -> Response {
+    let body = body_json(body);
+    let input = body.get("input").and_then(Value::as_str);
+    match (id_field(&body, "session_id"), input) {
+        (Some(session), Some(input)) => match terminal_input(handler, &session, input) {
+            Ok(value) => Response::ok_json(value),
+            Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
+        },
+        _ => Response::err(400, "Bad Request", "session_id and input are required"),
     }
 }
 

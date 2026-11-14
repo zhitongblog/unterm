@@ -443,6 +443,8 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         "agent_session.decide",
         // Starts an agent again, as agent_session.start does.
         "agent_session.resume",
+        // Starts a helper agent, under the asking session's own terms.
+        "agent_session.delegate",
         // The envelope runs whatever it carries; the method inside is judged
         // on its own terms as well.
         "terminal.invoke",

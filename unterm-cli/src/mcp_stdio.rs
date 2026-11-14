@@ -54,6 +54,11 @@ pub fn run() -> Result<()> {
     // when the GUI appears. Exiting here used to break (a) registry health
     // checks that introspect the server headlessly and (b) agents that start
     // before the terminal does.
+    // Who is on the other end, from the MCP handshake (`clientInfo`): told to
+    // the server once per connection, so its confirmations and audit say
+    // "Claude Desktop" or "Cursor" rather than "anonymous".
+    let mut client_info: Option<Value> = None;
+    let mut identified = false;
     let (mut client, drain_reason): (Option<McpClient>, Option<String>) =
         match McpClient::connect_as(unterm_protocol::ProcessRole::McpBridge) {
             Ok(c) => (Some(c), None),
@@ -139,6 +144,18 @@ pub fn run() -> Result<()> {
 
         match method {
             "initialize" => {
+                client_info = req
+                    .pointer("/params/clientInfo")
+                    .and_then(|info| {
+                        let name = info.get("name")?.as_str()?.trim();
+                        (!name.is_empty()).then(|| {
+                            json!({
+                                "name": name.chars().take(64).collect::<String>(),
+                                "version": info.get("version").and_then(Value::as_str),
+                            })
+                        })
+                    });
+                identified = false;
                 respond(
                     &mut stdout,
                     id,
@@ -208,6 +225,14 @@ pub fn run() -> Result<()> {
                     )?;
                     continue;
                 };
+                if !identified {
+                    if let Some(info) = &client_info {
+                        // Best effort: an older server without the method
+                        // still serves the call, under "anonymous".
+                        let _ = live.call("agent.identify", info.clone());
+                    }
+                    identified = true;
+                }
                 match live.call(&name, arguments) {
                     Ok(result) => {
                         let text = serde_json::to_string_pretty(&result)
@@ -237,6 +262,7 @@ pub fn run() -> Result<()> {
                         // Drop the dead connection so the next request performs
                         // discovery and either reconnects or enters drain.
                         client = None;
+                        identified = false;
                     }
                 }
             }
