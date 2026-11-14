@@ -595,7 +595,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers"] {
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers", "handovers"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
     for key in ["activity", "terminals", "tabs", "helpers"] {
@@ -948,6 +948,9 @@ struct Turn {
     terminals: Vec<String>,
     /// Unzoo Browser tabs it used.
     tabs: Vec<String>,
+    /// What it asked the person to do themselves (sign in, solve a
+    /// captcha), and whether they did.
+    handovers: Vec<Value>,
 }
 
 impl Turn {
@@ -995,6 +998,28 @@ impl Turn {
                             self.note_tab(&tab);
                         }
                     }
+                }
+            }
+            "handover.requested" => {
+                let handover = &event["handover"];
+                if let Some(tab) = scalar_id(&handover["tab_id"]) {
+                    self.note_tab(&tab);
+                }
+                if self.handovers.len() < 32 {
+                    self.handovers.push(json!({
+                        "id": handover["id"],
+                        "what": handover["what"],
+                        "tab_id": scalar_id(&handover["tab_id"]),
+                        "state": "waiting",
+                        "at": event.get("at").cloned().unwrap_or(Value::Null),
+                    }));
+                }
+            }
+            "handover.resolved" => {
+                let handover = &event["handover"];
+                if let Some(entry) = self.handovers.iter_mut().find(|h| h["id"] == handover["id"]) {
+                    entry["state"] = handover["state"].clone();
+                    entry["note"] = handover["note"].clone();
                 }
             }
             "approval.requested" => {
@@ -1258,6 +1283,7 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     let mut shown_activity = 0usize;
     let mut idled: Option<Instant> = None;
     let mut helpers: Vec<Followed> = Vec::new();
+    let mut shown_handovers = json!([]);
 
     loop {
         std::thread::sleep(POLL);
@@ -1300,15 +1326,24 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             .and_then(|s| s.get("pending_approvals"))
             .and_then(Value::as_array)
             .is_some_and(|a| !a.is_empty());
-        if pending {
+        let handing_over = agent_session::has_open_handover(&session);
+        if pending || handing_over {
             // Waiting for a person is not being stuck.
             last_progress = Instant::now();
         }
-        let waiting = pending || turn.waiting || helpers.iter().any(|h| h.waiting);
+        let waiting = pending || handing_over || turn.waiting || helpers.iter().any(|h| h.waiting);
         let text_len = turn.text.len();
         let activity_len = turn.activity.len();
         let helpers_changed = helpers.iter().any(|h| h.changed);
-        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity || helpers_changed {
+        let handovers_seen = json!(turn.handovers);
+        let handovers_changed = handovers_seen != shown_handovers;
+        if waiting != shown_waiting
+            || text_len != shown_len
+            || activity_len != shown_activity
+            || helpers_changed
+            || handovers_changed
+        {
+            shown_handovers = handovers_seen;
             shown_waiting = waiting;
             shown_len = text_len;
             shown_activity = activity_len;
@@ -1318,6 +1353,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             detail["activity"] = json!(turn.activity);
             detail["terminals"] = json!(turn.terminals);
             detail["tabs"] = json!(turn.tabs);
+            if !turn.handovers.is_empty() {
+                detail["handovers"] = json!(turn.handovers);
+            }
             if !helpers.is_empty() {
                 detail["helpers"] = helpers_view(&mut helpers);
             }
@@ -1630,6 +1668,23 @@ pub fn api_terminal_input(handler: &McpHandler, body: &[u8]) -> Response {
             Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
         },
         _ => Response::err(400, "Bad Request", "session_id and input are required"),
+    }
+}
+
+/// POST /api/console/handover — `{session_id, handover_id, done, note?}`:
+/// the person did what the agent asked them to (or cannot).
+pub fn api_handover(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let done = body.get("done").and_then(Value::as_bool);
+    match (id_field(&body, "session_id"), id_field(&body, "handover_id"), done) {
+        (Some(session), Some(handover), Some(done)) => {
+            let note = body.get("note").and_then(Value::as_str);
+            match agent_session::answer_handover(&session, &handover, done, note) {
+                Ok(()) => Response::ok_json(json!({"answered": handover, "done": done})),
+                Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
+            }
+        }
+        _ => Response::err(400, "Bad Request", "session_id, handover_id and done are required"),
     }
 }
 

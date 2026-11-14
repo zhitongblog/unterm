@@ -348,6 +348,8 @@ pub enum Verb {
     Skill,
     /// Handed work to another agent.
     Delegate,
+    /// Asked the person to take over (sign in, solve a captcha).
+    Handover,
     /// Anything else, named by its tool.
     Use,
 }
@@ -423,6 +425,9 @@ fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
                 let task = field(&["prompt"]);
                 let agent = field(&["agent", "session_id"]);
                 return (Verb::Delegate, if task.is_empty() { agent } else { format!("{agent}: {task}") });
+            }
+            if name.replace('.', "_") == "agent_session_handover" {
+                return (Verb::Handover, field(&["what", "handover_id"]));
             }
             if name.starts_with("exec_") || name == "session_input" || name == "session_paste" {
                 let command = command_of(input).unwrap_or_else(|| field(&["text", "input", "data"]));
@@ -544,6 +549,16 @@ mod tests {
         assert_eq!(risk("Write", json!({"file_path": sibling})), Some(Risk::ExternalSideEffect));
         // No folder to judge by: asked.
         assert_eq!(classify("Write", &json!({"file_path": "a.md"}), None), Some(Risk::ExternalSideEffect));
+    }
+
+    #[test]
+    fn asking_the_person_to_take_over_runs_nothing() {
+        let input = json!({"what": "Sign in to GitHub", "tab_id": "42"});
+        assert_eq!(risk("mcp__unterm__agent_session_handover", input.clone()), Some(Risk::Read));
+        assert_eq!(
+            describe("mcp__unterm__agent_session_handover", &input),
+            (Verb::Handover, "Sign in to GitHub".to_string())
+        );
     }
 
     #[test]

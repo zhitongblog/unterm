@@ -319,6 +319,7 @@ fn method_is_read_only(method: &str) -> bool {
             | "system.uninstall_plan"
             | "agent_session.events"
             | "agent_session.status"
+            | "agent_session.handover"
             | "terminal.manifest"
             | "terminal.health"
             | "terminal.capabilities"

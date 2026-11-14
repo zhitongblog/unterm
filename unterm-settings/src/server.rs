@@ -577,6 +577,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/tasks/thread") => super::console_tasks::api_thread(&req.body),
         ("POST", "/api/console/computer/terminal") => super::console_tasks::api_terminal(handler, &req.body),
         ("POST", "/api/console/computer/terminal/input") => super::console_tasks::api_terminal_input(handler, &req.body),
+        ("POST", "/api/console/handover") => super::console_tasks::api_handover(&req.body),
         ("POST", "/api/console/computer/terminal/focus") => super::console_tasks::api_terminal_focus(handler, &req.body),
         ("POST", "/api/console/computer/tab") => super::console_tasks::api_tab(&req.body),
         ("POST", "/api/console/computer/tab/activate") => super::console_tasks::api_tab_activate(&req.body),

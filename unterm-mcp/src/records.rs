@@ -47,6 +47,7 @@ pub const METHODS: &[&str] = &[
     "agent_session.decide",
     "agent_session.resume",
     "agent_session.delegate",
+    "agent_session.handover",
     "terminal.manifest",
     "terminal.health",
     "terminal.capabilities",
@@ -107,6 +108,9 @@ pub fn dispatch_with(
     if method == "agent_session.delegate" {
         return delegate(handler, params);
     }
+    if method == "agent_session.handover" {
+        return handover(params);
+    }
     dispatch(method, params)
 }
 
@@ -134,6 +138,36 @@ fn delegate(handler: &crate::handler::McpHandler, params: &Value) -> Result<Valu
         .get()
         .ok_or_else(|| anyhow!("this Unterm has nothing that starts helper agents"))?;
     delegator(handler, &parent, params)
+}
+
+/// How long one `agent_session.handover` call waits for the person.
+pub const HANDOVER_WAIT_SECONDS: u64 = 300;
+
+/// A hosted agent asking the person to take over -- sign in, solve a
+/// captcha -- and waiting for them. Only a hosted session: its question
+/// appears in its own conversation, which is where the person is looking.
+fn handover(params: &Value) -> Result<Value> {
+    let session = crate::handler::McpHandler::hosted_session()
+        .ok_or_else(|| anyhow!("only an agent Unzoo One runs can hand over to the person; ask them in your reply instead"))?;
+    let what = params.get("what").and_then(Value::as_str).unwrap_or_default();
+    let tab = params.get("tab_id").and_then(|v| match v {
+        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    });
+    let id = params.get("handover_id").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+    let wait = params
+        .get("wait_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(HANDOVER_WAIT_SECONDS)
+        .min(unterm_services::agent_session::HANDOVER_WAIT_MAX_SECONDS);
+    unterm_services::agent_session::request_handover(
+        &session,
+        what,
+        tab.as_deref(),
+        id,
+        std::time::Duration::from_secs(wait),
+    )
 }
 
 fn invoke(
@@ -576,6 +610,7 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
 
         // Answered by `dispatch_with`: it is about who is asking.
         "agent_session.delegate" => Err(anyhow!("agent_session.delegate is answered for a connection")),
+        "agent_session.handover" => Err(anyhow!("agent_session.handover is answered for a connection")),
         other => Err(anyhow!("records dispatch reached {other}")),
     }
 }

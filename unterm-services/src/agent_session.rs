@@ -1312,6 +1312,127 @@ pub fn interrupt_orphans() -> Result<Vec<String>> {
     store()?.interrupt_orphan_sessions("the Core that was hosting this session stopped")
 }
 
+// ---- handing the screen to the person -------------------------------------
+
+/// A hosted agent asking the person to do something only they should: sign
+/// in, solve a captcha, confirm on their phone. The agent waits; the person
+/// does it in the real browser or terminal and says done (or that they
+/// cannot). Nothing is run on the person's behalf, which is why asking is
+/// never a question of autonomy.
+struct Handover {
+    session: String,
+    answer: Option<(bool, String)>,
+}
+
+fn handovers() -> &'static (Mutex<HashMap<String, Handover>>, std::sync::Condvar) {
+    static HANDOVERS: OnceLock<(Mutex<HashMap<String, Handover>>, std::sync::Condvar)> = OnceLock::new();
+    HANDOVERS.get_or_init(|| (Mutex::new(HashMap::new()), std::sync::Condvar::new()))
+}
+
+/// The longest one call waits for the person; past it the agent is told to
+/// ask again with the same id, so the question stays where they see it.
+pub const HANDOVER_WAIT_MAX_SECONDS: u64 = 600;
+
+fn push_to(session: &str, mut event: Value) -> Result<()> {
+    let sessions = sessions().lock().unwrap();
+    let live = sessions.get(session).ok_or_else(|| anyhow!("session {session} is not live"))?;
+    live.turn.stamp_now(&mut event);
+    push(&live.events, &live.context, session, event);
+    Ok(())
+}
+
+/// Ask the person to take over, and wait up to `wait` for them. With
+/// `handover_id`, keep waiting on a question asked before. Answers
+/// `{handover_id, state: done | cannot | waiting, note?}`.
+pub fn request_handover(
+    session: &str,
+    what: &str,
+    tab_id: Option<&str>,
+    handover_id: Option<&str>,
+    wait: std::time::Duration,
+) -> Result<Value> {
+    let (lock, ready) = handovers();
+    let id = match handover_id {
+        Some(id) => {
+            let open = lock.lock().unwrap();
+            match open.get(id) {
+                Some(h) if h.session == session => id.to_string(),
+                _ => return Err(anyhow!("no open handover {id} for this session: ask again without handover_id")),
+            }
+        }
+        None => {
+            let what = what.trim();
+            if what.is_empty() {
+                return Err(anyhow!("say what the person should do"));
+            }
+            let id = format!("ho_{}", uuid::Uuid::new_v4().simple());
+            lock.lock().unwrap().insert(id.clone(), Handover { session: session.to_string(), answer: None });
+            let asked = json!({
+                "event": "handover.requested",
+                "handover": {"id": id, "what": what, "tab_id": tab_id},
+            });
+            if let Err(e) = push_to(session, asked) {
+                lock.lock().unwrap().remove(&id);
+                return Err(e);
+            }
+            id
+        }
+    };
+
+    let deadline = std::time::Instant::now() + wait;
+    let mut open = lock.lock().unwrap();
+    loop {
+        if let Some((done, note)) = open.get(&id).and_then(|h| h.answer.clone()) {
+            open.remove(&id);
+            drop(open);
+            let state = if done { "done" } else { "cannot" };
+            let _ = push_to(
+                session,
+                json!({"event": "handover.resolved", "handover": {"id": id, "state": state, "note": note}}),
+            );
+            let mut answer = json!({"handover_id": id, "state": state});
+            if !note.is_empty() {
+                answer["note"] = json!(note);
+            }
+            return Ok(answer);
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(json!({
+                "handover_id": id,
+                "state": "waiting",
+                "hint": "The person has not answered yet. Call again with this handover_id to keep waiting.",
+            }));
+        }
+        // Wake now and then to notice the session closing under us.
+        let slice = (deadline - now).min(std::time::Duration::from_secs(2));
+        open = ready.wait_timeout(open, slice).unwrap().0;
+        if !sessions().lock().unwrap().contains_key(session) {
+            open.remove(&id);
+            return Err(anyhow!("session {session} closed while waiting for the person"));
+        }
+    }
+}
+
+/// The person's answer to a handover: `done`, or that they cannot, with
+/// what they want the agent to know.
+pub fn answer_handover(session: &str, handover_id: &str, done: bool, note: Option<&str>) -> Result<()> {
+    let (lock, ready) = handovers();
+    let mut open = lock.lock().unwrap();
+    let handover = open
+        .get_mut(handover_id)
+        .filter(|h| h.session == session)
+        .ok_or_else(|| anyhow!("no open handover {handover_id} in session {session}: already answered, or the agent stopped waiting"))?;
+    handover.answer = Some((done, note.unwrap_or_default().trim().to_string()));
+    ready.notify_all();
+    Ok(())
+}
+
+/// Whether a session has a handover the person has not answered.
+pub fn has_open_handover(session: &str) -> bool {
+    handovers().0.lock().unwrap().values().any(|h| h.session == session && h.answer.is_none())
+}
+
 #[cfg(test)]
 mod tests {
     use super::effective_program;
@@ -1881,6 +2002,47 @@ printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"second turn"}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
 "#;
+
+    #[test]
+    fn a_handover_waits_for_the_person_and_says_what_they_did() {
+        let _dir = isolate();
+        let id = hosted_fake();
+        let asking = {
+            let id = id.clone();
+            std::thread::spawn(move || {
+                request_handover(&id, "Sign in to GitHub", Some("42"), None, std::time::Duration::from_secs(20))
+            })
+        };
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "handover.requested"));
+        let asked = events.iter().find(|e| e["event"] == "handover.requested").unwrap();
+        assert_eq!(asked["handover"]["what"], "Sign in to GitHub");
+        assert_eq!(asked["handover"]["tab_id"], "42");
+        let first = asked["handover"]["id"].as_str().unwrap().to_string();
+        assert!(has_open_handover(&id));
+        assert!(answer_handover("ags_someoneelse", &first, true, None).is_err(), "only its own session answers");
+
+        answer_handover(&id, &first, true, Some("signed in")).unwrap();
+        let answer = asking.join().unwrap().unwrap();
+        assert_eq!((answer["state"].as_str(), answer["note"].as_str()), (Some("done"), Some("signed in")));
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "handover.resolved"));
+        let resolved = events.iter().find(|e| e["event"] == "handover.resolved").unwrap();
+        assert_eq!(resolved["handover"]["state"], "done");
+        assert!(!has_open_handover(&id));
+        assert!(answer_handover(&id, &first, true, None).is_err(), "answered once");
+
+        // Not answered in time: still open, and waited on again by its id.
+        let waited = request_handover(&id, "Solve the captcha", None, None, std::time::Duration::from_millis(200)).unwrap();
+        assert_eq!(waited["state"], "waiting");
+        let second = waited["handover_id"].as_str().unwrap().to_string();
+        assert!(has_open_handover(&id));
+        answer_handover(&id, &second, false, None).unwrap();
+        let again = request_handover(&id, "", None, Some(&second), std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(again["state"], "cannot");
+
+        assert!(request_handover(&id, "  ", None, None, std::time::Duration::from_millis(10)).is_err(), "says what");
+        assert!(request_handover("ags_nosuch", "x", None, None, std::time::Duration::from_millis(10)).is_err());
+        close(&id).unwrap();
+    }
 
     fn hosted_fake() -> String {
         let id = start_hosted(

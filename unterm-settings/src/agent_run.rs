@@ -176,7 +176,12 @@ const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shel
 server: open a terminal with its session.create tool when you need one, run commands with \
 exec.run_wait and read their output from the result. For anything in a web browser use the \
 unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
-refused, say what you needed it for instead of trying another way.";
+refused, say what you needed it for instead of trying another way. When something needs the user \
+themselves (signing in, a captcha, a code sent to their phone, a password or card number), never \
+type it yourself and never ask for it in the chat: call the unterm MCP tool agent_session.handover \
+with one plain sentence saying what to do and where, and the tab_id when it is in a browser tab. It \
+waits while they do it in the real browser or terminal; when it says done, carry on, and when it \
+says waiting, call it again with the handover_id.";
 
 /// Said to a governed agent that may hand work on (not to a helper, which
 /// may not).
