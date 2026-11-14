@@ -372,17 +372,60 @@ fn used_by_an_agent(kind: &str, id: &str) -> Result<bool> {
     Ok(false)
 }
 
-/// What is on an agent's terminal now.
-pub fn terminal_screen(handler: &McpHandler, session: &str) -> Result<Value> {
+/// How much of a terminal's history the console shows: enough to scroll
+/// back through what an agent did, little enough to send every second.
+const TERMINAL_HISTORY_ROWS: i64 = 1500;
+
+/// The most a person types in one go (a paste is more than a keystroke).
+const TERMINAL_INPUT_MAX: usize = 16 * 1024;
+
+/// What an agent's terminal printed: the output exactly as the terminal
+/// received it, escapes and all, cut into lines -- replayed by a terminal
+/// emulator it draws the same screen, colours and cursor. `from_line` asks
+/// only for what came since (the line given included, since the last one may
+/// have grown); without it, the recent history.
+pub fn terminal_screen(handler: &McpHandler, session: &str, from_line: Option<i64>) -> Result<Value> {
     if !used_by_an_agent("terminals", session)? {
         bail!("{session} is not a terminal an agent used");
     }
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
-    let screen = handler
-        .handle(&ctx, "screen.text", &json!({"session_id": session}))
+    // The cursor first: it needs the terminal itself, where reading the
+    // history of a closed one falls back to whichever is in front.
+    let cursor = handler
+        .handle(&ctx, "screen.cursor", &json!({"session_id": session}))
+        .map_err(|e| anyhow!("{session} is closed: {e}"))?;
+    let history = handler
+        .handle(
+            &ctx,
+            "screen.scrollback_text",
+            &match from_line {
+                Some(from) => json!({"session_id": session, "escapes": true, "start_line": from.max(0)}),
+                None => json!({"session_id": session, "escapes": true, "tail_lines": TERMINAL_HISTORY_ROWS}),
+            },
+        )
         .map_err(|e| anyhow!("{e}"))?;
-    Ok(json!({"session_id": session, "lines": screen.get("lines").cloned().unwrap_or(json!([])),
-              "cols": screen.get("cols").cloned().unwrap_or(Value::Null)}))
+    let field = |name: &str| history.get(name).cloned().unwrap_or(Value::Null);
+    Ok(json!({
+        "session_id": session,
+        "text": field("text"),
+        "first_row": field("first_row"),
+        "row_count": field("row_count"),
+        "cols": field("cols"),
+        "rows": field("viewport_rows"),
+        "cursor": cursor,
+    }))
+}
+
+/// Keys the person typed into an agent's terminal from the console.
+pub fn terminal_input(handler: &McpHandler, session: &str, input: &str) -> Result<Value> {
+    if input.is_empty() || input.len() > TERMINAL_INPUT_MAX {
+        bail!("input must be 1 to {TERMINAL_INPUT_MAX} bytes");
+    }
+    if !used_by_an_agent("terminals", session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    handler.person_input(session, input)?;
+    Ok(json!({"session_id": session, "written": input.len()}))
 }
 
 /// Bring an agent's terminal to the front of an Unzoo One terminal window,
@@ -1564,11 +1607,29 @@ fn computer_reply(result: Result<Value>) -> Response {
     }
 }
 
-/// POST /api/console/computer/terminal — `{session_id}`: the screen's lines.
+/// POST /api/console/computer/terminal — `{session_id, from_line?}`: its output.
 pub fn api_terminal(handler: &McpHandler, body: &[u8]) -> Response {
-    match id_field(&body_json(body), "session_id") {
-        Some(session) => computer_reply(terminal_screen(handler, &session)),
+    let body = body_json(body);
+    match id_field(&body, "session_id") {
+        Some(session) => {
+            let from = body.get("from_line").and_then(Value::as_i64);
+            computer_reply(terminal_screen(handler, &session, from))
+        }
         None => Response::err(400, "Bad Request", "session_id is required"),
+    }
+}
+
+/// POST /api/console/computer/terminal/input — `{session_id, input}`: keys
+/// the person typed, as the bytes a terminal sends.
+pub fn api_terminal_input(handler: &McpHandler, body: &[u8]) -> Response {
+    let body = body_json(body);
+    let input = body.get("input").and_then(Value::as_str);
+    match (id_field(&body, "session_id"), input) {
+        (Some(session), Some(input)) => match terminal_input(handler, &session, input) {
+            Ok(value) => Response::ok_json(value),
+            Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
+        },
+        _ => Response::err(400, "Bad Request", "session_id and input are required"),
     }
 }
 

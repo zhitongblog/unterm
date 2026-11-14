@@ -5880,6 +5880,23 @@ impl McpHandler {
         }
     }
 
+    /// Keys a person typed into a terminal from the console: written as
+    /// they are, no agent gateway and no confirmation banner -- those stand
+    /// between an agent and the person, and this is the person. Audited all
+    /// the same, under its own name, so the log tells their keys from an
+    /// agent's. Only a terminal that exists: never the "active" one instead.
+    pub fn person_input(&self, session_id: &str, input: &str) -> Result<()> {
+        let engine = self.engine();
+        let pane_id = self.resolve_pane_id(
+            engine.as_ref(),
+            &json!({ "session_id": session_id }),
+            PaneResolutionOptions::REQUIRED_EXISTING,
+        )?;
+        self.audit("session.input.person", Some(&pane_id.to_string()), &input_preview(input));
+        engine.write_input(pane_id, input)?;
+        Ok(())
+    }
+
     /// The hosted session whose host approves this connection's calls --
     /// if its grant is still live right now.
     pub(crate) fn hosted_session() -> Option<String> {
