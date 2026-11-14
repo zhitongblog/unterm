@@ -388,6 +388,78 @@ pub fn terminal_screen(handler: &McpHandler, session: &str, from_line: Option<i6
     if !used_by_an_agent("terminals", session)? {
         bail!("{session} is not a terminal an agent used");
     }
+    read_terminal(handler, session, from_line).or_else(|live| {
+        // Closed when its run ended: what it showed last, kept then -- read
+        // from `from_line` on like a live one, so a viewer that already has
+        // the start keeps it.
+        let kept = read_kept("terminal", session).ok_or(live)?;
+        Ok(kept_from(kept, from_line))
+    })
+}
+
+/// A kept terminal view from `from_line` on (all of it without one).
+fn kept_from(mut kept: Value, from_line: Option<i64>) -> Value {
+    let Some(from) = from_line else { return kept };
+    let first = kept.get("first_row").and_then(Value::as_i64).unwrap_or(0);
+    let text = kept.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+    let lines: Vec<&str> = if text.is_empty() { Vec::new() } else { text.split('\n').collect() };
+    let skip = (from - first).clamp(0, lines.len() as i64) as usize;
+    let rest = &lines[skip..];
+    kept["first_row"] = json!(first + skip as i64);
+    kept["row_count"] = json!(rest.len());
+    kept["text"] = json!(rest.join("\n"));
+    kept
+}
+
+/// Closed with its run (see [`tidy_up`]): the last thing it showed.
+fn kept_path(kind: &str, id: &str) -> Option<std::path::PathBuf> {
+    let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    (!safe.is_empty()).then(|| unterm_protocol::state_path(format!("console_closed/{kind}-{safe}.json"))).flatten()
+}
+
+fn keep(kind: &str, id: &str, mut view: Value) {
+    let Some(path) = kept_path(kind, id) else { return };
+    view["closed"] = json!(true);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, view.to_string());
+}
+
+fn read_kept(kind: &str, id: &str) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(kept_path(kind, id)?).ok()?).ok()
+}
+
+/// Close the terminals and tabs a finished run opened (and the tabs it
+/// used in an agent's own profile), keeping what each showed last. Nothing
+/// of the person's is touched: a terminal or a tab in their profile that the
+/// run only used was there before it and stays.
+fn tidy_up(turns: &[&Turn]) {
+    let handler = McpHandler::new();
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    let mut opened_tabs = Vec::new();
+    let mut used_tabs = Vec::new();
+    for turn in turns {
+        for session in &turn.opened_terminals {
+            if let Ok(view) = read_terminal(&handler, session, None) {
+                keep("terminal", session, view);
+            }
+            let _ = handler.handle(&ctx, "session.destroy", &json!({"session_id": session}));
+        }
+        opened_tabs.extend(turn.opened_tabs.iter().cloned());
+        used_tabs.extend(turn.tabs.iter().cloned());
+    }
+    if opened_tabs.is_empty() && used_tabs.is_empty() {
+        return;
+    }
+    let _ = super::browser::close_tabs(&opened_tabs, &used_tabs, |tab| {
+        if let Ok(view) = super::browser::tab_view(tab) {
+            keep("tab", tab, view);
+        }
+    });
+}
+
+fn read_terminal(handler: &McpHandler, session: &str, from_line: Option<i64>) -> Result<Value> {
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
     // The cursor first: it needs the terminal itself, where reading the
     // history of a closed one falls back to whichever is in front.
@@ -443,7 +515,7 @@ pub fn tab_view(tab: &str) -> Result<Value> {
     if !used_by_an_agent("tabs", tab)? {
         bail!("{tab} is not a tab an agent used");
     }
-    super::browser::tab_view(tab)
+    super::browser::tab_view(tab).or_else(|live| read_kept("tab", tab).ok_or(live))
 }
 
 /// Bring an agent's tab to the front of Unzoo Browser.
@@ -970,6 +1042,9 @@ struct Turn {
     terminals: Vec<String>,
     /// Unzoo Browser tabs it used.
     tabs: Vec<String>,
+    /// The terminals and tabs it opened itself: closed when the run ends.
+    opened_terminals: Vec<String>,
+    opened_tabs: Vec<String>,
     /// What it asked the person to do themselves (sign in, solve a
     /// captcha), and whether they did.
     handovers: Vec<Value>,
@@ -1011,13 +1086,20 @@ impl Turn {
                 // What a terminal or a tab was opened as is only in the
                 // answer: `session.create` and `tab_create` name it there.
                 if let (Some(tool), Some(output)) = (tool, event.get("output").and_then(Value::as_str)) {
+                    let ok = event.get("ok").and_then(Value::as_bool) != Some(false);
                     if tool.starts_with("mcp__unterm__") {
                         if let Some(session) = id_after(output, "session_id") {
                             self.note_terminal(&session);
+                            if ok && tool.ends_with("session_create") && !self.opened_terminals.contains(&session) {
+                                self.opened_terminals.push(session);
+                            }
                         }
                     } else if tool.starts_with("mcp__unzoo__") {
                         if let Some(tab) = id_after(output, "tab_id") {
                             self.note_tab(&tab);
+                            if ok && tool.ends_with("tab_create") && !self.opened_tabs.contains(&tab) {
+                                self.opened_tabs.push(tab);
+                            }
                         }
                     }
                 }
@@ -1414,6 +1496,11 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     // run is over; the conversation is kept by the CLI and continued, when
     // asked, in a new session.
     let _ = agent_session::close(&session);
+    // What it opened goes with it, so terminals and tabs do not pile up run
+    // after run. What they showed last is kept for the console first.
+    let mut turns: Vec<&Turn> = vec![&turn];
+    turns.extend(helpers.iter().map(|h| &h.turn));
+    tidy_up(&turns);
 
     let ended = turn.ended.clone().unwrap_or_else(|| "failed".into());
     let asked_to_stop = stopping().lock().unwrap().remove(run.as_str());
@@ -2096,6 +2183,21 @@ mod tests {
         }
         assert_eq!(turn.terminals, vec!["5".to_string(), "9".to_string()]);
         assert_eq!(turn.tabs, vec!["77".to_string()]);
+        // Only what it opened itself is closed when the run ends: terminal 9
+        // was there before (the person's, perhaps).
+        assert_eq!(turn.opened_terminals, vec!["5".to_string()]);
+        assert_eq!(turn.opened_tabs, vec!["77".to_string()]);
+    }
+
+    #[test]
+    fn a_closed_terminal_is_read_from_where_the_viewer_is() {
+        let kept = json!({"session_id": "5", "text": "a\nb\nc", "first_row": 10, "row_count": 3, "closed": true});
+        assert_eq!(kept_from(kept.clone(), None), kept);
+        let rest = kept_from(kept.clone(), Some(11));
+        assert_eq!((rest["first_row"].as_i64(), rest["text"].as_str(), rest["row_count"].as_u64()), (Some(11), Some("b\nc"), Some(2)));
+        // Before the start: all of it; past the end: nothing more.
+        assert_eq!(kept_from(kept.clone(), Some(0))["text"], "a\nb\nc");
+        assert_eq!(kept_from(kept, Some(40))["row_count"], 0);
     }
 
     #[test]
