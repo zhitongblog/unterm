@@ -189,7 +189,7 @@ pub(crate) struct Response {
     pub(crate) status: u16,
     reason: &'static str,
     content_type: &'static str,
-    body: Vec<u8>,
+    pub(crate) body: Vec<u8>,
     extra_headers: Vec<(&'static str, String)>,
 }
 
@@ -304,7 +304,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request> {
     })
 }
 
-fn write_response(stream: &mut TcpStream, resp: &Response) -> Result<()> {
+pub(crate) fn write_response(stream: &mut TcpStream, resp: &Response) -> Result<()> {
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n",
         resp.status,

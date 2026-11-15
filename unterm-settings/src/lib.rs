@@ -13,6 +13,7 @@ mod console_tasks;
 pub use console_tasks::{run_settings, set_run_settings, RunSettings};
 pub mod helpers;
 mod local_agents;
+mod mobile_one;
 mod skills;
 
 /// Whether the console has work that needs this process to stay: a task run

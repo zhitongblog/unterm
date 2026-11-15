@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>Phone</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --text: #16191d; --muted: #646b75; --line: #e3e6ea;
+  --accent: #2557d6; --accent-text: #ffffff; --warn: #b4540a; --warn-bg: #fff4e6;
+  --ok: #1d7a46; --bad: #b42318; --bubble: #e9eefb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --card: #1a1e24; --text: #e8eaed; --muted: #9aa1ab; --line: #2a3038;
+    --accent: #6d95ff; --accent-text: #0b0d10; --warn: #f0a24a; --warn-bg: #2b2116;
+    --ok: #5cc78a; --bad: #ff8a80; --bubble: #212a3b;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }
+body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+header h1 { flex: 1; margin: 0; font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.dot.off { background: var(--bad); }
+main { padding: 12px 16px 120px; max-width: 720px; margin: 0 auto; }
+h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 20px 0 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.card.need { border-color: var(--warn); background: var(--warn-bg); }
+.card .who { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.card .what { font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
+.card pre { margin: 6px 0 0; padding: 8px; border-radius: 8px; background: var(--bg); font: 13px/1.4 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; }
+.row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 10px;
+  padding: 9px 14px; min-height: 42px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; }
+button.link { border: 0; background: none; color: var(--accent); padding: 6px 4px; min-height: 0; }
+.conv { display: block; width: 100%; text-align: left; }
+.conv .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv .meta { font-size: 13px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.state-running { color: var(--accent); } .state-waiting { color: var(--warn); } .state-failed { color: var(--bad); }
+textarea, input { width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px; }
+textarea { min-height: 44px; max-height: 40vh; resize: vertical; }
+.composer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; background: var(--bg); border-top: 1px solid var(--line);
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+.composer .inner { display: flex; gap: 8px; align-items: flex-end; max-width: 720px; margin: 0 auto; }
+.composer textarea { flex: 1; }
+.turn { margin-bottom: 18px; }
+.turn .ask { margin-left: 15%; background: var(--bubble); border-radius: 12px 12px 4px 12px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn .reply { margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn .status { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.empty { color: var(--muted); padding: 8px 0; }
+.toast { position: fixed; left: 16px; right: 16px; bottom: 90px; z-index: 3; background: var(--text); color: var(--bg);
+  border-radius: 10px; padding: 10px 14px; text-align: center; display: none; }
+.pair { max-width: 380px; margin: 12vh auto 0; text-align: center; }
+.pair input { text-align: center; font-size: 24px; letter-spacing: .3em; margin: 16px 0; }
+.pair p { color: var(--muted); }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <button class="link hidden" id="back" aria-label="Back">‹</button>
+  <h1 id="heading">…</h1>
+  <span class="dot" id="dot"></span>
+</header>
+
+<section class="pair hidden" id="pair">
+  <h1 data-t="Pair this phone">Pair this phone</h1>
+  <p data-t="pairHelp">On the computer, open Settings › Phone and scan the code, or type the 6 digits shown there.</p>
+  <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
+  <button class="primary" id="pairBtn" data-t="Pair">Pair</button>
+  <p id="pairError" class="state-failed"></p>
+</section>
+
+<main id="home" class="hidden">
+  <div id="needs"></div>
+  <h2 data-t="Conversations">Conversations</h2>
+  <div id="list"></div>
+</main>
+
+<main id="thread" class="hidden">
+  <div id="turns"></div>
+</main>
+
+<div class="composer hidden" id="composer">
+  <div class="inner">
+    <textarea id="text" rows="1"></textarea>
+    <button class="danger hidden" id="stop" data-t="Stop">Stop</button>
+    <button class="primary" id="send" data-t="Send">Send</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const zh = /^zh/i.test(navigator.language || "");
+const ZH = {
+  "Pair this phone": "配对这台手机",
+  pairHelp: "在电脑上打开 设置 › 手机，用手机扫码，或输入那里显示的 6 位数字。",
+  "Pair": "配对",
+  "Conversations": "对话",
+  "Send": "发送",
+  "Stop": "停止",
+  "Needs you": "等你处理",
+  "Allow": "允许",
+  "Refuse": "拒绝",
+  "Done, continue": "好了，继续",
+  "Can't do it": "做不了",
+  "wants to": "想要",
+  "asks you to do this by hand": "请你亲手做这件事",
+  "on the computer": "在电脑上",
+  "Ask for something…": "说一件要做的事…",
+  "Say more…": "接着说…",
+  "No conversations yet.": "还没有对话。",
+  "Running": "进行中",
+  "Waiting for you": "等你确认",
+  "Done": "完成",
+  "Failed": "出错了",
+  "Stopped": "已停下",
+  "Scheduled": "定时",
+  "Working…": "正在做…",
+  "Sent": "已发送",
+  "Answered": "已回答",
+  "Can't reach the computer": "连不上电脑",
+  "This phone was unpaired. Pair it again.": "这台手机的配对已失效，请重新配对。",
+  "That code didn't work. Make a new one on the computer.": "这个配对码不对或已过期，请在电脑上重新生成。",
+  "Watch only: this phone can't answer or send.": "只读：这台手机不能回答，也不能发送。",
+  "An outside app": "外部应用",
+  "risk": "风险",
+};
+const t = (s) => (zh && ZH[s]) || s;
+document.documentElement.lang = zh ? "zh-CN" : "en";
+document.querySelectorAll("[data-t]").forEach((el) => { el.textContent = t(el.dataset.t); });
+
+const $ = (id) => document.getElementById(id);
+const TOKEN_KEY = "unzoo-one-phone-token";
+let token = null;
+try { token = localStorage.getItem(TOKEN_KEY); } catch (_) {}
+let view = { name: "home", task: null };
+let overview = null;
+let lastNeeds = 0;
+let timer = null;
+let canAct = true;
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+function toast(msg) {
+  const box = $("toast");
+  box.textContent = msg;
+  box.style.display = "block";
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { box.style.display = "none"; }, 2600);
+}
+function when(iso) {
+  const at = Date.parse(iso || "");
+  if (Number.isNaN(at)) return "";
+  return new Date(at).toLocaleString(zh ? "zh-CN" : undefined, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function stateLabel(state, waiting) {
+  if (waiting) return [t("Waiting for you"), "state-waiting"];
+  switch (state) {
+    case "pending": case "running": return [t("Running"), "state-running"];
+    case "succeeded": return [t("Done"), ""];
+    case "failed": case "interrupted": return [t("Failed"), "state-failed"];
+    case "cancelled": return [t("Stopped"), ""];
+    default: return ["", ""];
+  }
+}
+function agentName(raw) {
+  const names = { "claude-code": "Claude Code", claude: "Claude Code", codex: "Codex", opencode: "OpenCode", agy: "Antigravity",
+    "claude-ai": "Claude Desktop", "claude-desktop": "Claude Desktop", cursor: "Cursor", "cursor-vscode": "Cursor", windsurf: "Windsurf" };
+  const key = String(raw || "").toLowerCase();
+  return names[key] || raw || t("An outside app");
+}
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: Object.assign({ "content-type": "application/json" }, token ? { authorization: "Bearer " + token } : {}),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (res.status === 401) {
+    forget();
+    throw new Error(t("This phone was unpaired. Pair it again."));
+  }
+  if (!res.ok || data.ok === false) throw new Error(data.error || String(res.status));
+  return data;
+}
+function forget() {
+  token = null;
+  try { localStorage.removeItem(TOKEN_KEY); } catch (_) {}
+  show("pair");
+}
+
+function show(name) {
+  view.name = name;
+  $("pair").classList.toggle("hidden", name !== "pair");
+  $("home").classList.toggle("hidden", name !== "home");
+  $("thread").classList.toggle("hidden", name !== "thread");
+  $("composer").classList.toggle("hidden", name === "pair" || !canAct);
+  $("back").classList.toggle("hidden", name !== "thread");
+  $("stop").classList.add("hidden");
+  $("text").placeholder = name === "thread" ? t("Say more…") : t("Ask for something…");
+  if (name === "home") $("heading").textContent = (overview && overview.product) || "Unzoo One";
+  if (name === "pair") $("heading").textContent = t("Pair this phone");
+}
+
+// ---- pairing ---------------------------------------------------------------
+async function pair(code) {
+  $("pairError").textContent = "";
+  try {
+    const res = await fetch("/api/remote/pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code, device_name: deviceName(), platform: "web" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.device_token) throw new Error();
+    token = data.device_token;
+    try { localStorage.setItem(TOKEN_KEY, token); } catch (_) {}
+    history.replaceState(null, "", location.pathname);
+    start();
+  } catch (_) {
+    $("pairError").textContent = t("That code didn't work. Make a new one on the computer.");
+    show("pair");
+  }
+}
+function deviceName() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return "Android";
+  return "Phone";
+}
+$("pairBtn").onclick = () => {
+  const code = $("code").value.replace(/\D/g, "");
+  if (code.length === 6) pair(code);
+};
+
+// ---- home ------------------------------------------------------------------
+async function refreshHome() {
+  overview = await api("GET", "/api/one/overview");
+  canAct = overview.can_act !== false;
+  $("dot").classList.remove("off");
+  if (view.name === "home") {
+    $("heading").textContent = overview.product || "Unzoo One";
+    $("composer").classList.toggle("hidden", !canAct);
+    renderNeeds();
+    renderList();
+  }
+  const needs = (overview.approvals || []).length + (overview.confirmations || []).length + (overview.handovers || []).length;
+  if (needs > lastNeeds && navigator.vibrate) navigator.vibrate([120, 60, 120]);
+  lastNeeds = needs;
+  document.title = (needs ? "(" + needs + ") " : "") + (overview.product || "Unzoo One");
+}
+
+function renderNeeds() {
+  const box = $("needs");
+  box.replaceChildren();
+  const items = [
+    ...(overview.handovers || []).map((h) => ({ type: "handover", h })),
+    ...(overview.approvals || []).map((a) => ({ type: "agent", a })),
+    ...(overview.confirmations || []).map((c) => ({ type: "input", c })),
+  ];
+  if (!items.length) return;
+  box.append(el("h2", "", t("Needs you")));
+  if (!canAct) box.append(el("p", "empty", t("Watch only: this phone can't answer or send.")));
+  for (const item of items) {
+    const card = el("div", "card need");
+    if (item.type === "handover") {
+      const h = item.h;
+      card.append(el("div", "who", (h.title || "") + " · " + t("asks you to do this by hand")));
+      card.append(el("div", "what", h.what || ""));
+      card.append(el("div", "who", t("on the computer")));
+      if (canAct) card.append(buttons([
+        [t("Done, continue"), "primary", () => answerHandover(h, true)],
+        [t("Can't do it"), "", () => answerHandover(h, false)],
+      ]));
+    } else if (item.type === "agent") {
+      const a = item.a;
+      card.append(el("div", "who", agentName(a.agent) + (a.title ? " · " + a.title : "")));
+      card.append(el("div", "what", a.description || (t("wants to") + " " + (a.tool || ""))));
+      if (a.detail) card.append(el("pre", "", a.detail));
+      if (canAct) card.append(buttons([
+        [t("Allow"), "primary", () => decide({ kind: "agent", session_id: a.session_id, request_id: a.request_id, allow: true })],
+        [t("Refuse"), "danger", () => decide({ kind: "agent", session_id: a.session_id, request_id: a.request_id, allow: false })],
+      ]));
+    } else {
+      const c = item.c;
+      card.append(el("div", "who", agentName(c.agent) + (c.risk ? " · " + t("risk") + ": " + c.risk : "")));
+      card.append(el("div", "what", c.method || ""));
+      if (c.detail) card.append(el("pre", "", c.detail));
+      if (canAct) card.append(buttons([
+        [t("Allow"), "primary", () => decide({ kind: "input", id: c.id, allow: true })],
+        [t("Refuse"), "danger", () => decide({ kind: "input", id: c.id, allow: false })],
+      ]));
+    }
+    box.append(card);
+  }
+}
+function buttons(specs) {
+  const row = el("div", "row");
+  for (const [label, cls, fn] of specs) {
+    const b = el("button", cls, label);
+    b.onclick = async () => {
+      row.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+      try { await fn(); } catch (e) { toast(e.message); row.querySelectorAll("button").forEach((x) => { x.disabled = false; }); }
+    };
+    row.append(b);
+  }
+  return row;
+}
+async function decide(answer) {
+  await api("POST", "/api/one/decide", answer);
+  toast(t("Answered"));
+  await refreshHome();
+}
+async function answerHandover(h, done) {
+  await api("POST", "/api/one/handover", { session_id: h.session_id, handover_id: h.id, done });
+  toast(t("Answered"));
+  await refreshHome();
+}
+
+function renderList() {
+  const box = $("list");
+  box.replaceChildren();
+  const list = overview.conversations || [];
+  if (!list.length) { box.append(el("p", "empty", t("No conversations yet."))); return; }
+  for (const c of list) {
+    const b = el("button", "card conv");
+    b.append(el("div", "title", c.title || c.id));
+    const [label, cls] = stateLabel(c.state, c.waiting);
+    const meta = el("div", "meta");
+    if (label) meta.append(el("span", cls, label), document.createTextNode(" · "));
+    meta.append(document.createTextNode((c.scheduled ? t("Scheduled") + " · " : "") + when(c.at)));
+    b.append(meta);
+    b.onclick = () => openThread(c.id, c.title);
+    box.append(b);
+  }
+}
+
+// ---- one conversation -------------------------------------------------------
+async function openThread(id, title) {
+  view.task = id;
+  $("heading").textContent = title || "";
+  $("turns").replaceChildren();
+  show("thread");
+  await refreshThread();
+  window.scrollTo(0, document.body.scrollHeight);
+}
+async function refreshThread() {
+  const data = await api("POST", "/api/one/thread", { task_id: view.task });
+  const thread = data.thread || {};
+  if (view.name !== "thread") return;
+  $("heading").textContent = thread.title || "";
+  const box = $("turns");
+  const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+  box.replaceChildren();
+  let running = false;
+  for (const turn of thread.turns || []) {
+    const node = el("div", "turn");
+    const ask = turn.prompt || (turn === thread.turns[0] ? thread.prompt : "");
+    if (ask) node.append(el("div", "ask", ask));
+    const isRunning = turn.state === "running" || turn.state === "pending";
+    running = running || isRunning;
+    const reply = turn.reply || turn.summary || turn.error || (isRunning ? t("Working…") : "");
+    if (reply) node.append(el("div", "reply", reply));
+    const [label, cls] = stateLabel(turn.state, turn.waiting);
+    if (label) node.append(el("div", "status " + cls, label + " · " + when(turn.ended_at || turn.started_at)));
+    box.append(node);
+  }
+  $("stop").classList.toggle("hidden", !running || !canAct);
+  if (nearBottom) window.scrollTo(0, document.body.scrollHeight);
+}
+$("back").onclick = () => { view.task = null; show("home"); renderNeeds(); renderList(); };
+$("stop").onclick = async () => {
+  try { await api("POST", "/api/one/stop", { task_id: view.task }); await refreshThread(); } catch (e) { toast(e.message); }
+};
+
+// ---- sending -----------------------------------------------------------------
+$("send").onclick = async () => {
+  const text = $("text").value.trim();
+  if (!text) return;
+  $("send").disabled = true;
+  try {
+    const body = view.name === "thread" ? { text, task_id: view.task } : { text };
+    const data = await api("POST", "/api/one/send", body);
+    $("text").value = "";
+    toast(t("Sent"));
+    if (view.name === "thread") await refreshThread();
+    else if (data.task_id) await openThread(data.task_id, "");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    $("send").disabled = false;
+  }
+};
+
+// ---- polling -------------------------------------------------------------------
+async function tick() {
+  try {
+    await refreshHome();
+    if (view.name === "thread" && view.task) await refreshThread();
+  } catch (e) {
+    if (token) { $("dot").classList.add("off"); }
+    if (view.name !== "pair" && token) toast(e.message && e.message !== "Failed to fetch" ? e.message : t("Can't reach the computer"));
+  }
+}
+function start() {
+  show("home");
+  tick();
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden && token) tick(); }, 4000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && token) tick(); });
+
+const code = new URLSearchParams(location.search).get("pair");
+if (code && /^\d{6}$/.test(code)) {
+  if (token) { history.replaceState(null, "", location.pathname); start(); }
+  else pair(code);
+} else if (token) {
+  start();
+} else {
+  show("pair");
+}
+</script>
+</body>
+</html>

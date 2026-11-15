@@ -766,6 +766,37 @@ fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
     }))
 }
 
+/// What agents are waiting on a person to do by hand -- sign in, pass a
+/// check -- across every conversation that is still running, newest last.
+/// The phone lists these with the questions.
+pub fn waiting_handovers() -> Result<Vec<Value>> {
+    let store = store()?;
+    let mut out = Vec::new();
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        for run in store.runs(&task.id)?.iter().filter(|r| r.state == State::Running) {
+            let steps = store.steps(&run.id)?;
+            let Some(step) = steps.iter().find(|s| s.kind == STEP_KIND) else {
+                continue;
+            };
+            let Some(handovers) = step.detail.get("handovers").and_then(Value::as_array) else {
+                continue;
+            };
+            for handover in handovers.iter().filter(|h| h["state"] == "waiting") {
+                out.push(json!({
+                    "task_id": console_id_of(&task),
+                    "title": task.title,
+                    "session_id": step.detail.get("session_id").cloned().unwrap_or(Value::Null),
+                    "id": handover["id"],
+                    "what": handover["what"],
+                    "tab_id": handover["tab_id"],
+                    "at": handover["at"],
+                }));
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn list() -> Result<Vec<Value>> {
     let store = store()?;
     let mut tasks: Vec<Task> = store.tasks()?.into_iter().filter(|t| t.kind == KIND).collect();
