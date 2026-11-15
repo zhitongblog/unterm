@@ -444,10 +444,10 @@ fn kept_from(mut kept: Value, from_line: Option<i64>) -> Value {
 }
 
 /// Whether a tool is one of an MCP server's, however the agent names it:
-/// Claude Code says `mcp__unzoo__tab_create`, Codex `unzoo.tab_create`.
+/// Claude Code says `mcp__unzoo__tab_create`, Codex `unzoo.tab_create`,
+/// OpenCode `unzoo_tab_create`.
 fn from_server(tool: &str, server: &str) -> bool {
-    tool.strip_prefix("mcp__").and_then(|rest| rest.strip_prefix(server)).is_some_and(|rest| rest.starts_with("__"))
-        || tool.strip_prefix(server).is_some_and(|rest| rest.starts_with('.'))
+    tool_risk::mcp_parts(tool).is_some_and(|(of, _)| of == server)
 }
 
 /// Closed with its run (see [`tidy_up`]): the last thing it showed.
@@ -960,7 +960,9 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
             // The environment is not kept from the earlier session; the
             // skills it was handed are handed again.
             let record = agent_session::resume_record(session).ok().flatten();
-            let skills = record.as_ref().and_then(|record| super::agent_run::skill_env(&record.adapter));
+            let skills = record.as_ref().and_then(|record| {
+                super::agent_run::session_env(&record.adapter, record.governed, Some(settings.browser_profile.as_str()).filter(|p| !p.is_empty()), false)
+            });
             // Today's command line for the same agent: the conversation is
             // continued, the instructions (its own browser profile, handing
             // over, what is asked) are the ones a new conversation gets.
@@ -1133,14 +1135,14 @@ impl Turn {
                     if from_server(&tool, "unterm") {
                         if let Some(session) = id_after(output, "session_id") {
                             self.note_terminal(&session);
-                            if ok && tool.ends_with("session_create") && !self.opened_terminals.contains(&session) {
+                            if ok && tool.replace('.', "_").ends_with("session_create") && !self.opened_terminals.contains(&session) {
                                 self.opened_terminals.push(session);
                             }
                         }
                     } else if from_server(&tool, "unzoo") {
                         if let Some(tab) = id_after(output, "tab_id") {
                             self.note_tab(&tab);
-                            if ok && tool.ends_with("tab_create") && !self.opened_tabs.contains(&tab) {
+                            if ok && tool.replace('.', "_").ends_with("tab_create") && !self.opened_tabs.contains(&tab) {
                                 self.opened_tabs.push(tab);
                             }
                         }
@@ -2272,6 +2274,7 @@ mod tests {
         assert!(from_server("mcp__unzoo__tab_create", "unzoo"));
         assert!(from_server("unzoo.tab_create", "unzoo"));
         assert!(!from_server("mcp__unzoo_x__tab_create", "unzoo"));
+        assert!(from_server("unterm_exec_run_wait", "unterm"));
         assert!(!from_server("unzooish.tab_create", "unzoo"));
         assert!(!from_server("shell", "unterm"));
     }

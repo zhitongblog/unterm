@@ -81,10 +81,28 @@ pub fn asks_the_person(tool: &str) -> bool {
     matches!(tool, "AskUserQuestion")
 }
 
+/// The servers whose tools are read here by name.
+const KNOWN_SERVERS: &[&str] = &["unterm", "unzoo"];
+
+/// An MCP tool's server and name, however the CLI spells it: Claude Code
+/// `mcp__unzoo__tab_create`, Codex `unzoo.tab_create`, OpenCode
+/// `unzoo_tab_create`. The last two are read only for the servers known
+/// here, since a dot or an underscore is also just part of a tool's name.
+pub fn mcp_parts(tool: &str) -> Option<(&str, &str)> {
+    if let Some(rest) = tool.strip_prefix("mcp__") {
+        return rest.split_once("__");
+    }
+    KNOWN_SERVERS.iter().find_map(|server| {
+        let rest = tool.strip_prefix(server)?;
+        let name = rest.strip_prefix('.').or_else(|| rest.strip_prefix('_'))?;
+        (!name.is_empty()).then_some((*server, name))
+    })
+}
+
 /// The risk of one tool call, or `None` for a tool this does not know.
 pub fn classify(tool: &str, input: &Value, cwd: Option<&str>) -> Option<Risk> {
-    if let Some(rest) = tool.strip_prefix("mcp__") {
-        let (server, name) = rest.split_once("__")?;
+    if tool.starts_with("mcp__") || mcp_parts(tool).is_some() {
+        let (server, name) = mcp_parts(tool)?;
         return match server {
             "unterm" => unterm_method_risk(name, input),
             "unzoo" => unzoo_risk(name),
@@ -137,7 +155,8 @@ pub fn command_of(input: &Value) -> Option<String> {
 /// ACP agents' `path`/`TargetFile`, Codex's patch entries.
 fn edited_paths(input: &Value) -> Vec<String> {
     fn take(value: &Value, out: &mut Vec<String>) {
-        for key in ["file_path", "notebook_path", "path", "TargetFile", "target_file", "destination"] {
+        // `filepath`: OpenCode's write and edit.
+        for key in ["file_path", "filepath", "notebook_path", "path", "TargetFile", "target_file", "destination"] {
             if let Some(path) = value.get(key).and_then(Value::as_str) {
                 out.push(path.to_string());
             }
@@ -426,8 +445,7 @@ fn relative_to(text: &str, cwd: &str) -> String {
 
 fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
     let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k).and_then(Value::as_str)).unwrap_or_default().to_string();
-    if let Some(rest) = tool.strip_prefix("mcp__") {
-        let (server, name) = rest.split_once("__").unwrap_or(("", rest));
+    if let Some((server, name)) = mcp_parts(tool).or_else(|| tool.strip_prefix("mcp__").map(|rest| ("", rest))) {
         let pretty = name.replace('_', " ");
         if server == "unterm" {
             if name.replace('.', "_") == "agent_session_delegate" {
@@ -607,6 +625,18 @@ mod tests {
         assert_eq!(risk("mcp__unterm__session_destroy", json!({})), Some(Risk::Destructive));
         assert_eq!(risk("mcp__unterm__no_such_thing", json!({})), None);
         assert_eq!(risk("mcp__elsewhere__anything", json!({})), None);
+    }
+
+    #[test]
+    fn every_cli_spelling_of_an_mcp_tool_is_the_same_tool() {
+        for tool in ["mcp__unzoo__browser_a11y_snapshot", "unzoo.browser_a11y_snapshot", "unzoo_browser_a11y_snapshot"] {
+            assert_eq!(risk(tool, json!({})), Some(Risk::Read), "{tool}");
+        }
+        assert_eq!(risk("unterm.exec_run_wait", json!({"command": "rm -rf /"})), Some(Risk::Destructive));
+        assert_eq!(describe("unzoo.tab_create", &json!({"url": "https://example.com"})).0, Verb::Open);
+        assert_eq!(mcp_parts("unzoo."), None);
+        assert_eq!(mcp_parts("unzooish.x"), None);
+        assert_eq!(mcp_parts("shell"), None);
     }
 
     #[test]
