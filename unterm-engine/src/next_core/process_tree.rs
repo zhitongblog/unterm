@@ -89,10 +89,36 @@ pub(super) fn snapshot(
     let Some(pid) = root_pid else {
         return Some(fallback(None, fallback_process));
     };
-    let Some(root) = LocalProcessInfo::with_root_pid(pid) else {
+    let Some(probed) = snapshot_cached(pid) else {
         return Some(fallback(Some(pid), fallback_process));
     };
-    Some(snapshot_from_root(&root))
+    Some(probed)
+}
+
+fn snapshot_cached(pid: u32) -> Option<ProcessTreeSnapshot> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    static CACHE: OnceLock<Mutex<HashMap<u32, (Instant, Option<ProcessTreeSnapshot>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let now = Instant::now();
+    if let Ok(guard) = cache.lock() {
+        if let Some((at, value)) = guard.get(&pid) {
+            if now.duration_since(*at) < Duration::from_millis(500) {
+                return value.clone();
+            }
+        }
+    }
+    let probed = LocalProcessInfo::with_root_pid(pid).map(|root| snapshot_from_root(&root));
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() > 256 {
+            guard.retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(30));
+        }
+        guard.insert(pid, (now, probed.clone()));
+    }
+    probed
 }
 
 fn fallback(root_pid: Option<u32>, fallback_process: &str) -> ProcessTreeSnapshot {

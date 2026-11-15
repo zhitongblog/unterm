@@ -205,6 +205,57 @@
               </div>
             </div>
           </div>
+
+          <!-- Saved Session & Layout Snapshot card in General -->
+          <div class="mt-6 rounded-lg border border-notion-border bg-notion-surface p-5">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="text-base font-semibold">会话持久化与工作区布局快照（Session Auto-Restore）</h3>
+                  <span class="rounded-full border border-notion-teal/40 bg-notion-teal/10 px-2 py-0.5 text-[11px] text-notion-teal">
+                    自动保存标签页 · 分屏布局 · 屏幕摘要
+                  </span>
+                </div>
+                <p class="mt-1 text-xs text-notion-muted">
+                  Unterm 会在后台持续连接 <code class="font-mono">unterm-core</code> 实现热重连；即使系统冷重启，也会自动恢复所有标签页标题、分屏方向、工作目录与屏幕尾部上下文。
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded border border-notion-borderStrong px-2.5 py-1 text-xs hover:bg-notion-sunken"
+                @click="loadLastSession()"
+              >刷新快照</button>
+            </div>
+
+            <div class="mt-4" x-show="(lastSession.tabs && lastSession.tabs.length > 0) || (lastSession.cwds && lastSession.cwds.length > 0)">
+              <div class="grid gap-2.5 sm:grid-cols-2">
+                <template x-for="(tab, idx) in (lastSession.tabs && lastSession.tabs.length ? lastSession.tabs : (lastSession.cwds || []).map(c => ({ title: null, panes: [{ cwd: c, split_axis: null }] })))" :key="idx">
+                  <div class="flex items-center justify-between gap-3 rounded-md border border-notion-border bg-notion-bg px-3.5 py-2.5">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="rounded bg-notion-sunken px-1.5 py-0.5 font-mono text-[10px] text-notion-muted" x-text="'#' + (idx + 1)"></span>
+                        <span class="truncate text-xs font-semibold text-notion-ink" x-text="tab.title || ((tab.panes && tab.panes[0] && tab.panes[0].cwd) ? tab.panes[0].cwd.split('/').pop() : 'Shell')"></span>
+                        <span x-show="idx === (lastSession.active_tab || 0)" class="rounded-full bg-notion-teal/15 px-1.5 py-0.2 text-[10px] text-notion-teal">当前焦点</span>
+                        <span x-show="tab.panes && tab.panes.length > 1" class="rounded bg-notion-sunken px-1.5 py-0.5 text-[10px] text-notion-faint" x-text="tab.panes.length + ' 窗格分屏'"></span>
+                      </div>
+                      <div class="mt-0.5 truncate font-mono text-[11px] text-notion-faint" x-text="(tab.panes && tab.panes[0] && tab.panes[0].cwd) || '~'"></div>
+                    </div>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded border border-notion-borderStrong px-2 py-1 text-[11px] text-notion-ink hover:bg-notion-sunken"
+                      @click="openSessionTab((tab.panes && tab.panes[0] && tab.panes[0].cwd) || '')"
+                    >在新标签打开</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div
+              x-show="(!lastSession.tabs || lastSession.tabs.length === 0) && (!lastSession.cwds || lastSession.cwds.length === 0)"
+              class="mt-3 rounded border border-dashed border-notion-border p-3 text-xs text-notion-faint"
+            >
+              暂无已保存的会话快照（在终端中切换目录或新建分屏后将自动记录）。
+            </div>
+          </div>
         </div>
 
         <!-- Mobile Remote (Pocket) Dedicated Tab -->
@@ -1178,6 +1229,188 @@
               @click="loadMcp()"
               x-text="t('web.mcp.refresh')"
             ></button>
+          </div>
+
+          <!-- 1-Click External AI Clients MCP Integration Card -->
+          <div class="mt-6 rounded-lg border border-notion-border bg-notion-surface p-5">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="text-sm font-semibold">本机 AI 客户端 MCP 一键接入（External AI Clients）</h3>
+                  <span class="rounded-full border border-notion-teal/40 bg-notion-teal/10 px-2 py-0.5 text-[10px] text-notion-teal">
+                    Claude · Codex · Gemini · Cursor · Windsurf · Antigravity
+                  </span>
+                </div>
+                <p class="mt-1 text-xs text-notion-faint">
+                  将 Unterm MCP 服务器一键写入本机 AI 客户端配置文件，让外部 Agent 直接操作终端窗格、读取报错与协同排障。
+                </p>
+              </div>
+              <button
+                type="button"
+                class="rounded-md bg-notion-green px-3 py-1.5 text-xs font-medium text-black transition hover:opacity-90 disabled:opacity-50"
+                :disabled="mcp.clientsBusy === '__all__'"
+                @click="connectAllMcpClients()"
+              >
+                <span x-show="mcp.clientsBusy !== '__all__'">一键全部接入已安装客户端</span>
+                <span x-show="mcp.clientsBusy === '__all__'">正在接入…</span>
+              </button>
+            </div>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <template x-for="client in mcp.clients" :key="client.slug">
+                <div class="flex items-center justify-between gap-3 rounded-md border border-notion-border bg-notion-bg p-3.5">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="inline-block h-2 w-2 rounded-full"
+                        :class="client.terminal ? 'bg-notion-teal' : (client.installed ? 'bg-amber-400' : 'bg-notion-faint/40')"
+                      ></span>
+                      <span class="truncate text-sm font-semibold text-notion-ink" x-text="client.name"></span>
+                    </div>
+                    <div class="mt-1 flex items-center gap-1.5 text-[11px]">
+                      <span
+                        x-show="client.terminal"
+                        class="rounded bg-notion-teal/15 px-1.5 py-0.5 text-notion-teal"
+                      >已接入 MCP</span>
+                      <span
+                        x-show="!client.terminal && client.installed"
+                        class="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300"
+                      >已安装 · 未接入</span>
+                      <span
+                        x-show="!client.terminal && !client.installed"
+                        class="rounded bg-notion-sunken px-1.5 py-0.5 text-notion-faint"
+                      >未检测到客户端</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded px-2.5 py-1 text-xs font-medium transition disabled:opacity-50"
+                    :class="client.terminal
+                      ? 'border border-notion-borderStrong text-notion-muted hover:border-notion-red hover:text-notion-red'
+                      : 'bg-notion-teal/20 border border-notion-teal/50 text-notion-teal hover:bg-notion-teal/30'"
+                    :disabled="mcp.clientsBusy === client.slug"
+                    @click="toggleMcpClient(client)"
+                    x-text="mcp.clientsBusy === client.slug ? '处理中…' : (client.terminal ? '断开' : '一键接入')"
+                  ></button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Risk-Tiered Autonomy Level Card -->
+          <div class="mt-6 rounded-lg border border-notion-border bg-notion-surface p-5">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <h3 class="text-sm font-semibold">AI 风险分级自治与安全护栏（Risk-Tiered Autonomy）</h3>
+                <p class="mt-1 text-xs text-notion-faint">
+                  控制外部或内置 AI Agent 执行命令时的审批粒度。破坏性指令（如 <code class="font-mono">rm -rf</code>、<code class="font-mono">git push --force</code>、<code class="font-mono">DROP TABLE</code>）在任何模式下都会被强制拦截确认。
+                </p>
+              </div>
+              <span class="rounded border border-notion-border px-2 py-0.5 font-mono text-[11px] text-notion-teal" x-text="'当前: ' + mcp.autonomy"></span>
+            </div>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-3">
+              <button
+                type="button"
+                class="flex flex-col items-start rounded-md border p-3.5 text-left transition"
+                :class="mcp.autonomy === 'cautious'
+                  ? 'border-notion-teal bg-notion-teal/10'
+                  : 'border-notion-border bg-notion-bg hover:bg-notion-sunken'"
+                @click="setAutonomy('cautious')"
+              >
+                <div class="flex w-full items-center justify-between">
+                  <span class="text-sm font-semibold text-notion-ink">谨慎模式 (Cautious)</span>
+                  <span x-show="mcp.autonomy === 'cautious'" class="text-xs font-semibold text-notion-teal">● 已启用</span>
+                </div>
+                <p class="mt-1.5 text-xs text-notion-muted">
+                  仅自动放行纯只读查询命令（如 <code class="font-mono">ls</code>、<code class="font-mono">git status</code>、<code class="font-mono">rg</code>），任何修改或构建操作均需人工确认。
+                </p>
+              </button>
+
+              <button
+                type="button"
+                class="flex flex-col items-start rounded-md border p-3.5 text-left transition"
+                :class="mcp.autonomy === 'balanced'
+                  ? 'border-notion-teal bg-notion-teal/10'
+                  : 'border-notion-border bg-notion-bg hover:bg-notion-sunken'"
+                @click="setAutonomy('balanced')"
+              >
+                <div class="flex w-full items-center justify-between">
+                  <span class="text-sm font-semibold text-notion-ink">平衡模式 (Balanced · 推荐)</span>
+                  <span x-show="mcp.autonomy === 'balanced'" class="text-xs font-semibold text-notion-teal">● 已启用</span>
+                </div>
+                <p class="mt-1.5 text-xs text-notion-muted">
+                  自动放行只读命令与工作区内常规开发测试，并在修改前自动打下隐藏 Git 快照以便随时回滚。
+                </p>
+              </button>
+
+              <button
+                type="button"
+                class="flex flex-col items-start rounded-md border p-3.5 text-left transition"
+                :class="mcp.autonomy === 'autonomous'
+                  ? 'border-notion-teal bg-notion-teal/10'
+                  : 'border-notion-border bg-notion-bg hover:bg-notion-sunken'"
+                @click="setAutonomy('autonomous')"
+              >
+                <div class="flex w-full items-center justify-between">
+                  <span class="text-sm font-semibold text-notion-ink">全自治模式 (Autonomous)</span>
+                  <span x-show="mcp.autonomy === 'autonomous'" class="text-xs font-semibold text-notion-teal">● 已启用</span>
+                </div>
+                <p class="mt-1.5 text-xs text-notion-muted">
+                  受信任 Agent 可全速自主执行开发与构建，仅对高危破坏性指令（<code class="font-mono">Destructive</code>）强制弹窗拦截。
+                </p>
+              </button>
+            </div>
+          </div>
+
+          <!-- Multi-Agent Delegated Helpers Monitor Card -->
+          <div class="mt-6 rounded-lg border border-notion-border bg-notion-surface p-5">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="text-sm font-semibold">多 Agent 协同调度监控（Delegated Sub-Agents）</h3>
+                  <span
+                    class="rounded-full px-2 py-0.5 text-[11px]"
+                    :class="mcp.helpers.some(h => h.status === 'running') ? 'bg-notion-teal/15 text-notion-teal border border-notion-teal/40' : 'bg-notion-sunken text-notion-faint'"
+                    x-text="mcp.helpers.filter(h => h.status === 'running').length + ' 个运行中 / 共 ' + mcp.helpers.length + ' 个任务'"
+                  ></span>
+                </div>
+                <p class="mt-1 text-xs text-notion-faint">
+                  展示主 Agent 通过 <code class="font-mono">agent_session.delegate</code> 派发给其它 CLI Agent（如 Claude 委派 Codex / Gemini）的子任务实时状态。
+                </p>
+              </div>
+            </div>
+
+            <div
+              x-show="mcp.helpers.length === 0"
+              class="mt-3 rounded border border-dashed border-notion-border p-3 text-xs text-notion-faint"
+            >
+              当前暂无跨 Agent 协同委派任务。主 Agent 调用 <code class="font-mono">agent_session.delegate</code> 时将在此实时显示。
+            </div>
+
+            <div x-show="mcp.helpers.length > 0" class="mt-3 space-y-2">
+              <template x-for="h in mcp.helpers" :key="h.helper_id">
+                <div class="flex items-center justify-between gap-3 rounded border border-notion-border bg-notion-bg px-3.5 py-2.5 text-xs">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="inline-block h-2 w-2 rounded-full"
+                        :class="h.status === 'running' ? 'bg-notion-teal animate-pulse' : (h.status === 'completed' ? 'bg-emerald-400' : 'bg-rose-400')"
+                      ></span>
+                      <span class="font-semibold text-notion-ink" x-text="h.agent"></span>
+                      <span class="font-mono text-[11px] text-notion-faint" x-text="'#' + h.helper_id + ' (hub: ' + h.hub_id + ')'"></span>
+                      <span
+                        class="rounded px-1.5 py-0.5 text-[10px]"
+                        :class="h.status === 'running' ? 'bg-notion-teal/15 text-notion-teal' : (h.status === 'completed' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300')"
+                        x-text="h.status === 'running' ? '运行中' : (h.status === 'completed' ? '已完成' : '失败')"
+                      ></span>
+                    </div>
+                    <div class="mt-1 truncate text-notion-muted" x-text="h.prompt"></div>
+                  </div>
+                  <div class="shrink-0 font-mono text-[11px] text-notion-faint" x-text="h.elapsed_secs + 's'"></div>
+                </div>
+              </template>
+            </div>
           </div>
 
           <!-- Trust card -->

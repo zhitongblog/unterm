@@ -138,6 +138,12 @@ impl Rules {
             (r"\b\w+://\S+[_/a-zA-Z0-9-]", "$0", 0),
             // An email address becomes a mailto link.
             (r"\b\w+@[\w-]+(\.[\w-]+)+\b", "mailto:$0", 0),
+            // Compiler / stacktrace file location: path/to/file.rs:120[:15]
+            (
+                r"(?:^|[\s(\[>'&quot;])((?:\.{1,2}/|/)?[A-Za-z0-9_./-]+\.(?:rs|py|ts|tsx|js|jsx|go|c|cc|cpp|h|hpp|java|kt|swift|rb|php|sh|toml|yaml|yml|json|md|css|html|vue|svelte|sql|zig|lua):[0-9]+(?::[0-9]+)?)",
+                "unterm-file://$1",
+                1,
+            ),
         ];
         Rules {
             rules: rules
@@ -151,7 +157,14 @@ impl Rules {
     }
 }
 
-const SCHEMES: &[&str] = &["https://", "http://", "file://", "ftp://", "mailto:"];
+const SCHEMES: &[&str] = &[
+    "https://",
+    "http://",
+    "file://",
+    "ftp://",
+    "mailto:",
+    "unterm-file://",
+];
 
 /// Whether a URI's scheme is one the whitelist trusts to reach the desktop.
 fn vetted(uri: &str) -> bool {
@@ -291,11 +304,76 @@ pub fn opens_on_click(ctrl: bool) -> bool {
 /// wrote it -- the rule is the user saying what to open. Everything else, the
 /// OSC 8 kind included, goes through the whitelist in [`open`].
 pub fn open_link(link: &Link) -> std::io::Result<()> {
+    open_link_in_cwd(link, None)
+}
+
+pub fn open_link_in_cwd(link: &Link, cwd: Option<&str>) -> std::io::Result<()> {
+    if let Some(raw_loc) = link.uri.strip_prefix("unterm-file://") {
+        return open_file_location(raw_loc, cwd);
+    }
     if link.user_rule {
         launch(&link.uri)
     } else {
         open(&link.uri)
     }
+}
+
+pub fn parse_file_location(raw: &str) -> (&str, Option<u32>, Option<u32>) {
+    let mut parts = raw.rsplitn(3, ':');
+    let last = parts.next().unwrap_or("");
+    let second = parts.next();
+    let third = parts.next();
+    match (third, second, last.parse::<u32>().ok()) {
+        (Some(path), Some(line_str), Some(col)) if line_str.parse::<u32>().is_ok() => {
+            (path, line_str.parse::<u32>().ok(), Some(col))
+        }
+        (None, Some(path), Some(line)) => (path, Some(line), None),
+        (Some(_prefix), Some(_mid), None) => (raw, None, None),
+        (Some(prefix), Some(mid), Some(line)) => {
+            let path_len = prefix.len() + 1 + mid.len();
+            (&raw[..path_len], Some(line), None)
+        }
+        _ => (raw, None, None),
+    }
+}
+
+pub(crate) fn open_file_location(raw_loc: &str, cwd: Option<&str>) -> std::io::Result<()> {
+    let (raw_path, line, col) = parse_file_location(raw_loc);
+    let resolved = {
+        let candidate = std::path::Path::new(raw_path);
+        if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else if let Some(base) = cwd.filter(|s| !s.trim().is_empty()) {
+            std::path::Path::new(base).join(candidate)
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(candidate)
+        }
+    };
+    let path_str = resolved.to_string_lossy().to_string();
+    let goto_target = match (line, col) {
+        (Some(l), Some(c)) => format!("{path_str}:{l}:{c}"),
+        (Some(l), None) => format!("{path_str}:{l}"),
+        _ => path_str.clone(),
+    };
+
+    for (bin, flag) in [
+        ("agy", Some("--goto")),
+        ("cursor", Some("--goto")),
+        ("code", Some("--goto")),
+        ("zed", None),
+    ] {
+        let mut cmd = std::process::Command::new(bin);
+        if let Some(f) = flag {
+            cmd.arg(f);
+        }
+        cmd.arg(&goto_target);
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    launch(&path_str)
 }
 
 /// Hand a URI to the desktop.
@@ -576,5 +654,20 @@ mod tests {
             links[0].start, 3,
             "two columns for the character, one for the space"
         );
+    }
+
+    #[test]
+    fn a_compiler_file_and_line_diagnostic_becomes_a_file_link() {
+        let row = line("  --> unterm-app/src/window.rs:9185:13", None);
+        let links = links_in_row(0, &row, &Rules::built_in());
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].uri,
+            "unterm-file://unterm-app/src/window.rs:9185:13"
+        );
+        let (path, l, c) = parse_file_location("unterm-app/src/window.rs:9185:13");
+        assert_eq!(path, "unterm-app/src/window.rs");
+        assert_eq!(l, Some(9185));
+        assert_eq!(c, Some(13));
     }
 }

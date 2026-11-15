@@ -8,9 +8,10 @@
 
 mod agent_run;
 mod browser;
-mod clients;
+pub mod clients;
 mod console_tasks;
-mod helpers;
+pub use console_tasks::{run_settings, set_run_settings, RunSettings};
+pub mod helpers;
 mod local_agents;
 mod skills;
 

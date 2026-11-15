@@ -478,6 +478,11 @@ struct PaneNotice {
     /// How many finished commands (`OSC 133;D`) this pane had the last time
     /// anyone looked, so each failure is noticed exactly once.
     commands_seen: u64,
+    /// When the current foreground command started (`OSC 133;C`), used to
+    /// notify when a long-running background command (`>= 10s`) finishes.
+    command_started_at: Option<std::time::Instant>,
+    /// Exit code of the last finished command (`OSC 133;D`), if reported.
+    last_exit_code: Option<i32>,
 }
 
 /// The chevron's open dropdown: its rows, and where it sits.
@@ -797,6 +802,13 @@ struct TabDrag {
     engaged: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PocketQrModal {
+    url: String,
+    pin: String,
+    matrix: Vec<Vec<bool>>,
+}
+
 pub struct App {
     engine: crate::engine_backend::AppEngine,
     /// The size the config asked for, which the reset key goes back to.
@@ -1037,6 +1049,7 @@ impl WindowState {
             colors: colors_from(config),
             shift_held: false,
             ctrl_held: false,
+            super_held: false,
             pointer: (0.0, 0.0),
             tabs: unterm_engine::next_core::tabs::TabRegistry::new(),
             tab_id: None,
@@ -1048,6 +1061,7 @@ impl WindowState {
             drawn_revision: None,
             presented_at: None,
             redraw_requested_at: None,
+            pending_input_redraw_at: None,
             frame_sent: None,
             caption_hover: None,
             caption_hover_at: std::time::Instant::now(),
@@ -1060,6 +1074,9 @@ impl WindowState {
             drawn_blink: None,
             screen_blink: (false, false),
             drawn_breath_step: None,
+            pocket_qr: None,
+            last_agent_states: Default::default(),
+            ssh_targets: Default::default(),
         }
     }
 }
@@ -1110,6 +1127,8 @@ struct WindowState {
     shift_held: bool,
     /// Whether control is down.
     ctrl_held: bool,
+    /// Whether super (Cmd on macOS / Win on Windows) is down.
+    super_held: bool,
     /// Where the pointer is, in pixels. Winit reports movement and buttons
     /// separately, so a click has to be told where it happened.
     pointer: (f32, f32),
@@ -1142,6 +1161,9 @@ struct WindowState {
     presented_at: Option<std::time::Instant>,
     /// When `tick` last asked for a frame that has not been drawn yet.
     redraw_requested_at: Option<std::time::Instant>,
+    /// Fallback deadline for a keystroke/IME commit to force a frame if the
+    /// shell did not echo back within a few milliseconds.
+    pending_input_redraw_at: Option<std::time::Instant>,
     /// What the compositor was last told about this window's frame: dark or
     /// not, and the edge colour. See `sync_frame`.
     frame_sent: Option<(bool, [u8; 3])>,
@@ -1359,6 +1381,10 @@ struct WindowState {
     startup_session: Option<std::thread::JoinHandle<anyhow::Result<SessionSnapshot>>>,
     startup_input: String,
     restore_extra_tabs_pending: bool,
+    pocket_qr: Option<PocketQrModal>,
+    last_agent_states:
+        std::collections::HashMap<u64, unterm_services::cockpit::status::AgentState>,
+    ssh_targets: std::collections::HashMap<usize, String>,
 }
 
 /// What closing the window should do to the sessions behind it.
@@ -2007,6 +2033,7 @@ impl App {
         // session that happened to create the window leaves the solid cursor,
         // scrollbar and keyboard focus behind when another pane is clicked.
         let session_id = self.focused_session();
+        self.engine.set_primary_pane(session_id);
         // The very number `needs_redraw` compares, read before any screen
         // is fetched so an update landing mid-draw still earns its frame.
         // This used to record a sum of per-pane snapshot revisions instead
@@ -2118,6 +2145,41 @@ impl App {
                 for image in &mut quads.inline_images[image_start..] {
                     image.glyph.quad.color = tint;
                 }
+            } else if placements.len() > 1 {
+                // Zero-height split-pane focus indicator: a crisp 2pt accent
+                // top line with a subtle 4pt ambient glow on the focused pane.
+                let metrics = self.window.font.metrics();
+                let pt = self.chrome_pt();
+                let chrome = self.chrome();
+                let grid_right = placement.origin.0 + placement.cols as f32 * metrics.width;
+                let max_grid_right = placements
+                    .iter()
+                    .map(|p| p.origin.0 + p.cols as f32 * metrics.width)
+                    .fold(0.0_f32, f32::max);
+                let pane_right = if (grid_right - max_grid_right).abs() <= 0.5 {
+                    self.terminal_left() + self.terminal_width()
+                } else {
+                    grid_right
+                };
+                let pane_width = (pane_right - placement.origin.0).max(0.0);
+                let bar_h = (2.0 * pt).round().max(2.0);
+                let glow_h = (4.0 * pt).round().max(2.0);
+                let mut glow = chrome.focus_rail;
+                glow[3] = 0.14;
+                quads.backgrounds.push(unterm_render::quads::Quad {
+                    left: placement.origin.0,
+                    top: placement.origin.1,
+                    width: pane_width,
+                    height: bar_h,
+                    color: chrome.focus_rail,
+                });
+                quads.backgrounds.push(unterm_render::quads::Quad {
+                    left: placement.origin.0,
+                    top: placement.origin.1 + bar_h,
+                    width: pane_width,
+                    height: glow_h,
+                    color: glow,
+                });
             }
         }
         if placements.is_empty() {
@@ -2180,6 +2242,7 @@ impl App {
         self.append_confirmation_banner(window_width, &mut quads);
         self.append_core_lost_banner(window_width, &mut quads);
         self.append_pane_close_buttons(&mut quads);
+        self.append_pane_error_pills(&mut quads);
         quads.raise_since(overlays);
         // The true modals, above the docks as well: a tier is
         // backgrounds-then-glyphs, so a palette in the overlay tier had the
@@ -2190,6 +2253,7 @@ impl App {
         self.append_rail_tooltip(&mut quads);
         self.append_sidebar_peek(&mut quads);
         self.append_quick_menu(&mut quads);
+        self.append_pocket_qr(window_width, &mut quads);
         quads.raise_since_modal(modals);
 
         // Where the terminal's opaque ground starts, for a frame behind Mica:
@@ -2284,6 +2348,7 @@ impl App {
         self.window.drawn_revision = Some(generation);
         self.window.presented_at = Some(std::time::Instant::now());
         self.window.redraw_requested_at = None;
+        self.window.pending_input_redraw_at = None;
         self.window.drawn_cursor_solid = Some(solid_cursor);
         self.window.drawn_blink = Some(blink);
         self.window.screen_blink = screen_blink;
@@ -2590,47 +2655,61 @@ impl App {
         let height = self.window.state.as_ref().map(|live| live.height).unwrap_or(600) as f32;
 
         if !self.status_bar_enabled {
-            // Persistent status bar is disabled. If there is a transient notice,
-            // render it as an overlay toast banner at the bottom over the terminal.
+            // Persistent status bar is disabled. Render transient notices as a
+            // centered floating capsule Toast above the bottom edge of the terminal.
             let Some(notice) = self.active_notice() else {
                 return;
             };
-            if notice.trim().is_empty() {
+            let trimmed = notice.trim();
+            if trimmed.is_empty() {
                 return;
             }
             let pt = self.chrome_pt();
-            let pad = (crate::ui_tokens::STATUS_BAR_VERTICAL_PADDING * pt)
-                .round()
-                .max(2.0);
-            let bar_height = (metrics.height + pad * 2.0).round().max(1.0);
-            let top = height - bar_height;
             let left = self.dock_width(metrics);
             let strip_width = (window_width - left).max(0.0);
-            let columns = (strip_width / metrics.width.max(1.0)).floor().max(0.0) as usize;
+            let max_cols = ((strip_width * 0.78) / metrics.width.max(1.0))
+                .floor()
+                .max(16.0) as usize;
+            let body = trimmed.trim_start_matches('\u{2713}').trim();
+            let clipped = crate::statusbar::middle(body, max_cols);
+            let display_text = format!("\u{2713}  {clipped}");
+            let text_w = self.chrome_width(&display_text);
+            let pad_x = (13.0 * pt).round();
+            let pill_h = (self.window.chrome_font.metrics().height + 10.0 * pt)
+                .round()
+                .max(24.0 * pt);
+            let pill_w = (text_w + pad_x * 2.0)
+                .round()
+                .min((strip_width - 24.0 * pt).max(48.0));
+            let pill_left = (left + (strip_width - pill_w) / 2.0).round();
+            let pill_top = (height - pill_h - 14.0 * pt).round().max(0.0);
+            let pill_r = pill_h / 2.0;
             let chrome = self.chrome();
 
-            quads.backgrounds.push(unterm_render::quads::Quad {
-                left,
-                top,
-                width: strip_width,
-                height: bar_height,
-                color: chrome.surface,
-            });
-            quads.backgrounds.push(unterm_render::quads::Quad {
-                left,
-                top,
-                width: strip_width,
-                height: 1.0,
-                color: chrome.outer_edge,
-            });
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                pill_left - 1.0,
+                pill_top - 1.0,
+                pill_w + 2.0,
+                pill_h + 2.0,
+                pill_r + 1.0,
+                chrome.toast_outline,
+            ));
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                pill_left,
+                pill_top,
+                pill_w,
+                pill_h,
+                pill_r,
+                chrome.toast_bg,
+            ));
 
-            let text_top = top
-                + ((bar_height - metrics.height) / 2.0
+            let text_top = pill_top
+                + ((pill_h - self.window.chrome_font.metrics().height) / 2.0
                     + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
                     .max(0.0);
-            let pen = left + (crate::ui_tokens::CHROME_PANEL_INSET * pt).round();
-            let display_text = format!("\u{2713} {}", crate::statusbar::middle(&notice, columns.saturating_sub(4)));
-            self.append_mono(&display_text, self.window.colors.foreground, (pen, text_top), quads);
+            let text_left = pill_left + ((pill_w - text_w) / 2.0).max(pad_x * 0.5);
+            let pen = self.append_chrome("\u{2713}  ", chrome.status_ok, (text_left, text_top), quads);
+            self.append_chrome(&clipped, self.chrome_foreground(), (pen, text_top), quads);
             return;
         }
 
@@ -3210,6 +3289,7 @@ impl App {
                         .map(|session| session.shell.process_name.clone())
                         .map(|name| crate::statusbar::short_name(&name)),
                     task: session.and_then(|session| {
+                        let active_helpers = unterm_settings::helpers::active_count();
                         let agent = facts.as_ref().map(|facts| facts.agent.trim().trim_start_matches('\u{26A1}').trim().to_string());
                         let agent = agent.filter(|name| !name.is_empty()).or_else(|| {
                             pane_ids.iter().find_map(|pane| {
@@ -3219,12 +3299,22 @@ impl App {
                                     .map(|status| status.agent.clone())
                                     .filter(|agent| !agent.is_empty())
                             })
-                        })?;
-                        crate::sidebar::task_from_title(
-                            &session.title,
-                            Some(&agent),
-                            &crate::statusbar::short_name(&session.shell.process_name),
-                        )
+                        });
+                        let base_task = agent.as_deref().and_then(|ag| {
+                            crate::sidebar::task_from_title(
+                                &session.title,
+                                Some(ag),
+                                &crate::statusbar::short_name(&session.shell.process_name),
+                            )
+                        });
+                        if active_helpers > 0 && Some(tab) == active {
+                            Some(match base_task {
+                                Some(t) => format!("{t} \u{00b7} \u{26A1}{active_helpers} 协同"),
+                                None => format!("\u{26A1}{active_helpers} Agent 协同中"),
+                            })
+                        } else {
+                            base_task
+                        }
                     }),
                     branch: session
                         .and_then(|session| session.shell.cwd.as_deref())
@@ -4385,13 +4475,17 @@ impl App {
     ) -> (f32, f32, f32) {
         use unterm_services::i18n::t;
         let square = crate::sidebar::footer_mark_width(row_height);
-        let settings_left = footer_left + footer_width - square;
-        let pen = footer_left + 7.0 * pt + self.chrome_width("+") + 6.0 * pt;
-        let label_budget = (settings_left - pen - square - 8.0 * pt).max(0.0);
-        let label = self.chrome_fit(&t("sidebar.new_session"), label_budget);
-        let picker_left =
-            (pen + self.chrome_width(&label) + 4.0 * pt).min(settings_left - square);
-        (picker_left, picker_left + square, settings_left)
+        let settings_text = format!("\u{EB51}  {}", t("sidebar.settings"));
+        let settings_width = (self.chrome_width(&settings_text) + 16.0 * pt)
+            .round()
+            .max(square)
+            .min((footer_width * 0.42).max(square));
+        let settings_left = (footer_left + footer_width - settings_width)
+            .max(footer_left + square * 2.0);
+        let gap = (6.0 * pt).round();
+        let split_right = (settings_left - gap).max(footer_left + square);
+        let picker_left = (split_right - square).max(footer_left);
+        (picker_left, split_right, settings_left)
     }
 
     /// A press on the tab strip. Returns true when the strip took it.
@@ -4404,7 +4498,7 @@ impl App {
             match action {
                 0 => self.new_tab(),
                 1 => self.open_shell_selector(),
-                2 => self.open_native_settings(),
+                2 => self.open_settings(),
                 _ => unreachable!(),
             }
             self.window.drawn_revision = None;
@@ -4861,57 +4955,94 @@ impl App {
         });
         let hovered = self.sidebar_footer_action_at(self.window.pointer.0, self.window.pointer.1);
         let square = crate::sidebar::footer_mark_width(row_height);
-        let (picker_left, _picker_right, settings_left) =
+        let (picker_left, picker_right, settings_left) =
             self.sidebar_footer_zones(footer_left, footer_width, row_height, pt);
         let main_width = (picker_left - footer_left).max(1.0);
+        let split_width = (picker_right - footer_left).max(1.0);
+        let settings_width = (footer_left + footer_width - settings_left).max(square);
+        let pill_top = footer_top + 2.0 * pt;
+        let pill_h = (row_height - 4.0 * pt).max(1.0);
         let ink = |on: bool| if on { foreground } else { chrome.dim_text };
-        let lift = |left: f32, width: f32, on: bool, quads: &mut unterm_render::quads::FrameQuads| {
-            if on {
-                quads.backgrounds.extend(unterm_render::rounded::panel(
-                    left,
-                    footer_top + 2.0 * pt,
-                    width,
-                    row_height - 4.0 * pt,
-                    radius,
-                    chrome.hover_bg,
-                ));
-            }
-        };
-        lift(footer_left, main_width, hovered == Some(0), quads);
-        lift(settings_left, square, hovered == Some(2), quads);
-        let row_hovered = self.window.pointer.0 >= footer_left
-            && self.window.pointer.0 < footer_left + footer_width
-            && self.window.pointer.1 >= footer_top
-            && self.window.pointer.1 < footer_top + row_height;
-        if row_hovered || hovered == Some(1) {
-            let mut pill = chrome.hover_bg;
-            if hovered != Some(1) {
-                pill[3] *= 0.55;
-            }
+
+        // Left capsule: [+ 新建会话 | ▾]
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            footer_left - 1.0,
+            pill_top - 1.0,
+            split_width + 2.0,
+            pill_h + 2.0,
+            radius + 1.0,
+            chrome.selected_outline,
+        ));
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            footer_left,
+            pill_top,
+            split_width,
+            pill_h,
+            radius,
+            chrome.group_bg,
+        ));
+        if hovered == Some(0) {
             quads.backgrounds.extend(unterm_render::rounded::panel(
-                picker_left,
-                footer_top + 3.0 * pt,
-                square,
-                row_height - 6.0 * pt,
+                footer_left,
+                pill_top,
+                main_width,
+                pill_h,
                 radius,
-                pill,
+                chrome.hover_bg,
             ));
         }
+        if hovered == Some(1) {
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                picker_left,
+                pill_top,
+                square,
+                pill_h,
+                radius,
+                chrome.hover_bg,
+            ));
+        }
+        // Subtle 1px divider between "+ 新建会话" and "▾"
+        quads.backgrounds.push(unterm_render::quads::Quad {
+            left: picker_left,
+            top: pill_top + 4.0 * pt,
+            width: 1.0,
+            height: (pill_h - 8.0 * pt).max(1.0),
+            color: chrome.selected_outline,
+        });
 
-        // The one action with words -- everything else on this row is
-        // a square with a mark in it, which is what keeps three
-        // controls in the height of one.
-        let mut pen = footer_left + 7.0 * pt;
+        // Right capsule: [⚙ 设置]
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            settings_left - 1.0,
+            pill_top - 1.0,
+            settings_width + 2.0,
+            pill_h + 2.0,
+            radius + 1.0,
+            chrome.selected_outline,
+        ));
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            settings_left,
+            pill_top,
+            settings_width,
+            pill_h,
+            radius,
+            if hovered == Some(2) {
+                chrome.hover_bg
+            } else {
+                chrome.group_bg
+            },
+        ));
+
+        let mut pen = footer_left + 8.0 * pt;
         pen = self.append_chrome(
             "+",
             ink(hovered == Some(0)),
             (pen, footer_top + text_offset),
             quads,
         );
-        pen += 6.0 * pt;
+        pen += 5.0 * pt;
         let new_label = self.chrome_fit(
             &t("sidebar.new_session"),
-            (settings_left - pen - square - 8.0 * pt).max(0.0),
+            (picker_left - pen - 5.0 * pt).max(0.0),
         );
         self.append_chrome(
             &new_label,
@@ -4919,28 +5050,28 @@ impl App {
             (pen, footer_top + text_offset),
             quads,
         );
-        // Keep the shell-picker chevron subtly visible at rest so users know
-        // the dropdown exists before hovering.
         let wide = self.chrome_width("\u{25BE}");
         let mut picker_ink = ink(hovered == Some(1));
-        if !row_hovered && hovered != Some(1) {
-            picker_ink[3] *= 0.55;
+        if hovered != Some(1) {
+            picker_ink[3] *= 0.78;
         }
         self.append_chrome(
             "\u{25BE}",
             picker_ink,
             (
                 picker_left + ((square - wide) / 2.0).max(0.0),
-                footer_top + text_offset + 1.5 * pt,
+                footer_top + text_offset + 1.0 * pt,
             ),
             quads,
         );
-        let wide = self.chrome_width("\u{EB51}");
+        let settings_label = format!("\u{EB51}  {}", t("sidebar.settings"));
+        let settings_fit = self.chrome_fit(&settings_label, (settings_width - 10.0 * pt).max(0.0));
+        let settings_text_w = self.chrome_width(&settings_fit);
         self.append_chrome(
-            "\u{EB51}",
+            &settings_fit,
             ink(hovered == Some(2)),
             (
-                settings_left + ((square - wide) / 2.0).max(0.0),
+                settings_left + ((settings_width - settings_text_w) / 2.0).max(4.0 * pt),
                 footer_top + text_offset,
             ),
             quads,
@@ -4988,6 +5119,11 @@ impl App {
                 format!("{}", statuses.len())
             }
         };
+        let proxy = if unterm_services::i18n::current_locale().starts_with("zh") {
+            "代理".to_string()
+        } else {
+            "Proxy".to_string()
+        };
         let open = self.window.tree.is_some();
         // The measuring closure needs the fonts and the atlas, and so does the
         // caller afterwards -- so they are taken apart for the call and put
@@ -5001,12 +5137,13 @@ impl App {
                 crate::terminal::chrome_text_width(text, ui, atlas)
             }
         };
-        crate::topbar::layout(
+        crate::topbar::layout_with_proxy(
             window_width,
             logical,
             pt,
             &stats,
             &cockpit,
+            &proxy,
             &title,
             open,
             self.window.top_bar_quiet,
@@ -5247,6 +5384,43 @@ impl App {
                 ));
             }
 
+            let proxy_on = piece.item == crate::topbar::Item::Proxy
+                && unterm_services::launch_env::unterm_proxy_enabled();
+            if piece.item == crate::topbar::Item::Proxy && !piece.label.is_empty() {
+                let inset = 3.0 * pt;
+                let pill_h = height - inset * 2.0;
+                let pill_r = pill_h / 2.0;
+                let outline = if proxy_on {
+                    chrome.status_ok_outline
+                } else {
+                    chrome.selected_outline
+                };
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    piece.left - 1.0,
+                    inset - 1.0,
+                    piece.width + 2.0,
+                    pill_h + 2.0,
+                    pill_r + 1.0,
+                    outline,
+                ));
+                let mut fill = if proxy_on {
+                    chrome.status_ok_bg
+                } else {
+                    chrome.hover_bg
+                };
+                if is_hovered {
+                    fill[3] = (fill[3] + 0.10).min(1.0);
+                }
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    piece.left,
+                    inset,
+                    piece.width,
+                    pill_h,
+                    pill_r,
+                    fill,
+                ));
+            }
+
             let text = match (piece.icon, piece.label.is_empty()) {
                 (Some(icon), true) => icon.to_string(),
                 (Some(icon), false) => format!("{icon}  {}", piece.label),
@@ -5298,6 +5472,7 @@ impl App {
                 crate::topbar::Item::Cockpit if cockpit_waiting => {
                     crate::cockpit::Badge::NeedsYou.color()
                 }
+                crate::topbar::Item::Proxy if proxy_on => chrome.status_ok,
                 _ if is_hovered => foreground,
                 _ => chrome.dim_text,
             };
@@ -5455,6 +5630,10 @@ impl App {
             // shell identity was an entry point to the shell selector; making
             // it a drag handle in the new chrome removed the visible picker.
             crate::topbar::Item::Stats => self.open_shell_selector(),
+            crate::topbar::Item::Proxy => {
+                self.toggle_proxy();
+                self.window.drawn_revision = None;
+            }
             crate::topbar::Item::Menu => self.open_quick_menu(),
             crate::topbar::Item::Action(action) => {
                 if let Some(live) = self.window.state.as_ref() {
@@ -6036,7 +6215,7 @@ impl App {
                 self.window.palette = Some(crate::palette::Palette::characters(entries));
                 self.window.drawn_revision = None;
             }
-            Action::Settings => self.open_native_settings(),
+            Action::Settings => self.open_settings(),
             Action::TreeSidebar => self.toggle_tree(),
             Action::FleetLaunch => {
                 let entries = self.fleet_entries();
@@ -6513,8 +6692,18 @@ impl App {
         );
     }
 
-    /// Split the focused pane.
+    /// Split the focused pane, inheriting its working directory.
     fn split(&mut self, axis: unterm_engine::next_core::layout::SplitAxis) {
+        let dir = self.focused_directory();
+        self.split_in(axis, dir);
+    }
+
+    /// Split the focused pane in an explicit directory (if provided).
+    fn split_in(
+        &mut self,
+        axis: unterm_engine::next_core::layout::SplitAxis,
+        command_dir: Option<String>,
+    ) {
         let (Some(tab_id), Some(live)) = (self.window.tab_id, self.window.state.as_ref()) else {
             return;
         };
@@ -6538,7 +6727,7 @@ impl App {
                 }
             },
             size_percent: 50,
-            command_dir: None,
+            command_dir,
             command: prepare_shell(self.shell.clone()),
             env,
             launch_policy: LaunchPolicySnapshot::default(),
@@ -6667,7 +6856,9 @@ impl App {
     /// so without this the inbox is always empty and looks broken rather than
     /// idle.
     fn feed_cockpit(&mut self) {
-        if self.cockpit_fed_at.elapsed() < COCKPIT_POLL {
+        if self.cockpit_fed_at.elapsed() < COCKPIT_POLL
+            || crate::statsbar::user_typing_recently()
+        {
             return;
         }
         self.cockpit_fed_at = std::time::Instant::now();
@@ -6684,9 +6875,13 @@ impl App {
         let pane_ids: Vec<u64> = sessions.iter().map(|session| session.id as u64).collect();
         let mut announcements: Vec<(u64, String)> = Vec::new();
         for session in &sessions {
-            // Schedule process/manifest detection for every pane. This is
-            // non-blocking; the worker-backed cache is consumed by poll below.
-            let _ = crate::statsbar::facts_for(session.id);
+            // Schedule process/manifest detection for the focused pane at normal
+            // cadence and background panes at a gentler 10s cadence.
+            if session.id == active_pane {
+                let _ = crate::statsbar::facts_for(session.id);
+            } else {
+                let _ = crate::statsbar::facts_for_background(session.id);
+            }
             // The pulse, not the screen. This loop runs over every pane
             // more than twice a second; asking each one for 4800 styled cells and
             // keeping only the characters cost 3.8 s at forty panes — nine
@@ -6738,9 +6933,47 @@ impl App {
             // for what runs without marks -- and for a long-running command,
             // an agent among them, while it runs.
             let marks = pulse.commands;
-            let failed = marks.finished != notice.commands_seen
+            if marks.running && notice.command_started_at.is_none() {
+                notice.command_started_at = Some(std::time::Instant::now());
+            }
+            let command_just_finished = marks.finished != notice.commands_seen;
+            let command_elapsed = if command_just_finished {
+                notice.last_exit_code = marks.last_exit;
+                notice.command_started_at.take().map(|t| t.elapsed())
+            } else {
+                None
+            };
+            let failed = command_just_finished
                 && matches!(marks.last_exit, Some(code) if code != 0);
             notice.commands_seen = marks.finished;
+            if command_just_finished {
+                if let Some(elapsed) = command_elapsed {
+                    let is_background = !self.window.focused || session.id != active_pane;
+                    if elapsed >= std::time::Duration::from_secs(10) && is_background {
+                        let secs = elapsed.as_secs();
+                        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+                        let exit_code = marks.last_exit.unwrap_or(0);
+                        let msg = if exit_code == 0 {
+                            if is_zh {
+                                format!("后台长任务已完成 (窗格 {} · 耗时 {}s)", session.id, secs)
+                            } else {
+                                format!("Background command finished (pane {} · {}s)", session.id, secs)
+                            }
+                        } else if is_zh {
+                            format!(
+                                "后台命令执行失败 (窗格 {} · 退出码 {} · 耗时 {}s)",
+                                session.id, exit_code, secs
+                            )
+                        } else {
+                            format!(
+                                "Background command failed (pane {} · exit {} · {}s)",
+                                session.id, exit_code, secs
+                            )
+                        };
+                        announcements.push((session.id as u64, msg));
+                    }
+                }
+            }
             let guessed = (!marks.integrated || marks.running)
                 && crate::sidebar::output_looks_like_error(&tail);
             let error = session.is_dead || failed || guessed;
@@ -6788,6 +7021,59 @@ impl App {
         unterm_services::cockpit::status::retain_panes(&live);
 
         let statuses = unterm_services::cockpit::status::snapshot();
+        for session in &sessions {
+            if let Some(target) =
+                Self::extract_ssh_target(&session.shell.process_name, &session.title)
+            {
+                self.window.ssh_targets.insert(session.id, target);
+            }
+        }
+        let focused_pane = self.focused_session() as u64;
+        for status in &statuses {
+            let prev = self
+                .window
+                .last_agent_states
+                .insert(status.pane_id, status.state);
+            if prev.is_some() && prev != Some(status.state) {
+                let background_or_other_pane =
+                    !self.window.focused || status.pane_id != focused_pane;
+                if background_or_other_pane {
+                    use unterm_services::cockpit::status::AgentState;
+                    let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+                    let msg = match status.state {
+                        AgentState::WaitingForUser => Some(if is_zh {
+                            format!(
+                                "{} (窗格 {}) 正在等待您的指令或确认",
+                                status.agent, status.pane_id
+                            )
+                        } else {
+                            format!("{} (pane {}) needs your attention", status.agent, status.pane_id)
+                        }),
+                        AgentState::Done if prev == Some(AgentState::Working) => Some(if is_zh {
+                            format!("{} (窗格 {}) 已完成当前任务", status.agent, status.pane_id)
+                        } else {
+                            format!("{} (pane {}) finished its task", status.agent, status.pane_id)
+                        }),
+                        _ => None,
+                    };
+                    if let Some(text) = msg {
+                        if !self.window.focused {
+                            let _ = unterm_services::toast::notify("Unterm", &text);
+                            crate::updates::notify(text.clone());
+                            if let Some(live) = self.window.state.as_ref() {
+                                live.window.request_user_attention(Some(
+                                    winit::window::UserAttentionType::Informational,
+                                ));
+                            }
+                        }
+                        self.show_notice(format!("\u{1F514} {text}"));
+                    }
+                }
+            }
+        }
+        self.window
+            .last_agent_states
+            .retain(|pane_id, _| live.contains(pane_id));
         let titles: std::collections::HashMap<u64, String> = sessions
             .iter()
             .map(|session| (session.id as u64, session.title.clone()))
@@ -6972,10 +7258,37 @@ impl App {
                 self.window.inbox_open = false;
                 self.open_console();
             }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("a") => {
+                self.window.inbox_open = false;
+                self.open_autonomy_selector();
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("r") => {
+                self.window.inbox_open = false;
+                self.open_checkpoints();
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("h") => {
+                self.window.inbox_open = false;
+                self.open_agent_handoff();
+            }
             WinitKey::Character(ch)
                 if (ch.eq_ignore_ascii_case("y") || ch.eq_ignore_ascii_case("n")) && count > 0 =>
             {
                 let approve = ch.eq_ignore_ascii_case("y");
+                if let Some(req) = unterm_services::agent_session::pending_requests()
+                    .into_iter()
+                    .next()
+                {
+                    if let (Some(sid), Some(rid)) = (
+                        req.get("session_id").and_then(|v| v.as_str()),
+                        req.get("approval")
+                            .and_then(|a| a.get("request_id"))
+                            .and_then(|v| v.as_str()),
+                    ) {
+                        let _ = unterm_services::agent_session::decide(
+                            sid, rid, approve, None, !approve,
+                        );
+                    }
+                }
                 let selected = rows[self.window.inbox_selected].clone();
                 let pane_id = selected.pane_id as usize;
                 let current_instance =
@@ -7906,21 +8219,10 @@ impl App {
             match result {
                 ClipboardResult::Read { pane_id, result } => match result {
                     Ok(text) if !text.is_empty() => {
-                        let _ = self.engine.scroll_viewport_to(pane_id, isize::MAX);
-                        match self.engine.paste_input(pane_id, &text) {
-                            Ok(_) => {
-                                if crate::ghost::observe_paste(pane_id as u64, &text) {
-                                    self.window.drawn_revision = None;
-                                    if let Some(live) = self.window.state.as_ref() {
-                                        live.window.request_redraw();
-                                    }
-                                }
-                                self.show_notice(unterm_services::i18n::t("interaction.pasted"));
-                            }
-                            Err(err) => {
-                                log::warn!("could not paste: {err:#}");
-                                self.show_notice(unterm_services::i18n::t("interaction.paste_failed"));
-                            }
+                        if let Some(reason) = Self::should_guard_paste(&text) {
+                            self.open_safe_paste_confirm(pane_id, text, reason);
+                        } else {
+                            self.perform_paste_input(pane_id, &text);
                         }
                     }
                     Ok(_) => {}
@@ -8644,7 +8946,7 @@ impl App {
         }
     }
 
-    /// The rest of the tabs the last window had, one per saved directory.
+    /// The rest of the tabs and split layouts the last window had.
     fn restore_extra_tabs(&mut self) {
         // A Core that kept the sessions has already restored them --
         // `sync_tabs` adopts every one. Opening the saved directories
@@ -8654,14 +8956,67 @@ impl App {
         let adopted = unterm_engine::SessionEngine::list_sessions(&self.engine)
             .map(|sessions| sessions.len())
             .unwrap_or(0);
+        let Some(saved) = self.restore.clone() else {
+            return;
+        };
         if adopted > 1 {
+            // Even when warm-reconnecting to `unterm-core`, restore custom tab titles.
+            let tab_ids = self.window.tabs.tab_ids();
+            for (idx, saved_tab) in saved.tabs.iter().enumerate() {
+                if let (Some(&tab_id), Some(title)) = (tab_ids.get(idx), saved_tab.title.as_ref()) {
+                    if !title.trim().is_empty() {
+                        self.window.tab_titles.insert(tab_id, title.clone());
+                    }
+                }
+            }
             return;
         }
-        let extra: Vec<String> = self
-            .restore
-            .as_ref()
-            .map(|saved| saved.cwds.iter().skip(1).cloned().collect())
-            .unwrap_or_default();
+        if !saved.tabs.is_empty() {
+            // Restore tab 0's custom title and any split panes it had.
+            if let Some(first_tab) = saved.tabs.first() {
+                if let (Some(tab_id), Some(title)) = (self.window.tab_id, first_tab.title.as_ref()) {
+                    if !title.trim().is_empty() {
+                        self.window.tab_titles.insert(tab_id, title.clone());
+                    }
+                }
+                for pane in first_tab.panes.iter().skip(1) {
+                    let axis = match pane.split_axis.as_deref() {
+                        Some("vertical") => unterm_engine::next_core::layout::SplitAxis::Vertical,
+                        _ => unterm_engine::next_core::layout::SplitAxis::Horizontal,
+                    };
+                    let dir = (!pane.cwd.is_empty()).then(|| pane.cwd.clone());
+                    self.split_in(axis, dir);
+                }
+            }
+            // Restore extra tabs (1..N) along with their custom titles and split panes.
+            for saved_tab in saved.tabs.iter().skip(1) {
+                let first_cwd = saved_tab
+                    .panes
+                    .first()
+                    .map(|p| p.cwd.as_str())
+                    .unwrap_or("");
+                self.new_tab_in(first_cwd);
+                if let (Some(tab_id), Some(title)) = (self.window.tab_id, saved_tab.title.as_ref()) {
+                    if !title.trim().is_empty() {
+                        self.window.tab_titles.insert(tab_id, title.clone());
+                    }
+                }
+                for pane in saved_tab.panes.iter().skip(1) {
+                    let axis = match pane.split_axis.as_deref() {
+                        Some("vertical") => unterm_engine::next_core::layout::SplitAxis::Vertical,
+                        _ => unterm_engine::next_core::layout::SplitAxis::Horizontal,
+                    };
+                    let dir = (!pane.cwd.is_empty()).then(|| pane.cwd.clone());
+                    self.split_in(axis, dir);
+                }
+            }
+            let target_tab_ids = self.window.tabs.tab_ids();
+            if let Some(&target_id) = target_tab_ids.get(saved.active_tab).or_else(|| target_tab_ids.first()) {
+                self.activate_tab(target_id);
+            }
+            return;
+        }
+        let extra: Vec<String> = saved.cwds.iter().skip(1).cloned().collect();
         if extra.is_empty() {
             return;
         }
@@ -8717,18 +9072,54 @@ impl App {
             .map(|(_, size)| size)
             .unwrap_or_else(|| live.window.inner_size());
         let mut cwds = Vec::new();
+        let mut tabs = Vec::new();
         let sessions =
             unterm_engine::SessionEngine::list_sessions(&self.engine).unwrap_or_default();
-        for tab in self.window.tabs.tab_ids() {
-            let Some(pane) = self.window.tabs.active_pane(tab) else {
-                continue;
-            };
-            if let Some(cwd) = sessions
-                .iter()
-                .find(|session| session.id == pane)
-                .and_then(|session| session.shell.cwd.clone())
-            {
-                cwds.push(cwd);
+        let fallback_cwd = self
+            .start_directory
+            .as_ref()
+            .or(self.config_default_cwd.as_ref())
+            .map(|p| p.display().to_string())
+            .or_else(|| std::env::var("HOME").ok())
+            .unwrap_or_default();
+        let tab_ids = self.window.tabs.tab_ids();
+        let active_tab = self
+            .window
+            .tab_id
+            .and_then(|active| tab_ids.iter().position(|&id| id == active))
+            .unwrap_or(0);
+        for &tab in &tab_ids {
+            let pane_ids = self.window.tabs.pane_ids(tab);
+            let mut saved_panes = Vec::new();
+            for (pane_idx, &pane) in pane_ids.iter().enumerate() {
+                let session = sessions.iter().find(|s| s.id == pane);
+                let cwd = session
+                    .and_then(|s| s.shell.cwd.clone().filter(|c| !c.is_empty()))
+                    .unwrap_or_else(|| fallback_cwd.clone());
+                if pane_idx == 0 && !cwd.is_empty() {
+                    cwds.push(cwd.clone());
+                }
+                let split_axis = if pane_idx == 0 {
+                    None
+                } else {
+                    Some(match session.and_then(|s| s.split_axis) {
+                        Some(unterm_engine::next_core::layout::SplitAxis::Vertical) => {
+                            "vertical".to_string()
+                        }
+                        _ => "horizontal".to_string(),
+                    })
+                };
+                saved_panes.push(crate::session_restore::SavedPane {
+                    cwd,
+                    split_axis,
+                    screen_tail: Vec::new(),
+                });
+            }
+            if !saved_panes.is_empty() {
+                tabs.push(crate::session_restore::SavedTab {
+                    title: self.window.tab_titles.get(&tab).cloned(),
+                    panes: saved_panes,
+                });
             }
         }
         Some(crate::session_restore::LastSession {
@@ -8736,6 +9127,8 @@ impl App {
             height: size.height,
             maximized: live.window.is_maximized() || self.window.unmaximized_rect.is_some(),
             cwds,
+            active_tab,
+            tabs,
         })
     }
 
@@ -8865,7 +9258,7 @@ impl App {
             // The chip is the switch, as 0.57.4's was; the settings page is a
             // right press away.
             Some(crate::statusbar::SegmentKind::Proxy) => self.toggle_proxy(),
-            Some(crate::statusbar::SegmentKind::Profile) => self.open_native_settings(),
+            Some(crate::statusbar::SegmentKind::Profile) => self.open_settings(),
             // The chip says the arrangement is wrong; the press says why. The
             // reason is the handshake's own words -- which name the offending
             // Core and its version -- because "unavailable" alone leaves the
@@ -8927,9 +9320,12 @@ impl App {
     /// menu.
     fn chrome_right_click(&mut self) -> bool {
         if self.window.pointer.1 < self.top_bar_height() {
-            // The chevron answers either button with its menu, as before.
-            if self.hovered_top_bar_item() == Some(crate::topbar::Item::Menu) {
-                self.open_quick_menu();
+            // The chevron answers either button with its menu, as before;
+            // right-clicking the Proxy pill opens proxy settings.
+            match self.hovered_top_bar_item() {
+                Some(crate::topbar::Item::Menu) => self.open_quick_menu(),
+                Some(crate::topbar::Item::Proxy) => self.open_proxy_settings(),
+                _ => {}
             }
             return true;
         }
@@ -9051,22 +9447,27 @@ impl App {
             .unwrap_or(0)
     }
 
+    /// Open Settings (`http://127.0.0.1:{port}`), falling back to the in-window
+    /// settings palette if the local HTTP server has not started yet.
     fn open_settings(&mut self) {
         let port = Self::resolve_settings_http_port();
         if port == 0 {
-            log::warn!("the settings server has not started yet");
+            self.open_native_settings();
             return;
         }
         let url = format!("http://127.0.0.1:{port}");
         match crate::links::open(&url) {
             Ok(()) => self.show_notice(format!("Settings \u{00b7} {url}")),
-            Err(err) => log::warn!("could not open {url}: {err}"),
+            Err(err) => {
+                log::warn!("could not open {url}: {err}");
+                self.open_native_settings();
+            }
         }
     }
 
-    /// Instant in-window Native Settings Center: zero browser jump for common
-    /// preferences (theme, font size, shell, sidebar, AI MCP auto-connect),
-    /// while keeping full Web Settings one row away.
+    /// Instant in-window Native Settings Center: 100% of terminal, UI, AI MCP,
+    /// safety guardrails, checkpoints, and remote pairing preferences live in
+    /// one keyboard-first native menu, with 1-click access to the Web Dashboard.
     fn open_native_settings(&mut self) {
         let entries = self.native_settings_entries();
         let title = unterm_services::i18n::t("command.settings");
@@ -9083,20 +9484,75 @@ impl App {
             .map(|theme| theme.name.to_string())
             .unwrap_or_else(|| "Default".to_string());
         let font_pt = format!("{:.0} pt", self.window.font_points);
+        let locale = unterm_services::i18n::current_locale();
+        let is_zh = locale.starts_with("zh");
+        let locale_name = unterm_services::i18n::available_locales()
+            .iter()
+            .find(|(code, _)| code.eq_ignore_ascii_case(locale))
+            .map(|(_, native_name)| (*native_name).to_string())
+            .unwrap_or_else(|| locale.to_string());
+        let cursor_desc = match (self.cursor_style.shape, self.cursor_style.blinking) {
+            (crate::terminal::CursorShape::Block, true) => {
+                if is_zh { "闪烁方块 (Blinking Block)" } else { "Blinking Block" }
+            }
+            (crate::terminal::CursorShape::Block, false) => {
+                if is_zh { "常亮方块 (Steady Block)" } else { "Steady Block" }
+            }
+            (crate::terminal::CursorShape::Bar, true) => {
+                if is_zh { "闪烁竖线 (Blinking Bar)" } else { "Blinking Bar" }
+            }
+            (crate::terminal::CursorShape::Bar, false) => {
+                if is_zh { "常亮竖线 (Steady Bar)" } else { "Steady Bar" }
+            }
+            (crate::terminal::CursorShape::Underline, true) => {
+                if is_zh { "闪烁下划线 (Blinking Underline)" } else { "Blinking Underline" }
+            }
+            (crate::terminal::CursorShape::Underline, false) => {
+                if is_zh { "常亮下划线 (Steady Underline)" } else { "Steady Underline" }
+            }
+        };
+        let scrollback_lines = Self::current_scrollback_lines();
+        let cli_path = Self::unterm_cli_path();
+        let clients_val = unterm_settings::clients::status(Some(&cli_path));
+        let clients_arr = clients_val.as_array().cloned().unwrap_or_default();
+        let connected_clients = clients_arr
+            .iter()
+            .filter(|c| c.get("terminal").and_then(|v| v.as_bool()).unwrap_or(false))
+            .count();
+        let total_clients = clients_arr.len();
+        let autonomy = unterm_settings::run_settings().autonomy;
+        let paired_devices = unterm_settings::remote::list_devices().len();
+        let proxy_on = unterm_services::launch_env::unterm_proxy_enabled();
+        let proxy_hint = if proxy_on {
+            match unterm_services::launch_env::probe_unterm_proxy() {
+                Some(url) => format!("ON \u{00b7} {}", crate::statusbar::short_proxy(&url)),
+                None => "ON \u{00b7} unreachable".to_string(),
+            }
+        } else {
+            "OFF".to_string()
+        };
         let port = Self::resolve_settings_http_port();
         let web_hint = if port != 0 {
             format!("http://127.0.0.1:{port}")
         } else {
             t("settings.menu.web_settings.hint")
         };
-        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
-        let mcp_label = if is_zh {
-            "一键接入本机 AI 助手 (MCP 自动配置)".to_string()
-        } else {
-            "Auto-Configure AI Agents (MCP)".to_string()
-        };
-        let mcp_hint = "Claude \u{00b7} Codex \u{00b7} Gemini \u{00b7} Agy \u{00b7} Cursor".to_string();
+
         let mut entries = vec![
+            crate::palette::Entry {
+                label: if is_zh {
+                    "网络代理与 Clash 节点设置 (Proxy & Clash)".to_string()
+                } else {
+                    "Network Proxy & Clash Node Settings".to_string()
+                },
+                hint: proxy_hint,
+                command: crate::palette::Command::OpenProxySettings,
+            },
+            crate::palette::Entry {
+                label: t("settings.menu.web_settings"),
+                hint: web_hint,
+                command: crate::palette::Command::OpenSettings,
+            },
             crate::palette::Entry {
                 label: t("command.theme"),
                 hint: format!(
@@ -9106,6 +9562,15 @@ impl App {
                 .trim()
                 .to_string(),
                 command: crate::palette::Command::Action(crate::keys::Action::ThemePicker),
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "界面语言 (UI Language)".to_string()
+                } else {
+                    "UI Language".to_string()
+                },
+                hint: locale_name,
+                command: crate::palette::Command::OpenLanguageSelector,
             },
             crate::palette::Entry {
                 label: t("command.font_bigger"),
@@ -9136,6 +9601,24 @@ impl App {
                 command: crate::palette::Command::Action(crate::keys::Action::ResetFontSize),
             },
             crate::palette::Entry {
+                label: if is_zh {
+                    "光标形状与闪烁 (Cursor Style)".to_string()
+                } else {
+                    "Cursor Style & Blink".to_string()
+                },
+                hint: cursor_desc.to_string(),
+                command: crate::palette::Command::OpenCursorSelector,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "历史回滚行数 (Scrollback Limit)".to_string()
+                } else {
+                    "Scrollback History Limit".to_string()
+                },
+                hint: format!("{scrollback_lines} lines"),
+                command: crate::palette::Command::OpenScrollbackSelector,
+            },
+            crate::palette::Entry {
                 label: t("menu.select_shell"),
                 hint: self.status().shell,
                 command: crate::palette::Command::OpenShellSelector,
@@ -9151,9 +9634,54 @@ impl App {
                 command: crate::palette::Command::Action(crate::keys::Action::TreeSidebar),
             },
             crate::palette::Entry {
-                label: mcp_label,
-                hint: mcp_hint,
+                label: t("menu.git_panel"),
+                hint: crate::keys::chord_hint(crate::keys::Action::GitPanel).unwrap_or_default(),
+                command: crate::palette::Command::Action(crate::keys::Action::GitPanel),
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "AI 助手 MCP 接入管理 (逐项开关)".to_string()
+                } else {
+                    "AI Clients MCP Manager (Per-Client)".to_string()
+                },
+                hint: format!("{connected_clients}/{total_clients} connected"),
+                command: crate::palette::Command::OpenMcpClients,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "一键配置全部本机 AI 助手 (Auto-Setup All)".to_string()
+                } else {
+                    "Auto-Configure All AI Agents (MCP)".to_string()
+                },
+                hint: "Claude \u{00b7} Codex \u{00b7} Gemini \u{00b7} Agy \u{00b7} Cursor".to_string(),
                 command: crate::palette::Command::SetupAiAgents,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "AI 自主权与安全审批级别 (Autonomy)".to_string()
+                } else {
+                    "AI Autonomy & Safety Guardrail".to_string()
+                },
+                hint: autonomy.label().to_string(),
+                command: crate::palette::Command::OpenAutonomySelector,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "Git 自动检查点与一键回滚 (Checkpoints)".to_string()
+                } else {
+                    "Git Checkpoints & 1-Click Rollback".to_string()
+                },
+                hint: "git stash / rollback".to_string(),
+                command: crate::palette::Command::OpenCheckpoints,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "跨 Agent 接力当前窗格 (Context Handoff)".to_string()
+                } else {
+                    "Cross-Agent Context Handoff".to_string()
+                },
+                hint: "Claude \u{2194} Codex \u{2194} Gemini".to_string(),
+                command: crate::palette::Command::OpenAgentHandoff,
             },
             crate::palette::Entry {
                 label: t("command.agent_inbox"),
@@ -9162,11 +9690,46 @@ impl App {
                 command: crate::palette::Command::Action(crate::keys::Action::CockpitInbox),
             },
             crate::palette::Entry {
-                label: t("settings.menu.web_settings"),
-                hint: web_hint,
-                command: crate::palette::Command::OpenSettings,
+                label: if is_zh {
+                    "手机扫码远程查看与审批 (Pocket Unterm QR)".to_string()
+                } else {
+                    "Mobile Remote Pairing QR (Pocket Unterm)".to_string()
+                },
+                hint: "QR + PIN".to_string(),
+                command: crate::palette::Command::OpenPocketQr,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "已配对手机设备管理 (Paired Devices)".to_string()
+                } else {
+                    "Paired Mobile Devices".to_string()
+                },
+                hint: format!("{paired_devices} paired"),
+                command: crate::palette::Command::OpenPairedDevices,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "编辑配置文件 (unterm.conf)".to_string()
+                } else {
+                    "Edit Configuration File (unterm.conf)".to_string()
+                },
+                hint: "unterm.conf".to_string(),
+                command: crate::palette::Command::OpenConfigFile,
             },
         ];
+        if let Some(target) = self.window.ssh_targets.get(&self.focused_session()) {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("一键重连 / 克隆当前 SSH ({target})")
+                } else {
+                    format!("Reconnect / Clone SSH ({target})")
+                },
+                hint: "ssh".to_string(),
+                command: crate::palette::Command::ReconnectSsh {
+                    pane_id: self.focused_session(),
+                },
+            });
+        }
         if unterm_settings::console_dir().is_some() {
             entries.push(crate::palette::Entry {
                 label: t("settings.menu.console"),
@@ -9223,6 +9786,1575 @@ impl App {
         match crate::links::open(&url) {
             Ok(()) => self.show_notice(format!("Console \u{00b7} {url}")),
             Err(err) => log::warn!("could not open {url}: {err}"),
+        }
+    }
+
+    fn unterm_cli_path() -> String {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("unterm-cli")))
+            .filter(|path| path.is_file())
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unterm-cli".to_string())
+    }
+
+    fn open_language_selector(&mut self) {
+        let current = unterm_services::i18n::current_locale();
+        let is_zh = current.starts_with("zh");
+        let entries: Vec<crate::palette::Entry> = unterm_services::i18n::available_locales()
+            .iter()
+            .map(|&(code, native_name)| {
+                let active = code.eq_ignore_ascii_case(current);
+                let mark = if active { "\u{2713} " } else { "  " };
+                crate::palette::Entry {
+                    label: format!("{mark}{native_name}"),
+                    hint: code.to_string(),
+                    command: crate::palette::Command::SetLanguage {
+                        code: code.to_string(),
+                    },
+                }
+            })
+            .collect();
+        let title = if is_zh {
+            "界面语言 (UI Language)".to_string()
+        } else {
+            "UI Language".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn set_language(&mut self, code: &str) {
+        unterm_services::i18n::set_locale(code);
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        self.show_notice(if is_zh {
+            format!("\u{2713} 界面语言已切换为 {code}")
+        } else {
+            format!("\u{2713} UI language set to {code}")
+        });
+        self.window.drawn_revision = None;
+    }
+
+    fn open_cursor_selector(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let options = [
+            (
+                "SteadyBlock",
+                crate::terminal::CursorShape::Block,
+                false,
+                if is_zh { "常亮方块 (Steady Block)" } else { "Steady Block" },
+            ),
+            (
+                "BlinkingBlock",
+                crate::terminal::CursorShape::Block,
+                true,
+                if is_zh { "闪烁方块 (Blinking Block)" } else { "Blinking Block" },
+            ),
+            (
+                "SteadyBar",
+                crate::terminal::CursorShape::Bar,
+                false,
+                if is_zh { "常亮竖线 (Steady Bar)" } else { "Steady Bar" },
+            ),
+            (
+                "BlinkingBar",
+                crate::terminal::CursorShape::Bar,
+                true,
+                if is_zh { "闪烁竖线 (Blinking Bar)" } else { "Blinking Bar" },
+            ),
+            (
+                "SteadyUnderline",
+                crate::terminal::CursorShape::Underline,
+                false,
+                if is_zh { "常亮下划线 (Steady Underline)" } else { "Steady Underline" },
+            ),
+            (
+                "BlinkingUnderline",
+                crate::terminal::CursorShape::Underline,
+                true,
+                if is_zh { "闪烁下划线 (Blinking Underline)" } else { "Blinking Underline" },
+            ),
+        ];
+        let entries = options
+            .into_iter()
+            .map(|(style, shape, blinking, label)| {
+                let active =
+                    self.cursor_style.shape == shape && self.cursor_style.blinking == blinking;
+                let mark = if active { "\u{2713} " } else { "  " };
+                crate::palette::Entry {
+                    label: format!("{mark}{label}"),
+                    hint: style.to_string(),
+                    command: crate::palette::Command::SetCursorStyle {
+                        style: style.to_string(),
+                    },
+                }
+            })
+            .collect();
+        let title = if is_zh {
+            "光标形状与闪烁 (Cursor Style)".to_string()
+        } else {
+            "Cursor Style & Blink".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn set_cursor_style(&mut self, style: &str) {
+        let (shape, blinking) = match style {
+            "SteadyBlock" => (crate::terminal::CursorShape::Block, false),
+            "BlinkingBlock" => (crate::terminal::CursorShape::Block, true),
+            "SteadyBar" => (crate::terminal::CursorShape::Bar, false),
+            "BlinkingBar" => (crate::terminal::CursorShape::Bar, true),
+            "SteadyUnderline" => (crate::terminal::CursorShape::Underline, false),
+            "BlinkingUnderline" => (crate::terminal::CursorShape::Underline, true),
+            _ => (crate::terminal::CursorShape::Block, true),
+        };
+        self.cursor_style = crate::terminal::CursorStyle { shape, blinking };
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        self.show_notice(if is_zh {
+            format!("\u{2713} 光标样式已切换为 {style}")
+        } else {
+            format!("\u{2713} Cursor style set to {style}")
+        });
+        self.window.drawn_revision = None;
+    }
+
+    fn current_scrollback_lines() -> usize {
+        if let Some(path) = unterm_protocol::state_path("scrollback.json") {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(n) = val
+                        .get("lines")
+                        .or_else(|| val.get("scrollback_lines"))
+                        .and_then(|v| v.as_u64())
+                    {
+                        if n > 0 {
+                            return n as usize;
+                        }
+                    }
+                }
+            }
+        }
+        10_000
+    }
+
+    fn open_scrollback_selector(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let current = Self::current_scrollback_lines();
+        let presets: [usize; 5] = [5_000, 10_000, 50_000, 100_000, 500_000];
+        let entries = presets
+            .into_iter()
+            .map(|lines| {
+                let active = current == lines;
+                let mark = if active { "\u{2713} " } else { "  " };
+                crate::palette::Entry {
+                    label: format!("{mark}{lines} lines"),
+                    hint: if lines == 10_000 {
+                        "Default".to_string()
+                    } else {
+                        String::new()
+                    },
+                    command: crate::palette::Command::SetScrollbackLines { lines },
+                }
+            })
+            .collect();
+        let title = if is_zh {
+            "历史回滚行数上限 (Scrollback Limit)".to_string()
+        } else {
+            "Scrollback History Limit".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn set_scrollback_lines(&mut self, lines: usize) {
+        let clamped = lines.clamp(1_000, 1_000_000);
+        if let Some(path) = unterm_protocol::state_path("scrollback.json") {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let body = format!("{{\n  \"lines\": {clamped},\n  \"scrollback_lines\": {clamped}\n}}\n");
+            let _ = std::fs::write(path, body);
+        }
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        self.show_notice(if is_zh {
+            format!("\u{2713} 新会话回滚行数已设为 {clamped}")
+        } else {
+            format!("\u{2713} Scrollback limit set to {clamped} lines")
+        });
+        self.window.drawn_revision = None;
+    }
+
+    fn open_mcp_clients(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let cli = Self::unterm_cli_path();
+        let list = unterm_settings::clients::status(Some(&cli));
+        let clients = list.as_array().cloned().unwrap_or_default();
+        let mut entries = Vec::with_capacity(clients.len() + 1);
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "\u{2728} 一键开启全部已安装 AI 助手".to_string()
+            } else {
+                "\u{2728} Auto-Connect All Installed AI Clients".to_string()
+            },
+            hint: "setup-ai".to_string(),
+            command: crate::palette::Command::SetupAiAgents,
+        });
+        for client in clients {
+            let id = client.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = client.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+            let connected = client.get("terminal").and_then(|v| v.as_bool()).unwrap_or(false);
+            let detected = client.get("detected").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mark = if connected { "\u{2713} " } else { "  " };
+            let status_hint = match (connected, detected) {
+                (true, _) => {
+                    if is_zh { "已接入 · 回车断开" } else { "Connected · Enter to disconnect" }
+                }
+                (false, true) => {
+                    if is_zh { "已检测到 · 回车接入" } else { "Detected · Enter to connect" }
+                }
+                (false, false) => {
+                    if is_zh { "未安装 · 回车写入配置" } else { "Not detected · Enter to write config" }
+                }
+            };
+            entries.push(crate::palette::Entry {
+                label: format!("{mark}{name}"),
+                hint: status_hint.to_string(),
+                command: crate::palette::Command::ToggleMcpClient {
+                    id: id.to_string(),
+                    connect: !connected,
+                },
+            });
+        }
+        let title = if is_zh {
+            "AI 助手 MCP 接入管理 (Per-Client MCP)".to_string()
+        } else {
+            "AI Clients MCP Manager".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn toggle_mcp_client(&mut self, id: &str, connect: bool) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let cli = Self::unterm_cli_path();
+        match unterm_settings::clients::set(id, &cli, connect) {
+            Ok(_) => {
+                self.show_notice(if is_zh {
+                    if connect {
+                        format!("\u{2713} 已接入 {id} MCP")
+                    } else {
+                        format!("\u{2713} 已断开 {id} MCP")
+                    }
+                } else if connect {
+                    format!("\u{2713} Connected {id} MCP")
+                } else {
+                    format!("\u{2713} Disconnected {id} MCP")
+                });
+                self.open_mcp_clients();
+            }
+            Err(err) => {
+                self.show_notice(format!("MCP config error: {err}"));
+            }
+        }
+    }
+
+    fn open_paired_devices(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let devices = unterm_settings::remote::list_devices();
+        let mut entries = Vec::with_capacity(devices.len() + 1);
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "+ 扫码配对新手机 (Pocket Unterm QR)".to_string()
+            } else {
+                "+ Pair New Mobile Device (Pocket Unterm QR)".to_string()
+            },
+            hint: "QR + PIN".to_string(),
+            command: crate::palette::Command::OpenPocketQr,
+        });
+        for device in devices {
+            entries.push(crate::palette::Entry {
+                label: format!("\u{1F4F1} {}", device.device_name),
+                hint: if is_zh {
+                    format!("{} · 回车撤销授权", device.device_id)
+                } else {
+                    format!("{} · Enter to revoke", device.device_id)
+                },
+                command: crate::palette::Command::RevokePairedDevice {
+                    device_id: device.device_id,
+                },
+            });
+        }
+        let title = if is_zh {
+            "已配对手机设备管理 (Paired Mobile Devices)".to_string()
+        } else {
+            "Paired Mobile Devices".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn revoke_paired_device(&mut self, device_id: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        if unterm_settings::remote::revoke_device(device_id).unwrap_or(false) {
+            self.show_notice(if is_zh {
+                format!("\u{2713} 已撤销设备 {device_id}")
+            } else {
+                format!("\u{2713} Revoked device {device_id}")
+            });
+        }
+        self.open_paired_devices();
+    }
+
+    fn open_config_file(&mut self) {
+        let path = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".config")
+            .join("unterm")
+            .join("unterm.conf");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if !path.exists() {
+            let default_conf = "# Unterm Configuration (unterm.conf)\n# Changes take effect automatically on save.\n\n# font_size = 14.0\n# default_cursor_style = \"BlinkingBlock\"\n";
+            let _ = std::fs::write(&path, default_conf);
+        }
+        let target = path.display().to_string();
+        if let Err(err) = crate::links::open_file_location(&target, None) {
+            log::warn!("could not open {target}: {err}");
+            self.show_notice(format!("unterm.conf: {target}"));
+        } else {
+            self.show_notice(format!("unterm.conf \u{00b7} {target}"));
+        }
+    }
+
+    fn read_proxy_json() -> serde_json::Value {
+        unterm_protocol::state_path("proxy.json")
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({"enabled": false, "mode": "auto"}))
+    }
+
+    fn write_proxy_json(val: &serde_json::Value) -> anyhow::Result<()> {
+        let path = unterm_protocol::state_path("proxy.json")
+            .unwrap_or_else(|| std::path::PathBuf::from(".unterm").join("proxy.json"));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let body = serde_json::to_string_pretty(val)?;
+        std::fs::write(&path, body)?;
+        let enabled = val
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let _ = unterm_services::launch_env::set_unterm_proxy_enabled(enabled);
+        Ok(())
+    }
+
+    fn open_proxy_settings(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let cfg = Self::read_proxy_json();
+        let enabled = unterm_services::launch_env::unterm_proxy_enabled();
+        let mode = cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("auto");
+        let probed = unterm_services::launch_env::probe_unterm_proxy();
+        let detected = unterm_services::system_proxy::detect();
+
+        let mut entries = Vec::new();
+
+        // 1. Master ON / OFF toggle for new shells
+        entries.push(crate::palette::Entry {
+            label: if enabled {
+                if is_zh {
+                    "\u{2713} 终端代理已开启 (点击关闭新标签页代理注入)".to_string()
+                } else {
+                    "\u{2713} Terminal Proxy ON (Enter to turn OFF for new shells)".to_string()
+                }
+            } else if is_zh {
+                "  开启终端代理 (为新开标签页自动注入 HTTP_PROXY / ALL_PROXY)".to_string()
+            } else {
+                "  Turn Terminal Proxy ON (Inject HTTP_PROXY / ALL_PROXY into new shells)"
+                    .to_string()
+            },
+            hint: match &probed {
+                Some(url) if enabled => format!("ON \u{00b7} {}", crate::statusbar::short_proxy(url)),
+                Some(url) => format!("OFF (ready: {})", crate::statusbar::short_proxy(url)),
+                None => "OFF (no reachable proxy)".to_string(),
+            },
+            command: crate::palette::Command::ToggleProxy,
+        });
+
+        // 2. Apply / Clear proxy immediately in the currently focused shell pane
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "\u{26A1} 立即在当前终端窗格生效 (export HTTP_PROXY / ALL_PROXY)".to_string()
+            } else {
+                "\u{26A1} Apply Proxy to Current Pane Now (export HTTP_PROXY / ALL_PROXY)"
+                    .to_string()
+            },
+            hint: format!("pane {}", self.focused_session()),
+            command: crate::palette::Command::ApplyProxyToCurrentPane { enable: true },
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "\u{2715} 清除当前终端窗格的代理环境变量 (unset HTTP_PROXY / ALL_PROXY)".to_string()
+            } else {
+                "\u{2715} Clear Proxy Env in Current Pane (unset HTTP_PROXY / ALL_PROXY)"
+                    .to_string()
+            },
+            hint: format!("pane {}", self.focused_session()),
+            command: crate::palette::Command::ApplyProxyToCurrentPane { enable: false },
+        });
+
+        // 3. Clash / Mihomo live node switcher (if Clash is running or configured)
+        if let Some(ep) = unterm_services::clash_api::discover_cached() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "\u{1F310} Clash / Mihomo 策略组与节点切换 (Live Node Switcher)".to_string()
+                } else {
+                    "\u{1F310} Clash / Mihomo Node Switcher".to_string()
+                },
+                hint: ep.label(),
+                command: crate::palette::Command::OpenClashGroups,
+            });
+        } else {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "\u{1F310} Clash / Mihomo 节点切换 (未检测到运行中的 Clash 控制器)".to_string()
+                } else {
+                    "\u{1F310} Clash / Mihomo Node Switcher (Controller not detected)".to_string()
+                },
+                hint: "127.0.0.1:9090 / verge.sock".to_string(),
+                command: crate::palette::Command::OpenClashGroups,
+            });
+        }
+
+        // 4. Mode: Auto-Detect System / Local Proxy
+        let auto_mark = if mode != "manual" { "\u{2713} " } else { "  " };
+        let detected_hint = detected
+            .as_ref()
+            .and_then(|d| d.primary_http().or(d.socks.as_deref()).map(|u| format!("{u} ({})", d.source)))
+            .unwrap_or_else(|| "scutil / env / port scan".to_string());
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                format!("{auto_mark}自动跟随系统代理 / 自动扫描本地端口 (Auto Mode)")
+            } else {
+                format!("{auto_mark}Auto-Detect System & Local Proxy (Auto Mode)")
+            },
+            hint: detected_hint,
+            command: crate::palette::Command::SetProxyPreset {
+                mode: "auto".to_string(),
+                http_proxy: None,
+                socks_proxy: None,
+            },
+        });
+
+        // 5. Common Local Port Presets (Manual Mode)
+        let current_http = cfg
+            .get("http_proxy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let presets = [
+            (
+                "Clash Verge Rev (127.0.0.1:7897)",
+                "http://127.0.0.1:7897",
+                "socks5://127.0.0.1:7897",
+            ),
+            (
+                "Clash / ClashX / Mihomo (127.0.0.1:7890)",
+                "http://127.0.0.1:7890",
+                "socks5://127.0.0.1:7890",
+            ),
+            (
+                "V2RayU / MacV2Ray (127.0.0.1:1087 / 1080)",
+                "http://127.0.0.1:1087",
+                "socks5://127.0.0.1:1080",
+            ),
+            (
+                "Surge (127.0.0.1:6152 / 6153)",
+                "http://127.0.0.1:6152",
+                "socks5://127.0.0.1:6153",
+            ),
+        ];
+        for (title_str, http_url, socks_url) in presets {
+            let active = mode == "manual" && current_http == http_url;
+            let mark = if active { "\u{2713} " } else { "  " };
+            let reachable = unterm_services::launch_env::proxy_endpoint_reachable(http_url);
+            let status_tag = if reachable {
+                if is_zh { "在线" } else { "reachable" }
+            } else if is_zh {
+                "未监听"
+            } else {
+                "offline"
+            };
+            entries.push(crate::palette::Entry {
+                label: format!("{mark}{title_str}"),
+                hint: format!("{http_url} ({status_tag})"),
+                command: crate::palette::Command::SetProxyPreset {
+                    mode: "manual".to_string(),
+                    http_proxy: Some(http_url.to_string()),
+                    socks_proxy: Some(socks_url.to_string()),
+                },
+            });
+        }
+
+        // 6. Custom Proxy URL input & Edit proxy.json
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "  输入自定义代理地址与端口 (Custom Proxy URL…)" .to_string()
+            } else {
+                "  Enter Custom Proxy URL & Port…".to_string()
+            },
+            hint: if !current_http.is_empty() {
+                current_http.to_string()
+            } else {
+                "http://127.0.0.1:port".to_string()
+            },
+            command: crate::palette::Command::OpenCustomProxyInput,
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "  高级：在编辑器中打开 ~/.unterm/proxy.json (多节点轮换池)".to_string()
+            } else {
+                "  Advanced: Edit ~/.unterm/proxy.json in Editor".to_string()
+            },
+            hint: "proxy.json".to_string(),
+            command: crate::palette::Command::OpenProxyConfigFile,
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "\u{1F5A5} 打开设置 (主题 / 代理 / 会话 / 工作台)".to_string()
+            } else {
+                "\u{1F5A5} Open Settings (Themes / Proxy / Sessions)".to_string()
+            },
+            hint: {
+                let p = Self::resolve_settings_http_port();
+                if p != 0 {
+                    format!("http://127.0.0.1:{p}")
+                } else {
+                    "settings".to_string()
+                }
+            },
+            command: crate::palette::Command::OpenSettings,
+        });
+
+        let title = if is_zh {
+            "网络代理与 Clash 节点设置 (Network Proxy & Clash)".to_string()
+        } else {
+            "Network Proxy & Clash Settings".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn apply_proxy_to_current_pane(&mut self, enable: bool) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane_id = self.focused_session();
+        if !enable {
+            let cmd = "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy\r";
+            let _ = self.engine.write_input(pane_id, cmd);
+            let _ = unterm_services::launch_env::set_unterm_proxy_enabled(false);
+            self.show_notice(if is_zh {
+                "\u{2713} 已清除当前窗格代理并关闭新窗格代理注入".to_string()
+            } else {
+                "\u{2713} Cleared proxy env in current pane and disabled for new shells"
+                    .to_string()
+            });
+            return;
+        }
+        let _ = unterm_services::launch_env::set_unterm_proxy_enabled(true);
+        let Some(env_pairs) = unterm_services::launch_env::read_unterm_proxy_env() else {
+            self.show_notice(if is_zh {
+                "\u{26A0} 未检测到可用的本地代理端口，请先启动 Clash/代理软件或指定端口"
+                    .to_string()
+            } else {
+                "\u{26A0} No reachable proxy endpoint found".to_string()
+            });
+            return;
+        };
+        let mut exports = Vec::new();
+        for (k, v) in &env_pairs {
+            exports.push(format!("{k}={}", shell_quoted_path(v)));
+        }
+        let cmd = format!("export {}\r", exports.join(" "));
+        let _ = self.engine.write_input(pane_id, &cmd);
+        let summary = env_pairs
+            .iter()
+            .find(|(k, _)| k == "HTTP_PROXY" || k == "ALL_PROXY")
+            .map(|(_, v)| crate::statusbar::short_proxy(v))
+            .unwrap_or_else(|| "proxy".to_string());
+        self.show_notice(if is_zh {
+            format!("\u{2713} 已向当前窗格注入代理 ({summary})")
+        } else {
+            format!("\u{2713} Injected proxy ({summary}) into current pane")
+        });
+    }
+
+    fn set_proxy_preset(
+        &mut self,
+        mode: &str,
+        http_proxy: Option<&str>,
+        socks_proxy: Option<&str>,
+    ) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let mut cfg = Self::read_proxy_json();
+        if !cfg.is_object() {
+            cfg = serde_json::json!({});
+        }
+        cfg["enabled"] = serde_json::Value::Bool(true);
+        cfg["mode"] = serde_json::Value::String(mode.to_string());
+        if let Some(http) = http_proxy {
+            cfg["http_proxy"] = serde_json::Value::String(http.to_string());
+        }
+        if let Some(socks) = socks_proxy {
+            cfg["socks_proxy"] = serde_json::Value::String(socks.to_string());
+        }
+        if let Err(err) = Self::write_proxy_json(&cfg) {
+            self.show_notice(format!("Failed to save proxy.json: {err}"));
+            return;
+        }
+        let desc = http_proxy.unwrap_or("Auto");
+        self.show_notice(if is_zh {
+            format!("\u{2713} 代理模式已切换为: {desc} (已自动开启终端代理)")
+        } else {
+            format!("\u{2713} Proxy set to: {desc} (Enabled)")
+        });
+        self.open_proxy_settings();
+    }
+
+    fn open_custom_proxy_input(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let cfg = Self::read_proxy_json();
+        let current = cfg
+            .get("http_proxy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http://127.0.0.1:7890")
+            .to_string();
+        let entries = vec![crate::palette::Entry {
+            label: if is_zh {
+                "按 Enter 保存上方输入的代理地址 (如 http://127.0.0.1:7890 或 :7897)".to_string()
+            } else {
+                "Press Enter to save the proxy URL typed above (e.g. http://127.0.0.1:7890)"
+                    .to_string()
+            },
+            hint: "Enter".to_string(),
+            command: crate::palette::Command::SaveCustomProxyUrl,
+        }];
+        let mut palette = crate::palette::Palette::writing(entries);
+        palette.query = current;
+        self.window.palette = Some(palette);
+        self.window.drawn_revision = None;
+    }
+
+    fn save_custom_proxy_url(&mut self, raw: &str) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            self.open_proxy_settings();
+            return;
+        }
+        let url = if trimmed.starts_with(':') {
+            format!("http://127.0.0.1{trimmed}")
+        } else if trimmed.chars().all(|c| c.is_ascii_digit()) {
+            format!("http://127.0.0.1:{trimmed}")
+        } else if !trimmed.contains("://") {
+            format!("http://{trimmed}")
+        } else {
+            trimmed.to_string()
+        };
+        let socks = if let Some(rest) = url.strip_prefix("http://") {
+            Some(format!("socks5://{rest}"))
+        } else {
+            None
+        };
+        self.set_proxy_preset("manual", Some(&url), socks.as_deref());
+    }
+
+    fn open_clash_groups(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(ep) = unterm_services::clash_api::discover_cached() else {
+            self.show_notice(if is_zh {
+                "未检测到运行中的 Clash / Mihomo 控制器 (127.0.0.1:9090 或 verge.sock)".to_string()
+            } else {
+                "No active Clash / Mihomo controller detected".to_string()
+            });
+            return;
+        };
+        let Ok(proxies_map) = unterm_services::clash_api::proxies(&ep) else {
+            self.show_notice("Failed to read /proxies from Clash controller".to_string());
+            return;
+        };
+        let Some(obj) = proxies_map.as_object() else {
+            return;
+        };
+        let mut groups: Vec<(String, String, usize)> = obj
+            .iter()
+            .filter_map(|(name, v)| {
+                let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if !kind.eq_ignore_ascii_case("Selector") {
+                    return None;
+                }
+                let now = v
+                    .get("now")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let count = v
+                    .get("all")
+                    .and_then(|a| a.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                Some((name.clone(), now, count))
+            })
+            .collect();
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let entries = groups
+            .into_iter()
+            .map(|(group, now, count)| crate::palette::Entry {
+                label: format!("\u{1F310} {group}"),
+                hint: if is_zh {
+                    format!("当前: {now} ({count} 个节点)")
+                } else {
+                    format!("Current: {now} ({count} nodes)")
+                },
+                command: crate::palette::Command::OpenClashGroupNodes { group },
+            })
+            .collect();
+        let title = if is_zh {
+            format!("Clash 策略组选择 ({})", ep.label())
+        } else {
+            format!("Clash Selector Groups ({})", ep.label())
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn open_clash_group_nodes(&mut self, group: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(ep) = unterm_services::clash_api::discover_cached() else {
+            return;
+        };
+        let Ok(proxies_map) = unterm_services::clash_api::proxies(&ep) else {
+            return;
+        };
+        let Some(group_val) = proxies_map.get(group) else {
+            return;
+        };
+        let now = group_val
+            .get("now")
+            .and_then(|n| n.as_str())
+            .unwrap_or("");
+        let all = group_val
+            .get("all")
+            .and_then(|a| a.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let entries = all
+            .into_iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .map(|node| {
+                let active = node == now;
+                let mark = if active { "\u{2713} " } else { "  " };
+                let delay_hint = proxies_map
+                    .get(&node)
+                    .and_then(|n| n.get("history"))
+                    .and_then(|h| h.as_array())
+                    .and_then(|arr| arr.last())
+                    .and_then(|last| last.get("delay"))
+                    .and_then(|d| d.as_u64())
+                    .filter(|&d| d > 0)
+                    .map(|d| format!("{d} ms"))
+                    .unwrap_or_default();
+                crate::palette::Entry {
+                    label: format!("{mark}{node}"),
+                    hint: delay_hint,
+                    command: crate::palette::Command::SelectClashNode {
+                        group: group.to_string(),
+                        node,
+                    },
+                }
+            })
+            .collect();
+        let title = if is_zh {
+            format!("切换 Clash 节点 \u{00b7} {group}")
+        } else {
+            format!("Switch Clash Node \u{00b7} {group}")
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn select_clash_node(&mut self, group: &str, node: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(ep) = unterm_services::clash_api::discover_cached() else {
+            return;
+        };
+        match unterm_services::clash_api::select(&ep, group, node) {
+            Ok(()) => {
+                self.show_notice(if is_zh {
+                    format!("\u{2713} Clash [{group}] 已切换至: {node}")
+                } else {
+                    format!("\u{2713} Clash [{group}] switched to: {node}")
+                });
+                self.open_clash_groups();
+            }
+            Err(err) => {
+                self.show_notice(format!("Clash switch failed: {err}"));
+            }
+        }
+    }
+
+    fn open_proxy_config_file(&mut self) {
+        let path = unterm_protocol::state_path("proxy.json")
+            .unwrap_or_else(|| std::path::PathBuf::from(".unterm").join("proxy.json"));
+        if !path.exists() {
+            let _ = Self::write_proxy_json(&serde_json::json!({
+                "enabled": unterm_services::launch_env::unterm_proxy_enabled(),
+                "mode": "auto"
+            }));
+        }
+        let target = path.display().to_string();
+        let _ = crate::links::open_file_location(&target, None);
+        self.show_notice(format!("proxy.json \u{00b7} {target}"));
+    }
+
+    fn open_checkpoints(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(cwd) = self.current_directory() else {
+            self.show_notice(if is_zh {
+                "当前窗格没有工作目录".to_string()
+            } else {
+                "No working directory in the focused pane".to_string()
+            });
+            return;
+        };
+        let repo = unterm_services::cockpit::review::repo_root(&cwd).unwrap_or(cwd);
+        let repo_str = repo.display().to_string();
+        let all_checkpoints = unterm_services::cockpit::review::checkpoints();
+        let checkpoints = all_checkpoints.get(&repo_str).cloned().unwrap_or_default();
+        let mut entries = Vec::with_capacity(checkpoints.len() * 2 + 1);
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "+ 立即创建当前工作区 Git 检查点 (Snapshot)".to_string()
+            } else {
+                "+ Create Git Checkpoint Snapshot Now".to_string()
+            },
+            hint: repo_str.clone(),
+            command: crate::palette::Command::CreateCheckpoint,
+        });
+        for cp in checkpoints {
+            let short_sha: String = cp.sha.chars().take(8).collect();
+            let desc = format!("{} @ {}", cp.agent, cp.at);
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("\u{21BA} 回滚到 {short_sha} ({desc})")
+                } else {
+                    format!("\u{21BA} Rollback to {short_sha} ({desc})")
+                },
+                hint: format!("restore {short_sha}"),
+                command: crate::palette::Command::RestoreCheckpoint {
+                    repo: repo_str.clone(),
+                    oid: cp.sha.clone(),
+                    label: desc,
+                },
+            });
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("   查看变更对比 Diff \u{00b7} {short_sha}")
+                } else {
+                    format!("   Inspect Diff Since \u{00b7} {short_sha}")
+                },
+                hint: "git diff".to_string(),
+                command: crate::palette::Command::DiffCheckpoint {
+                    repo: repo_str.clone(),
+                    oid: cp.sha,
+                },
+            });
+        }
+        let title = if is_zh {
+            "Git 自动检查点与一键回滚 (Checkpoints)".to_string()
+        } else {
+            "Git Checkpoints & 1-Click Rollback".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn create_checkpoint(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(cwd) = self.current_directory() else {
+            return;
+        };
+        let repo = unterm_services::cockpit::review::repo_root(&cwd).unwrap_or(cwd);
+        let pane_id = self.focused_session() as u64;
+        let agent = crate::statsbar::known_facts(pane_id as usize)
+            .agent_id
+            .unwrap_or_else(|| "manual".to_string());
+        match unterm_services::cockpit::review::record_auto_checkpoint(&repo, &agent, pane_id) {
+            Ok(Some(sha)) => {
+                let short_sha: String = sha.chars().take(8).collect();
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已创建检查点 {short_sha}")
+                } else {
+                    format!("\u{2713} Created checkpoint {short_sha}")
+                });
+            }
+            Ok(None) => {
+                self.show_notice(if is_zh {
+                    "当前工作区无法创建检查点".to_string()
+                } else {
+                    "Could not create checkpoint in current directory".to_string()
+                });
+            }
+            Err(err) => {
+                self.show_notice(format!("checkpoint failed: {err}"));
+            }
+        }
+    }
+
+    fn restore_checkpoint(&mut self, repo: &str, oid: &str, label: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let path = std::path::Path::new(repo);
+        match unterm_services::cockpit::review::rollback(path, oid) {
+            Ok(()) => {
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已回滚至检查点: {label}")
+                } else {
+                    format!("\u{2713} Restored checkpoint: {label}")
+                });
+            }
+            Err(err) => {
+                self.show_notice(format!("restore failed: {err}"));
+            }
+        }
+    }
+
+    fn diff_checkpoint(&mut self, repo: &str, oid: &str) {
+        let path = std::path::Path::new(repo);
+        match unterm_services::cockpit::review::diff(path, oid) {
+            Ok(val) => {
+                let patch = val
+                    .get("patch")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let rows: Vec<crate::palette::Entry> = if patch.trim().is_empty() {
+                    vec![crate::palette::Entry {
+                        label: "(No differences since checkpoint)".to_string(),
+                        hint: String::new(),
+                        command: crate::palette::Command::Nothing,
+                    }]
+                } else {
+                    patch
+                        .lines()
+                        .take(120)
+                        .map(|line| crate::palette::Entry {
+                            label: line.to_string(),
+                            hint: String::new(),
+                            command: crate::palette::Command::Nothing,
+                        })
+                        .collect()
+                };
+                self.open_named_palette(rows, format!("Diff since {oid}"));
+            }
+            Err(err) => {
+                self.show_notice(format!("diff failed: {err}"));
+            }
+        }
+    }
+
+    fn open_autonomy_selector(&mut self) {
+        use unterm_services::tool_risk::Autonomy;
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let current = unterm_settings::run_settings().autonomy;
+        let item = |level: Autonomy, desc_zh: &str, desc_en: &str| {
+            let mark = if current == level { "\u{2713} " } else { "  " };
+            crate::palette::Entry {
+                label: format!("{mark}{}", level.label()),
+                hint: if is_zh {
+                    desc_zh.to_string()
+                } else {
+                    desc_en.to_string()
+                },
+                command: crate::palette::Command::SetAutonomy {
+                    level: level.as_str().to_string(),
+                },
+            }
+        };
+        let entries = vec![
+            item(
+                Autonomy::Cautious,
+                "保守模式 · 写操作与命令执行前均需审批",
+                "Ask before file writes and shell commands",
+            ),
+            item(
+                Autonomy::Balanced,
+                "平衡模式 (推荐) · 普通读写放行，高危破坏操作拦截",
+                "Recommended · Allow safe work, gate destructive actions",
+            ),
+            item(
+                Autonomy::Autonomous,
+                "全自主模式 · 自动放行，适合沙盒或无人值守任务",
+                "Auto-approve all tool calls for unattended runs",
+            ),
+        ];
+        let title = if is_zh {
+            "AI 自主权与安全防线级别 (Autonomy Level)".to_string()
+        } else {
+            "AI Autonomy & Safety Guardrail Level".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn set_autonomy(&mut self, level: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(autonomy) = unterm_services::tool_risk::Autonomy::parse(level) else {
+            return;
+        };
+        let mut settings = unterm_settings::run_settings();
+        settings.autonomy = autonomy;
+        if let Err(err) = unterm_settings::set_run_settings(settings) {
+            self.show_notice(format!("Failed to save autonomy: {err}"));
+            return;
+        }
+        self.show_notice(if is_zh {
+            format!("\u{2713} AI 安全级别已切换为: {}", autonomy.label())
+        } else {
+            format!("\u{2713} AI Autonomy set to: {}", autonomy.label())
+        });
+    }
+
+    fn open_agent_handoff(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let source_pane = self.focused_session();
+        let installed = unterm_services::cockpit::fleet::installed_agents();
+        let candidates: Vec<(String, String)> = if installed.is_empty() {
+            vec![
+                ("Claude Code".to_string(), "claude".to_string()),
+                ("Codex".to_string(), "codex".to_string()),
+                ("Gemini CLI".to_string(), "gemini".to_string()),
+            ]
+        } else {
+            installed
+                .into_iter()
+                .map(|prog| (prog.to_string(), prog.to_string()))
+                .collect()
+        };
+        let entries = candidates
+            .into_iter()
+            .map(|(name, program)| crate::palette::Entry {
+                label: if is_zh {
+                    format!("\u{1F91D} 接力给 {name} (携带当前窗格上下文与 Git Diff)")
+                } else {
+                    format!("\u{1F91D} Handoff to {name} (with screen tail & git diff)")
+                },
+                hint: format!("pane {source_pane} \u{2192} {program}"),
+                command: crate::palette::Command::ExecuteAgentHandoff {
+                    source_pane,
+                    program,
+                },
+            })
+            .collect();
+        let title = if is_zh {
+            "跨 Agent 上下文无缝接力 (Cross-Agent Handoff)".to_string()
+        } else {
+            "Cross-Agent Context Handoff".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn execute_agent_handoff(&mut self, source_pane: usize, program: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let screen_tail = self
+            .engine
+            .read_screen(source_pane)
+            .ok()
+            .map(|s| {
+                let len = s.lines.len();
+                s.lines
+                    .into_iter()
+                    .skip(len.saturating_sub(25))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let cwd = self.focused_directory();
+        let git_status = cwd
+            .as_deref()
+            .and_then(|dir| {
+                std::process::Command::new("git")
+                    .args(["status", "--short"])
+                    .current_dir(dir)
+                    .output()
+                    .ok()
+            })
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .unwrap_or_default();
+
+        let handoff_dir = unterm_protocol::state_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join(".unterm"))
+            .join("handoffs");
+        let _ = std::fs::create_dir_all(&handoff_dir);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let handoff_file = handoff_dir.join(format!("handoff-pane-{source_pane}-{stamp}.md"));
+        let doc = format!(
+            "# Unterm Cross-Agent Handoff (from pane {source_pane})\n\n## Working Directory\n`{}`\n\n## Git Status\n```\n{}\n```\n\n## Recent Terminal Context\n```\n{}\n```\n",
+            cwd.as_deref().unwrap_or("."),
+            if git_status.is_empty() { "(clean)" } else { &git_status },
+            screen_tail.trim()
+        );
+        let _ = std::fs::write(&handoff_file, &doc);
+
+        self.split(unterm_engine::next_core::layout::SplitAxis::Horizontal);
+        let new_pane = self.focused_session();
+        if new_pane != source_pane {
+            let prompt = format!(
+                "{} \"Please read {} and continue the task from pane {}.\"\r",
+                program,
+                handoff_file.display(),
+                source_pane
+            );
+            let _ = self.engine.write_input(new_pane, &prompt);
+            self.show_notice(if is_zh {
+                format!("\u{2713} 已在右侧分屏启动 {program} 并注入上下文")
+            } else {
+                format!("\u{2713} Handed off pane {source_pane} to {program}")
+            });
+        }
+    }
+
+    fn build_failure_report(&self, pane_id: usize) -> (String, Option<i32>) {
+        let exit_code = self
+            .window
+            .pane_notices
+            .get(&pane_id)
+            .and_then(|n| n.last_exit_code);
+        let screen_tail = self
+            .engine
+            .read_screen(pane_id)
+            .ok()
+            .map(|s| {
+                let non_empty: Vec<String> = s
+                    .lines
+                    .into_iter()
+                    .map(|l| l.trim_end().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                let len = non_empty.len();
+                non_empty
+                    .into_iter()
+                    .skip(len.saturating_sub(40))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let cwd = self.focused_directory().unwrap_or_else(|| ".".to_string());
+        let git_status = std::process::Command::new("git")
+            .args(["status", "--short"])
+            .current_dir(&cwd)
+            .output()
+            .ok()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .unwrap_or_default();
+        let report = format!(
+            "# Unterm Command Failure Diagnosis (Pane {pane_id})\n\n- **Working Directory**: `{cwd}`\n- **Last Exit Code**: `{}`\n\n## Git Status\n```\n{}\n```\n\n## Terminal Error Output (Last 40 Lines)\n```\n{}\n```\n",
+            exit_code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            if git_status.is_empty() { "(clean)" } else { &git_status },
+            screen_tail.trim()
+        );
+        (report, exit_code)
+    }
+
+    fn open_failure_diagnosis(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let source_pane = self.focused_session();
+        let (_, exit_code) = self.build_failure_report(source_pane);
+        let installed = unterm_services::cockpit::fleet::installed_agents();
+        let candidates: Vec<(String, String)> = if installed.is_empty() {
+            vec![
+                ("Claude Code".to_string(), "claude".to_string()),
+                ("Codex".to_string(), "codex".to_string()),
+                ("Gemini CLI".to_string(), "gemini".to_string()),
+            ]
+        } else {
+            installed
+                .into_iter()
+                .map(|prog| (prog.to_string(), prog.to_string()))
+                .collect()
+        };
+        let mut entries = vec![crate::palette::Entry {
+            label: if is_zh {
+                "\u{1F4CB} 复制结构化报错诊断包到剪贴板 (Markdown)".to_string()
+            } else {
+                "\u{1F4CB} Copy Structured Error Report to Clipboard (Markdown)".to_string()
+            },
+            hint: exit_code
+                .map(|c| format!("exit {c}"))
+                .unwrap_or_else(|| "40 lines + git status".to_string()),
+            command: crate::palette::Command::CopyFailureContext,
+        }];
+        for (name, program) in candidates {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("\u{1FA7A} 在右侧分屏启动 {name} 自动诊断并修复报错")
+                } else {
+                    format!("\u{1FA7A} Diagnose & Fix in Split Pane with {name}")
+                },
+                hint: format!("pane {source_pane} \u{2192} {program}"),
+                command: crate::palette::Command::FixFailureWithAgent { agent: program },
+            });
+        }
+        let title = if is_zh {
+            match exit_code {
+                Some(code) if code != 0 => {
+                    format!("AI 报错诊断与一键修复 (窗格 {source_pane} · 退出码 {code})")
+                }
+                _ => format!("AI 报错诊断与一键修复 (窗格 {source_pane})"),
+            }
+        } else {
+            format!("AI Command Failure Diagnosis (Pane {source_pane})")
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn copy_failure_context(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane = self.focused_session();
+        let (report, _) = self.build_failure_report(pane);
+        self.copy_text(&report);
+        self.show_notice(if is_zh {
+            "\u{2713} 已复制报错上下文诊断包到剪贴板".to_string()
+        } else {
+            "\u{2713} Copied failure diagnosis report to clipboard".to_string()
+        });
+    }
+
+    fn fix_failure_with_agent(&mut self, program: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let source_pane = self.focused_session();
+        let (report, _) = self.build_failure_report(source_pane);
+        let handoff_dir = unterm_protocol::state_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join(".unterm"))
+            .join("handoffs");
+        let _ = std::fs::create_dir_all(&handoff_dir);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let diag_file = handoff_dir.join(format!("failure-pane-{source_pane}-{stamp}.md"));
+        let _ = std::fs::write(&diag_file, &report);
+
+        self.split(unterm_engine::next_core::layout::SplitAxis::Horizontal);
+        let new_pane = self.focused_session();
+        if new_pane != source_pane {
+            let prompt = format!(
+                "{} \"Please read the command failure report in {} from pane {}, diagnose the root cause, and fix it.\"\r",
+                program,
+                diag_file.display(),
+                source_pane
+            );
+            let _ = self.engine.write_input(new_pane, &prompt);
+            self.show_notice(if is_zh {
+                format!("\u{2713} 已在右侧分屏启动 {program} 诊断窗格 {source_pane} 报错")
+            } else {
+                format!("\u{2713} Launched {program} in split pane to diagnose pane {source_pane}")
+            });
+        }
+    }
+
+    fn should_guard_paste(text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let high_risk_patterns = [
+            ("rm -rf /", "rm -rf /"),
+            ("rm -rf ~", "rm -rf ~"),
+            ("git reset --hard", "git reset --hard"),
+            ("git clean -fd", "git clean -fd"),
+            ("drop table", "DROP TABLE"),
+            ("drop database", "DROP DATABASE"),
+            ("mkfs.", "mkfs"),
+            ("dd if=", "dd if="),
+            ("chmod -r 777", "chmod -R 777"),
+            ("| sh", "pipe to sh"),
+            ("| bash", "pipe to bash"),
+            ("| zsh", "pipe to zsh"),
+        ];
+        for (pat, label) in high_risk_patterns {
+            if lower.contains(pat) {
+                return Some(format!("High-risk pattern detected: {label}"));
+            }
+        }
+        let newline_count = text.bytes().filter(|&b| b == b'\n' || b == b'\r').count();
+        if newline_count >= 5
+            || (newline_count >= 1
+                && (lower.contains("sudo ") || lower.contains("rm ") || lower.contains("curl ")))
+        {
+            return Some(format!(
+                "Multi-line command paste ({} lines)",
+                newline_count + 1
+            ));
+        }
+        None
+    }
+
+    fn open_safe_paste_confirm(&mut self, pane_id: usize, text: String, reason: String) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let first_line = text.lines().next().unwrap_or("").trim();
+        let preview: String = first_line.chars().take(48).collect();
+        let entries = vec![
+            crate::palette::Entry {
+                label: if is_zh {
+                    "\u{2713} 确认粘贴 (Paste Anyway)".to_string()
+                } else {
+                    "\u{2713} Paste Anyway".to_string()
+                },
+                hint: preview,
+                command: crate::palette::Command::ConfirmSafePaste { pane_id, text },
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "\u{2715} 取消粘贴 (Cancel)".to_string()
+                } else {
+                    "\u{2715} Cancel Paste".to_string()
+                },
+                hint: "Esc".to_string(),
+                command: crate::palette::Command::Nothing,
+            },
+        ];
+        let subject = if is_zh {
+            format!("\u{26A0} 安全粘贴拦截 · {reason}")
+        } else {
+            format!("\u{26A0} Safe Paste Guard · {reason}")
+        };
+        self.window.palette = Some(crate::palette::Palette::confirm(entries, subject));
+        self.window.drawn_revision = None;
+    }
+
+    fn perform_paste_input(&mut self, pane_id: usize, text: &str) {
+        let _ = self.engine.scroll_viewport_to(pane_id, isize::MAX);
+        match self.engine.paste_input(pane_id, text) {
+            Ok(_) => {
+                if crate::ghost::observe_paste(pane_id as u64, text) {
+                    self.window.drawn_revision = None;
+                    if let Some(live) = self.window.state.as_ref() {
+                        live.window.request_redraw();
+                    }
+                }
+                self.show_notice(unterm_services::i18n::t("interaction.pasted"));
+            }
+            Err(err) => {
+                log::warn!("could not paste: {err:#}");
+                self.show_notice(unterm_services::i18n::t("interaction.paste_failed"));
+            }
+        }
+    }
+
+    fn open_pocket_qr(&mut self) {
+        let _ = unterm_settings::remote::set_enabled(true, None);
+        match unterm_settings::remote::generate_pairing_code() {
+            Ok(bundle) => {
+                let target_url = if bundle.web_url.is_empty() {
+                    bundle.qr_uri.clone()
+                } else {
+                    bundle.web_url.clone()
+                };
+                let matrix = unterm_settings::qrcode_svg::render_matrix(&target_url);
+                self.window.pocket_qr = Some(PocketQrModal {
+                    url: target_url,
+                    pin: bundle.code,
+                    matrix,
+                });
+                self.window.drawn_revision = None;
+            }
+            Err(err) => {
+                self.show_notice(format!("Pocket QR error: {err}"));
+            }
+        }
+    }
+
+    fn append_pocket_qr(
+        &mut self,
+        window_width: f32,
+        quads: &mut unterm_render::quads::FrameQuads,
+    ) {
+        let Some(modal) = self.window.pocket_qr.clone() else {
+            return;
+        };
+        if modal.matrix.is_empty() {
+            return;
+        }
+        let metrics = self.window.font.metrics();
+        let n = modal.matrix.len() as f32;
+        let quiet = 3.0;
+        let module_px = (metrics.height * 0.45).round().max(4.0);
+        let qr_box = (n + quiet * 2.0) * module_px;
+        let card_width = (qr_box + metrics.width * 10.0).max(metrics.width * 48.0);
+        let card_height = qr_box + metrics.height * 7.5;
+        let window_height = self.window_height();
+        let left = ((window_width - card_width) / 2.0).max(12.0);
+        let top = ((window_height - card_height) / 2.0).max(self.top_bar_height() + 8.0);
+
+        quads.backgrounds.push(unterm_render::quads::Quad {
+            left: self.terminal_left(),
+            top: self.terminal_top(),
+            width: self.terminal_width(),
+            height: self.terminal_height(),
+            color: [0.02, 0.02, 0.02, 0.82],
+        });
+        let fill = mix(
+            self.window.colors.background,
+            self.window.colors.foreground,
+            0.10,
+        );
+        self.append_flyout(left, top, card_width, card_height, fill, quads);
+
+        let fg = self.window.colors.foreground;
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let title = if is_zh {
+            "\u{25C6} 手机扫码远程监控与审批 (Pocket Unterm)"
+        } else {
+            "\u{25C6} Pocket Unterm Mobile Remote"
+        };
+        crate::terminal::append_text(
+            title,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            [0.38, 0.69, 0.94, 1.0],
+            (left + metrics.width * 2.0, top + metrics.height * 0.8),
+            quads,
+        );
+        let pin_line = if is_zh {
+            format!("配对 PIN 码: {}   (同局域网手机扫码即用)", modal.pin)
+        } else {
+            format!("Pairing PIN: {}   (Scan on same Wi-Fi / LAN)", modal.pin)
+        };
+        crate::terminal::append_text(
+            &pin_line,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            fg,
+            (left + metrics.width * 2.0, top + metrics.height * 2.1),
+            quads,
+        );
+
+        let qr_left = (left + (card_width - qr_box) / 2.0).round();
+        let qr_top = (top + metrics.height * 3.6).round();
+        quads.backgrounds.extend(unterm_render::rounded::panel(
+            qr_left,
+            qr_top,
+            qr_box,
+            qr_box,
+            6.0,
+            [1.0, 1.0, 1.0, 1.0],
+        ));
+        for (r, row) in modal.matrix.iter().enumerate() {
+            for (c, &dark) in row.iter().enumerate() {
+                if dark {
+                    quads.backgrounds.push(unterm_render::quads::Quad {
+                        left: qr_left + (quiet + c as f32) * module_px,
+                        top: qr_top + (quiet + r as f32) * module_px,
+                        width: module_px,
+                        height: module_px,
+                        color: [0.06, 0.06, 0.08, 1.0],
+                    });
+                }
+            }
+        }
+
+        let footer_top = qr_top + qr_box + metrics.height * 0.7;
+        crate::terminal::append_text(
+            &modal.url,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            mix(fg, self.window.colors.background, 0.30),
+            (left + metrics.width * 2.0, footer_top),
+            quads,
+        );
+        let help = if is_zh {
+            "按 Enter 复制链接 · 按 O 在浏览器打开 · 按 Esc 关闭"
+        } else {
+            "Enter copy URL · O open in browser · Esc close"
+        };
+        crate::terminal::append_text(
+            help,
+            &mut self.window.font,
+            &mut self.window.atlas,
+            mix(fg, self.window.colors.background, 0.45),
+            (left + metrics.width * 2.0, footer_top + metrics.height * 1.2),
+            quads,
+        );
+    }
+
+    fn handle_pocket_qr_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key as WinitKey, NamedKey};
+        let Some(modal) = self.window.pocket_qr.clone() else {
+            return false;
+        };
+        match &event.logical_key {
+            WinitKey::Named(NamedKey::Escape) | WinitKey::Character(_)
+                if matches!(&event.logical_key, WinitKey::Character(c) if c.eq_ignore_ascii_case("q")) =>
+            {
+                self.window.pocket_qr = None;
+            }
+            WinitKey::Named(NamedKey::Escape) => {
+                self.window.pocket_qr = None;
+            }
+            WinitKey::Named(NamedKey::Enter) => {
+                self.copy_text(&modal.url);
+                self.show_notice(format!("\u{2713} Copied {}", modal.url));
+                self.window.pocket_qr = None;
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("o") => {
+                let _ = crate::links::open(&modal.url);
+                self.window.pocket_qr = None;
+            }
+            _ => {}
+        }
+        self.window.drawn_revision = None;
+        if let Some(live) = self.window.state.as_ref() {
+            live.window.request_redraw();
+        }
+        true
+    }
+
+    fn extract_ssh_target(process_name: &str, title: &str) -> Option<String> {
+        let stem = process_name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(process_name)
+            .trim_end_matches(".exe");
+        let lower_title = title.trim();
+        if stem.eq_ignore_ascii_case("ssh") {
+            let arg = lower_title
+                .strip_prefix("ssh ")
+                .unwrap_or(lower_title)
+                .trim();
+            if !arg.is_empty() && !arg.eq_ignore_ascii_case("ssh") {
+                return Some(arg.to_string());
+            }
+        }
+        if let Some(rest) = lower_title.strip_prefix("ssh ") {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        None
+    }
+
+    fn reconnect_ssh(&mut self, pane_id: usize) {
+        let Some(target) = self.window.ssh_targets.get(&pane_id).cloned() else {
+            self.show_notice("No active or previous SSH session recorded for this pane".to_string());
+            return;
+        };
+        let cmd = format!("ssh {target}\r");
+        let _ = self.engine.write_input(pane_id, &cmd);
+        self.show_notice(format!("\u{21BB} Reconnecting ssh {target}"));
+    }
+
+    fn open_terminal_link(&mut self, link: &crate::links::Link) {
+        let cwd_str = self
+            .current_directory()
+            .map(|p| p.to_string_lossy().to_string());
+        if let Err(err) = crate::links::open_link_in_cwd(link, cwd_str.as_deref()) {
+            log::warn!("could not open {}: {err}", link.uri);
         }
     }
 
@@ -9342,12 +11474,59 @@ impl App {
             hint: chord(action),
             command: crate::palette::Command::Action(action),
         };
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let focused_pane = self.focused_session();
+        let pane_notice = self.window.pane_notices.get(&focused_pane).copied().unwrap_or_default();
+        let has_failure = pane_notice.error || pane_notice.last_exit_code.unwrap_or(0) != 0;
+        let diagnose_entry = crate::palette::Entry {
+            label: if is_zh {
+                if let Some(code) = pane_notice.last_exit_code.filter(|&c| c != 0) {
+                    format!("\u{1FA7A} AI 诊断当前窗格报错 (退出码 {code})…")
+                } else {
+                    "\u{1FA7A} AI 诊断当前窗格报错 / 一键修复…".to_string()
+                }
+            } else if let Some(code) = pane_notice.last_exit_code.filter(|&c| c != 0) {
+                format!("\u{1FA7A} Diagnose Last Command Failure (exit {code})…")
+            } else {
+                "\u{1FA7A} Diagnose Terminal Failure with AI…".to_string()
+            },
+            hint: if has_failure {
+                "Error detected".to_string()
+            } else {
+                "AI Fix".to_string()
+            },
+            command: crate::palette::Command::DiagnoseLastFailure,
+        };
+        let proxy_on = unterm_services::launch_env::unterm_proxy_enabled();
+        let proxy_entry = crate::palette::Entry {
+            label: if is_zh {
+                if proxy_on {
+                    "网络代理: 已启用 ● (点击切换节点/关闭)".to_string()
+                } else {
+                    "网络代理: 已关闭 (点击开启/配置节点)".to_string()
+                }
+            } else if proxy_on {
+                "Network Proxy: ON ● (Switch / Disable)".to_string()
+            } else {
+                "Network Proxy: OFF (Enable / Configure)".to_string()
+            },
+            hint: if proxy_on {
+                unterm_services::launch_env::probe_unterm_proxy()
+                    .map(|u| crate::statusbar::short_proxy(&u))
+                    .unwrap_or_else(|| "ON".to_string())
+            } else {
+                "OFF".to_string()
+            },
+            command: crate::palette::Command::OpenProxySettings,
+        };
         let mut entries = vec![
             action(t("menu.new_tab"), crate::keys::Action::NewTab),
             action(
                 t("settings.menu.split_right"),
                 crate::keys::Action::SplitRight,
             ),
+            diagnose_entry,
+            proxy_entry,
             action(t("menu.dir_jump"), crate::keys::Action::DirJump),
             action(t("menu.tree_sidebar"), crate::keys::Action::TreeSidebar),
             action(t("menu.git_panel"), crate::keys::Action::GitPanel),
@@ -9399,11 +11578,7 @@ impl App {
                 hint: String::new(),
                 command: crate::palette::Command::CaptureScrollback,
             },
-            crate::palette::Entry {
-                label: t("settings.menu.web_settings"),
-                hint: t("settings.menu.web_settings.hint"),
-                command: crate::palette::Command::OpenSettings,
-            },
+            action(t("command.settings"), crate::keys::Action::Settings),
             // Who this is: the studio's existing caption, the site, and
             // the version — the menu's quiet last line, clicking through
             // to the website.
@@ -9419,7 +11594,9 @@ impl App {
         if unterm_settings::console_dir().is_some() {
             let at = entries
                 .iter()
-                .position(|entry| entry.command == crate::palette::Command::OpenSettings)
+                .position(|entry| {
+                    entry.command == crate::palette::Command::Action(crate::keys::Action::Settings)
+                })
                 .map(|index| index + 1)
                 .unwrap_or(entries.len());
             entries.insert(
@@ -10275,6 +12452,71 @@ impl App {
             crate::palette::Command::OpenTabRename { index } => self.open_tab_rename(index),
             crate::palette::Command::SelectCaptureRegion => self.start_system_capture(false),
             crate::palette::Command::SetupAiAgents => self.setup_ai_agents(),
+            crate::palette::Command::OpenCheckpoints => self.open_checkpoints(),
+            crate::palette::Command::CreateCheckpoint => self.create_checkpoint(),
+            crate::palette::Command::RestoreCheckpoint { repo, oid, label } => {
+                self.restore_checkpoint(&repo, &oid, &label)
+            }
+            crate::palette::Command::DiffCheckpoint { repo, oid } => {
+                self.diff_checkpoint(&repo, &oid)
+            }
+            crate::palette::Command::OpenAutonomySelector => self.open_autonomy_selector(),
+            crate::palette::Command::SetAutonomy { level } => self.set_autonomy(&level),
+            crate::palette::Command::OpenAgentHandoff => self.open_agent_handoff(),
+            crate::palette::Command::ExecuteAgentHandoff {
+                source_pane,
+                program,
+            } => self.execute_agent_handoff(source_pane, &program),
+            crate::palette::Command::DiagnoseLastFailure => self.open_failure_diagnosis(),
+            crate::palette::Command::CopyFailureContext => self.copy_failure_context(),
+            crate::palette::Command::FixFailureWithAgent { agent } => {
+                self.fix_failure_with_agent(&agent)
+            }
+            crate::palette::Command::ConfirmSafePaste { pane_id, text } => {
+                self.perform_paste_input(pane_id, &text)
+            }
+            crate::palette::Command::OpenPocketQr => self.open_pocket_qr(),
+            crate::palette::Command::ReconnectSsh { pane_id } => self.reconnect_ssh(pane_id),
+            crate::palette::Command::OpenLanguageSelector => self.open_language_selector(),
+            crate::palette::Command::SetLanguage { code } => self.set_language(&code),
+            crate::palette::Command::OpenCursorSelector => self.open_cursor_selector(),
+            crate::palette::Command::SetCursorStyle { style } => self.set_cursor_style(&style),
+            crate::palette::Command::OpenScrollbackSelector => self.open_scrollback_selector(),
+            crate::palette::Command::SetScrollbackLines { lines } => {
+                self.set_scrollback_lines(lines)
+            }
+            crate::palette::Command::OpenMcpClients => self.open_mcp_clients(),
+            crate::palette::Command::ToggleMcpClient { id, connect } => {
+                self.toggle_mcp_client(&id, connect)
+            }
+            crate::palette::Command::OpenPairedDevices => self.open_paired_devices(),
+            crate::palette::Command::RevokePairedDevice { device_id } => {
+                self.revoke_paired_device(&device_id)
+            }
+            crate::palette::Command::OpenConfigFile => self.open_config_file(),
+            crate::palette::Command::OpenProxySettings => self.open_proxy_settings(),
+            crate::palette::Command::ToggleProxy => {
+                self.toggle_proxy();
+                self.open_proxy_settings();
+            }
+            crate::palette::Command::ApplyProxyToCurrentPane { enable } => {
+                self.apply_proxy_to_current_pane(enable)
+            }
+            crate::palette::Command::SetProxyPreset {
+                mode,
+                http_proxy,
+                socks_proxy,
+            } => self.set_proxy_preset(&mode, http_proxy.as_deref(), socks_proxy.as_deref()),
+            crate::palette::Command::OpenCustomProxyInput => self.open_custom_proxy_input(),
+            crate::palette::Command::SaveCustomProxyUrl => self.save_custom_proxy_url(task),
+            crate::palette::Command::OpenClashGroups => self.open_clash_groups(),
+            crate::palette::Command::OpenClashGroupNodes { group } => {
+                self.open_clash_group_nodes(&group)
+            }
+            crate::palette::Command::SelectClashNode { group, node } => {
+                self.select_clash_node(&group, &node)
+            }
+            crate::palette::Command::OpenProxyConfigFile => self.open_proxy_config_file(),
             // Information rows: reading them was the point.
             crate::palette::Command::Nothing => {}
             crate::palette::Command::Browse { path, then } => {
@@ -10307,15 +12549,24 @@ impl App {
     }
 
     /// The focused pane's working directory, as the strip knows it, if it
-    /// still exists.
+    /// still exists (falling back to OS process inspection when OSC 7 is absent).
     fn focused_directory(&self) -> Option<String> {
         let pane = self.focused_session();
-        unterm_engine::SessionEngine::list_sessions(&self.engine)
-            .ok()?
-            .into_iter()
-            .find(|session| session.id == pane)?
-            .shell
-            .cwd
+        let from_shell = unterm_engine::SessionEngine::list_sessions(&self.engine)
+            .ok()
+            .and_then(|sessions| {
+                sessions
+                    .into_iter()
+                    .find(|session| session.id == pane)
+                    .and_then(|session| session.shell.cwd)
+            });
+        from_shell
+            .or_else(|| {
+                unterm_engine::SessionEngine::activity(&self.engine, pane)
+                    .ok()
+                    .and_then(|a| a.process)
+                    .and_then(|p| p.foreground_cwd.or(p.root_cwd))
+            })
             .filter(|cwd| std::path::Path::new(cwd).is_dir())
     }
 
@@ -12098,6 +14349,118 @@ impl App {
         }
     }
 
+    /// Quiet corner micro-pills for panes whose last command exited with an error.
+    fn pane_error_pills(&mut self) -> Vec<(usize, f32, f32, f32, f32, String)> {
+        let placements = self.placements();
+        if placements.is_empty() {
+            return Vec::new();
+        }
+        let metrics = self.window.font.metrics();
+        let pt = self.chrome_pt();
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let max_grid_right = placements
+            .iter()
+            .map(|placement| placement.origin.0 + placement.cols as f32 * metrics.width)
+            .fold(0.0_f32, f32::max);
+        let has_split = placements.len() > 1;
+        let active = self.focused_session();
+        let mut pills = Vec::new();
+        for placement in placements {
+            let notice = self
+                .window
+                .pane_notices
+                .get(&placement.session_id)
+                .copied()
+                .unwrap_or_default();
+            let exit_code = notice.last_exit_code.unwrap_or(0);
+            if !notice.error && exit_code == 0 {
+                continue;
+            }
+            let label = if is_zh {
+                if exit_code != 0 {
+                    format!("●  AI 诊断 · exit {exit_code}")
+                } else {
+                    "●  AI 诊断".to_string()
+                }
+            } else if exit_code != 0 {
+                format!("●  Diagnose · exit {exit_code}")
+            } else {
+                "●  Diagnose".to_string()
+            };
+            let text_w = self.chrome_width(&label);
+            let pill_w = (text_w + 14.0 * pt).round();
+            let pill_h = (self.window.chrome_font.metrics().height + 6.0 * pt)
+                .round()
+                .max(20.0 * pt);
+            let grid_right = placement.origin.0 + placement.cols as f32 * metrics.width;
+            let pane_right = if (grid_right - max_grid_right).abs() <= 0.5 {
+                self.terminal_left() + self.terminal_width()
+            } else {
+                grid_right
+            };
+            // Leave room for the active split pane's close button in the top-right corner.
+            let right_inset = if has_split && placement.session_id == active {
+                metrics.width * 3.0 + 6.0 * pt
+            } else {
+                10.0 * pt
+            };
+            let left = (pane_right - right_inset - pill_w).max(placement.origin.0 + 4.0 * pt);
+            let top = placement.origin.1 + 6.0 * pt;
+            pills.push((placement.session_id, left, top, pill_w, pill_h, label));
+        }
+        pills
+    }
+
+    fn pane_error_pill_at(&mut self, x: f32, y: f32) -> Option<usize> {
+        self.pane_error_pills()
+            .into_iter()
+            .find(|(_, left, top, width, height, _)| {
+                x >= *left && x < left + width && y >= *top && y < top + height
+            })
+            .map(|(session_id, ..)| session_id)
+    }
+
+    fn append_pane_error_pills(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
+        let pills = self.pane_error_pills();
+        if pills.is_empty() {
+            return;
+        }
+        let pt = self.chrome_pt();
+        let chrome = self.chrome();
+        let hovered = self.pane_error_pill_at(self.window.pointer.0, self.window.pointer.1);
+        for (session_id, left, top, width, height, label) in pills {
+            let is_hovered = hovered == Some(session_id);
+            let radius = height / 2.0;
+            let mut fill = chrome.status_err_bg;
+            if is_hovered {
+                fill[3] = (fill[3] + 0.12).min(1.0);
+            }
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left - 1.0,
+                top - 1.0,
+                width + 2.0,
+                height + 2.0,
+                radius + 1.0,
+                chrome.status_err_outline,
+            ));
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left,
+                top,
+                width,
+                height,
+                radius,
+                fill,
+            ));
+            let text_w = self.chrome_width(&label);
+            let text_left = left + ((width - text_w) / 2.0).max(4.0 * pt);
+            let text_top = top
+                + ((height - self.window.chrome_font.metrics().height) / 2.0
+                    + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+                    .max(0.0);
+            self.append_chrome(&label, chrome.status_err, (text_left, text_top), quads);
+        }
+    }
+
     fn pane_under_pointer(&self) -> Option<usize> {
         let metrics = self.window.font.metrics();
         self.placements()
@@ -12217,7 +14580,10 @@ impl App {
             self.seen_session_epoch = self.engine.session_epoch();
             self.recover_from_replaced_core();
         }
-        if self.window.kept_house_at.elapsed() >= HOUSEKEEPING {
+        if self.window.kept_house_at.elapsed() >= HOUSEKEEPING
+            && (!crate::statsbar::user_typing_recently()
+                || self.window.kept_house_at.elapsed() >= std::time::Duration::from_secs(4))
+        {
             self.window.kept_house_at = std::time::Instant::now();
             self.sync_tabs();
             self.feed_cockpit();
@@ -12387,22 +14753,49 @@ impl App {
         const RESTING: std::time::Duration = std::time::Duration::from_millis(96);
         const SETTLES_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
-        if !self.window.startup_terminal_content_marked
+        let now = std::time::Instant::now();
+        let mut interval = if !self.window.startup_terminal_content_marked
             && self.window.state.as_ref().is_some_and(|live| live.session_id != 0)
         {
-            return BUSY;
+            BUSY
+        } else {
+            match self.window.quiet_since {
+                Some(since) if since.elapsed() > SETTLES_AFTER => RESTING,
+                _ => BUSY,
+            }
+        };
+
+        if let Some(deadline) = self.window.pending_input_redraw_at {
+            let until_deadline = deadline
+                .saturating_duration_since(now)
+                .max(std::time::Duration::from_millis(1));
+            interval = interval.min(until_deadline);
         }
 
-        match self.window.quiet_since {
-            Some(since) if since.elapsed() > SETTLES_AFTER => RESTING,
-            _ => BUSY,
+        if let Some(presented) = self.window.presented_at {
+            let elapsed = presented.elapsed();
+            if elapsed < BUSY && self.needs_redraw() {
+                let until_frame_due = BUSY
+                    .saturating_sub(elapsed)
+                    .max(std::time::Duration::from_millis(1));
+                interval = interval.min(until_frame_due);
+            }
         }
+
+        interval
     }
 
     fn needs_redraw(&self) -> bool {
         let Some(live) = self.window.state.as_ref() else {
             return false;
         };
+        if self
+            .window
+            .pending_input_redraw_at
+            .is_some_and(|at| std::time::Instant::now() >= at)
+        {
+            return true;
+        }
         // Something is mid-animation -- a hover fading in or out.
         if self
             .window.animate_until
@@ -12686,6 +15079,7 @@ impl ApplicationHandler for App {
                 // Same urgency as a plain keystroke: a committed composition
                 // is input on its way to an echo.
                 self.window.quiet_since = None;
+                crate::statsbar::note_user_input();
                 self.window.last_ime_event = Some(std::time::Instant::now());
                 let modal_owns_ime = self.window.quick_menu.is_some()
                     || unterm_mcp::handler::pending_confirmation_view().is_some();
@@ -12714,18 +15108,21 @@ impl ApplicationHandler for App {
                         // A palette/search owns committed IME text while it is
                         // open.  Only an unclaimed commit belongs to the PTY.
                         if self.commit_ime_to_modal(&text) {
+                            self.window.drawn_revision = None;
                             if let Some(live) = self.window.state.as_ref() {
                                 live.window.request_redraw();
                             }
-                        } else if let Some(live) = self.window.state.as_ref() {
+                        } else if self.window.state.is_some() {
+                            self.window.quiet_since = None;
+                            crate::statsbar::note_user_input();
                             let pane = self.focused_session();
                             let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
                             if self.engine.write_input(pane, &text).is_ok() {
                                 crate::ghost::observe_text(pane as u64, &text);
                             }
-                            live.window.request_redraw();
+                            self.window.pending_input_redraw_at =
+                                Some(std::time::Instant::now() + std::time::Duration::from_millis(4));
                         }
-                        self.window.drawn_revision = None;
                     }
                     Ime::Enabled => self.place_ime_candidates(),
                     Ime::Disabled => {
@@ -12738,6 +15135,7 @@ impl ApplicationHandler for App {
                 self.window.shift_held = modifiers.state().shift_key();
                 self.window.ctrl_held = modifiers.state().control_key();
                 self.window.alt_held = modifiers.state().alt_key();
+                self.window.super_held = modifiers.state().super_key();
                 // The link hint appears and disappears with Ctrl, and nothing
                 // else about the screen changed to ask for a frame.
                 self.window.drawn_revision = None;
@@ -12759,6 +15157,7 @@ impl ApplicationHandler for App {
                 // "typing feels slow". Drop back to the busy cadence now,
                 // before the shell has even seen the byte.
                 self.window.quiet_since = None;
+                crate::statsbar::note_user_input();
                 // An orphan composition is marked text whose input method
                 // has gone quiet: stranded by a source switch, it swallows
                 // every editing key from then on. A LIVE composition also
@@ -12893,6 +15292,9 @@ impl ApplicationHandler for App {
 
                 // The palette takes the keyboard while it is open, before
                 // anything else looks at the key.
+                if self.window.pocket_qr.is_some() && self.handle_pocket_qr_key(&event) {
+                    return;
+                }
                 if self.window.palette.is_some() && self.handle_palette_key(&event) {
                     return;
                 }
@@ -13010,10 +15412,8 @@ impl ApplicationHandler for App {
                             self.window.ctrl_held,
                             self.window.alt_held,
                         );
-                        self.window.drawn_revision = None;
-                        if let Some(live) = self.window.state.as_ref() {
-                            live.window.request_redraw();
-                        }
+                        self.window.pending_input_redraw_at =
+                            Some(std::time::Instant::now() + std::time::Duration::from_millis(4));
                         if text == unterm_services::interrupt::INTERRUPT_BYTE {
                             self.interrupt(pane);
                         }
@@ -13441,6 +15841,14 @@ impl ApplicationHandler for App {
                         self.window.drawn_revision = None;
                         return;
                     }
+                    if let Some(session_id) =
+                        self.pane_error_pill_at(self.window.pointer.0, self.window.pointer.1)
+                    {
+                        self.focus_session(session_id);
+                        self.open_failure_diagnosis();
+                        self.window.drawn_revision = None;
+                        return;
+                    }
                 }
                 if self.window.sidebar_open && state == ElementState::Pressed {
                     if let Some((left, _top, width, _height, _row)) = self.sidebar_dock() {
@@ -13477,11 +15885,13 @@ impl ApplicationHandler for App {
                     self.window.dragging_scrollbar = false;
                     return;
                 }
-                if state == ElementState::Pressed && crate::links::opens_on_click(self.window.ctrl_held) {
+                if state == ElementState::Pressed
+                    && crate::links::opens_on_click(
+                        self.window.ctrl_held || self.window.super_held,
+                    )
+                {
                     if let Some(link) = self.link_under_pointer() {
-                        if let Err(err) = crate::links::open_link(&link) {
-                            log::warn!("could not open {}: {err}", link.uri);
-                        }
+                        self.open_terminal_link(&link);
                         return;
                     }
                 }
@@ -13562,9 +15972,7 @@ impl ApplicationHandler for App {
                             self.copy_selection();
                         } else if was_click && !self.window.shift_held && !self.window.ctrl_held {
                             if let Some(link) = self.link_under_pointer() {
-                                if let Err(err) = crate::links::open_link(&link) {
-                                    log::warn!("could not open {}: {err}", link.uri);
-                                }
+                                self.open_terminal_link(&link);
                             }
                         }
                     }
@@ -13910,7 +16318,10 @@ impl ApplicationHandler for App {
             }
         }
         self.collect_clipboard_results();
-        crate::mcp_host::deliver_repaint();
+        if crate::mcp_host::take_repaint() {
+            self.window.drawn_revision = None;
+            self.window.quiet_since = None;
+        }
         self.tick();
         // Waiting until the next tick rather than spinning. Something has to
         // ask the engine whether a shell has written -- nothing wakes the loop
@@ -15223,6 +17634,110 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         label: unterm_services::i18n::t("command.capture_region"),
         hint: unterm_services::i18n::t("command.capture_region.hint"),
         command: crate::palette::Command::SelectCaptureRegion,
+    });
+    let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "Git 自动检查点与一键回滚 (Checkpoints)".to_string()
+        } else {
+            "Git Checkpoints & 1-Click Rollback".to_string()
+        },
+        hint: "git stash / rollback".to_string(),
+        command: crate::palette::Command::OpenCheckpoints,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "AI 助手 MCP 接入管理 (Per-Client MCP)".to_string()
+        } else {
+            "AI Clients MCP Manager".to_string()
+        },
+        hint: "Claude \u{00b7} Codex \u{00b7} Gemini \u{00b7} Agy \u{00b7} Cursor".to_string(),
+        command: crate::palette::Command::OpenMcpClients,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "AI 自主权与安全审批级别 (Autonomy)".to_string()
+        } else {
+            "AI Autonomy & Safety Guardrail".to_string()
+        },
+        hint: unterm_settings::run_settings().autonomy.label().to_string(),
+        command: crate::palette::Command::OpenAutonomySelector,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "AI 诊断当前窗格报错 / 一键修复 (Diagnose Failure)".to_string()
+        } else {
+            "Diagnose Last Command Failure with AI".to_string()
+        },
+        hint: "Error report / Split AI Fix".to_string(),
+        command: crate::palette::Command::DiagnoseLastFailure,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "跨 Agent 接力当前窗格 (Context Handoff)".to_string()
+        } else {
+            "Cross-Agent Context Handoff".to_string()
+        },
+        hint: "Claude \u{2194} Codex \u{2194} Gemini".to_string(),
+        command: crate::palette::Command::OpenAgentHandoff,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "手机扫码远程查看与审批 (Pocket Unterm QR)".to_string()
+        } else {
+            "Mobile Remote Pairing QR (Pocket Unterm)".to_string()
+        },
+        hint: "QR + PIN".to_string(),
+        command: crate::palette::Command::OpenPocketQr,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "界面语言 (UI Language)".to_string()
+        } else {
+            "UI Language".to_string()
+        },
+        hint: unterm_services::i18n::current_locale().to_string(),
+        command: crate::palette::Command::OpenLanguageSelector,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "光标形状与闪烁 (Cursor Style)".to_string()
+        } else {
+            "Cursor Style & Blink".to_string()
+        },
+        hint: "Block / Bar / Underline".to_string(),
+        command: crate::palette::Command::OpenCursorSelector,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "历史回滚行数上限 (Scrollback Limit)".to_string()
+        } else {
+            "Scrollback History Limit".to_string()
+        },
+        hint: "5k - 500k lines".to_string(),
+        command: crate::palette::Command::OpenScrollbackSelector,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "网络代理与 Clash 节点设置 (Proxy & Clash Settings)".to_string()
+        } else {
+            "Network Proxy & Clash Node Settings".to_string()
+        },
+        hint: if unterm_services::launch_env::unterm_proxy_enabled() {
+            "proxy: ON".to_string()
+        } else {
+            "proxy: OFF".to_string()
+        },
+        command: crate::palette::Command::OpenProxySettings,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "编辑配置文件 (unterm.conf)".to_string()
+        } else {
+            "Edit Configuration File (unterm.conf)".to_string()
+        },
+        hint: "unterm.conf".to_string(),
+        command: crate::palette::Command::OpenConfigFile,
     });
     // Last, and only here: there to be found by whoever looks for it.
     entries.push(crate::palette::Entry {

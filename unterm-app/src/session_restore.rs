@@ -9,6 +9,25 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SavedPane {
+    pub cwd: String,
+    /// `None` for the root pane of a tab; `Some("horizontal")` or `Some("vertical")` for a split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_axis: Option<String>,
+    /// Recent non-empty terminal screen lines so the user can see prior context after a cold restart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub screen_tail: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SavedTab {
+    /// User-assigned custom tab title, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub panes: Vec<SavedPane>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LastSession {
     /// Physical pixels, exactly as the window reported them.
     pub width: u32,
@@ -16,6 +35,12 @@ pub struct LastSession {
     pub maximized: bool,
     /// One entry per tab, in the strip's order.
     pub cwds: Vec<String>,
+    /// Focused tab index (0-based) when the session was saved.
+    #[serde(default)]
+    pub active_tab: usize,
+    /// Full per-tab layout, custom titles, split panes, and screen tail snapshot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<SavedTab>,
 }
 
 fn path() -> Option<std::path::PathBuf> {
@@ -67,10 +92,45 @@ mod tests {
             height: 900,
             maximized: true,
             cwds: vec!["D:/code".into(), "D:/code/unterm".into()],
+            active_tab: 1,
+            tabs: vec![
+                SavedTab {
+                    title: Some("Backend".into()),
+                    panes: vec![
+                        SavedPane {
+                            cwd: "D:/code".into(),
+                            split_axis: None,
+                            screen_tail: vec!["$ cargo test".into(), "test result: ok.".into()],
+                        },
+                        SavedPane {
+                            cwd: "D:/code/api".into(),
+                            split_axis: Some("horizontal".into()),
+                            screen_tail: vec![],
+                        },
+                    ],
+                },
+                SavedTab {
+                    title: None,
+                    panes: vec![SavedPane {
+                        cwd: "D:/code/unterm".into(),
+                        split_axis: None,
+                        screen_tail: vec![],
+                    }],
+                },
+            ],
         };
         let text = serde_json::to_string(&state).unwrap();
         let back: LastSession = serde_json::from_str(&text).unwrap();
         assert_eq!(back, state);
+    }
+
+    #[test]
+    fn legacy_last_session_without_tabs_still_loads() {
+        let legacy = r#"{"width":1920,"height":1080,"maximized":false,"cwds":["/a","/b"]}"#;
+        let parsed: LastSession = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.cwds, vec!["/a", "/b"]);
+        assert_eq!(parsed.active_tab, 0);
+        assert!(parsed.tabs.is_empty());
     }
 
     /// Saving replaces the file whole and leaves nothing beside it.
@@ -94,6 +154,7 @@ mod tests {
             height: 900,
             maximized: false,
             cwds: vec!["/a".into(), "/b".into(), "/c".into()],
+            ..Default::default()
         };
         let second = LastSession {
             cwds: vec!["/a".into()],

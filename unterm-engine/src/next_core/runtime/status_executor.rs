@@ -23,9 +23,9 @@ pub(in crate::next_core) fn execute_session_activity(
     command: RuntimeCommand,
 ) -> Result<SessionActivitySnapshot> {
     match command {
-        RuntimeCommand::SessionActivity { pane_id } => with_current_mut(|state| {
-            session_activity::read_snapshot(state, pane_id, std::time::Instant::now())
-        }),
+        RuntimeCommand::SessionActivity { pane_id } => {
+            session_activity::read_snapshot_concurrent(pane_id, std::time::Instant::now())
+        }
         _ => bail!("runtime status executor expected session-activity command"),
     }
 }

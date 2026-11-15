@@ -594,6 +594,17 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/clients/browser") => super::agent_run::api_client_browser(),
         ("GET", "/api/console/run-settings") => super::console_tasks::api_settings_get(),
         ("POST", "/api/console/run-settings") => super::console_tasks::api_settings_set(&req.body),
+        ("GET", "/api/console/helpers") => Response::ok_json(json!({
+            "helpers": super::helpers::all_helpers_summary(),
+            "active_count": super::helpers::active_count(),
+        })),
+        ("GET", "/api/sessions/last") => {
+            let last = unterm_protocol::state_path("last_session.json")
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .unwrap_or_else(|| json!({}));
+            Response::ok_json(last)
+        }
         ("GET", "/api/agents/list") => super::agents::api_list(&req.query),
         ("GET", "/api/agents/manifest") => super::agents::api_manifest_info(),
         ("POST", "/api/agents/manifest/refresh") => super::agents::api_manifest_refresh(),

@@ -84,6 +84,44 @@ pub fn of(hub: &str) -> Vec<HelperRef> {
         .collect()
 }
 
+/// Summary of all delegated helper agents across hubs, for the Web Settings Dashboard and status bar.
+pub fn all_helpers_summary() -> Vec<Value> {
+    let helpers = helpers().lock().unwrap();
+    let mut list: Vec<(&String, &Helper)> = helpers.iter().collect();
+    list.sort_by_key(|(_, h)| h.order);
+    list.into_iter()
+        .map(|(id, h)| {
+            let status = if h.closed {
+                "closed"
+            } else if h.error.is_some() {
+                "failed"
+            } else if h.ended.is_some() {
+                "completed"
+            } else {
+                "running"
+            };
+            json!({
+                "session_id": id,
+                "hub": h.hub,
+                "agent": h.agent,
+                "prompt": h.prompt,
+                "status": status,
+                "ended": h.ended,
+                "error": h.error,
+            })
+        })
+        .collect()
+}
+
+/// Count of currently active (running) delegated helper agents.
+pub fn active_count() -> usize {
+    let helpers = helpers().lock().unwrap();
+    helpers
+        .values()
+        .filter(|h| !h.closed && h.ended.is_none() && h.error.is_none())
+        .count()
+}
+
 /// Stop and forget a hub's helpers: its turn is over, and nobody is left to
 /// read what they would say.
 pub fn release(hub: &str) {

@@ -271,6 +271,7 @@ pub enum CoreEvent {
 struct EventHub {
     subscribers: std::sync::Mutex<Vec<std::sync::mpsc::Sender<String>>>,
     waker: (std::sync::Mutex<bool>, std::sync::Condvar),
+    fast_polls: std::sync::atomic::AtomicU8,
 }
 
 impl EventHub {
@@ -278,6 +279,7 @@ impl EventHub {
         Self {
             subscribers: std::sync::Mutex::new(Vec::new()),
             waker: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+            fast_polls: std::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -296,6 +298,31 @@ impl EventHub {
             *notified = true;
             self.waker.1.notify_all();
         }
+    }
+
+    fn wake_for_input(&self) {
+        self.fast_polls.store(8, Ordering::Release);
+        self.wake();
+    }
+
+    fn clear_fast_polls(&self) {
+        self.fast_polls.store(0, Ordering::Release);
+    }
+
+    fn take_fast_poll(&self) -> bool {
+        let mut current = self.fast_polls.load(Ordering::Acquire);
+        while current > 0 {
+            match self.fast_polls.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+        false
     }
 
     fn wait_timeout(&self, duration: Duration) {
@@ -718,6 +745,7 @@ fn watch_engine_events(
                             });
                         }
                         if revision != last_revision {
+                            hub.clear_fast_polls();
                             hub.publish(&CoreEvent::ScreenUpdated {
                                 pane_id: session.id,
                                 revision,
@@ -738,7 +766,13 @@ fn watch_engine_events(
             }
         }
 
-        let interval = if has_subscribers { 6 } else { 250 };
+        let interval = if hub.take_fast_poll() {
+            1
+        } else if has_subscribers {
+            6
+        } else {
+            250
+        };
         hub.wait_timeout(Duration::from_millis(interval));
     }
 }
@@ -996,17 +1030,10 @@ fn handle_stream(
         let response = dispatch(request, started_at, draining, exit_when_idle);
         writeln!(stream, "{response}")?;
         stream.flush()?;
-        if is_lifecycle || is_input {
-            events.wake();
-        }
         if is_input {
-            let events = events.clone();
-            let _ = std::thread::Builder::new()
-                .name("pty-echo-push".into())
-                .spawn(move || {
-                    std::thread::sleep(Duration::from_millis(2));
-                    events.wake();
-                });
+            events.wake_for_input();
+        } else if is_lifecycle {
+            events.wake();
         }
     }
     Ok(())
@@ -2885,6 +2912,13 @@ struct FrameCacheInner {
     frames: std::sync::RwLock<std::collections::HashMap<usize, StyledScreenSnapshot>>,
     sessions: std::sync::RwLock<Vec<SessionSnapshot>>,
     sessions_refreshed_at: std::sync::Mutex<Option<std::time::Instant>>,
+    /// The pane currently focused in the window (`0` when unknown). Focused
+    /// panes refresh immediately at full 165Hz cadence; background panes coalesce
+    /// bursts within `BACKGROUND_BATCH_WINDOW` to reduce IPC traffic when many
+    /// agents stream concurrently.
+    primary_pane: std::sync::atomic::AtomicUsize,
+    last_refreshed_at: std::sync::Mutex<std::collections::HashMap<usize, std::time::Instant>>,
+    deferred_panes: std::sync::Mutex<std::collections::HashSet<usize>>,
     generation: std::sync::atomic::AtomicU64,
     stopping: AtomicBool,
     /// False once the event feed ends for a reason other than being
@@ -2907,7 +2941,13 @@ struct FrameCacheInner {
 }
 
 impl FrameCacheInner {
+    const BACKGROUND_BATCH_WINDOW: Duration = Duration::from_millis(48);
+
     fn refresh(&self, pane_id: usize) {
+        self.deferred_panes
+            .lock()
+            .expect("frame cache deferred lock poisoned")
+            .remove(&pane_id);
         let since = self
             .frames
             .read()
@@ -2921,12 +2961,78 @@ impl FrameCacheInner {
                 .write()
                 .expect("frame cache lock poisoned")
                 .insert(pane_id, screen);
+            self.last_refreshed_at
+                .lock()
+                .expect("frame cache timer lock poisoned")
+                .insert(pane_id, std::time::Instant::now());
             self.bump();
+        }
+    }
+
+    fn refresh_adaptive(&self, pane_id: usize) {
+        let primary = self.primary_pane.load(std::sync::atomic::Ordering::Acquire);
+        if primary == 0 || primary == pane_id {
+            self.refresh(pane_id);
+            return;
+        }
+        let recently_refreshed = self
+            .last_refreshed_at
+            .lock()
+            .expect("frame cache timer lock poisoned")
+            .get(&pane_id)
+            .is_some_and(|at| at.elapsed() < Self::BACKGROUND_BATCH_WINDOW);
+        if recently_refreshed {
+            self.deferred_panes
+                .lock()
+                .expect("frame cache deferred lock poisoned")
+                .insert(pane_id);
+        } else {
+            self.refresh(pane_id);
+        }
+    }
+
+    fn flush_due_deferred(&self) {
+        let deferred: Vec<usize> = self
+            .deferred_panes
+            .lock()
+            .expect("frame cache deferred lock poisoned")
+            .iter()
+            .copied()
+            .collect();
+        for pane_id in deferred {
+            let due = self
+                .last_refreshed_at
+                .lock()
+                .expect("frame cache timer lock poisoned")
+                .get(&pane_id)
+                .map_or(true, |at| at.elapsed() >= Self::BACKGROUND_BATCH_WINDOW);
+            if due {
+                self.refresh(pane_id);
+            }
         }
     }
 
     fn refresh_sessions(&self) {
         if let Ok(sessions) = self.client.list_sessions() {
+            let changed = {
+                let prev = self
+                    .sessions
+                    .read()
+                    .expect("frame cache sessions lock poisoned");
+                prev.len() != sessions.len()
+                    || prev.iter().zip(sessions.iter()).any(|(a, b)| {
+                        a.id != b.id
+                            || a.title != b.title
+                            || a.is_dead != b.is_dead
+                            || a.is_active != b.is_active
+                            || a.cols != b.cols
+                            || a.rows != b.rows
+                            || a.shell.cwd != b.shell.cwd
+                            || a.shell.process_name != b.shell.process_name
+                            || a.split_from != b.split_from
+                            || a.split_axis != b.split_axis
+                    })
+            };
             *self
                 .sessions
                 .write()
@@ -2936,7 +3042,9 @@ impl FrameCacheInner {
                 .lock()
                 .expect("frame cache sessions timer lock poisoned") =
                 Some(std::time::Instant::now());
-            self.bump();
+            if changed {
+                self.bump();
+            }
         }
     }
 
@@ -3072,6 +3180,9 @@ impl FrameCache {
             frames: std::sync::RwLock::new(std::collections::HashMap::new()),
             sessions: std::sync::RwLock::new(Vec::new()),
             sessions_refreshed_at: std::sync::Mutex::new(None),
+            primary_pane: std::sync::atomic::AtomicUsize::new(0),
+            last_refreshed_at: std::sync::Mutex::new(std::collections::HashMap::new()),
+            deferred_panes: std::sync::Mutex::new(std::collections::HashSet::new()),
             generation: std::sync::atomic::AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             live: AtomicBool::new(true),
@@ -3106,8 +3217,9 @@ impl FrameCache {
                         worker_inner.refresh_sessions();
                     }
                     Ok(Some(CoreEvent::ScreenUpdated { pane_id, .. })) => {
-                        worker_inner.refresh(pane_id);
-                        worker_inner.refresh_sessions_if_older_than(Duration::from_millis(400));
+                        worker_inner.refresh_adaptive(pane_id);
+                        worker_inner.flush_due_deferred();
+                        worker_inner.refresh_sessions_if_older_than(Duration::from_millis(1200));
                     }
                     Ok(Some(CoreEvent::SessionClosed { pane_id })) => {
                         worker_inner.evict(pane_id);
@@ -3123,6 +3235,7 @@ impl FrameCache {
                     // matched before the catch-all below, or an idle
                     // feed reads as a dead Core within 200ms.
                     Err(err) if is_timeout_error(&err) => {
+                        worker_inner.flush_due_deferred();
                         worker_inner.refresh_sessions_if_older_than(Duration::from_millis(800));
                         continue;
                     }
@@ -3174,6 +3287,23 @@ impl FrameCache {
             .cloned()
     }
 
+    /// Check whether the cached viewport is already at the bottom without
+    /// cloning the entire `StyledScreenSnapshot` on every keystroke.
+    pub fn is_viewport_at_bottom(&self, pane_id: usize) -> Option<bool> {
+        let frames = self
+            .inner
+            .frames
+            .read()
+            .expect("frame cache lock poisoned");
+        let screen = frames.get(&pane_id)?;
+        Some(
+            screen
+                .lines
+                .first()
+                .map_or(true, |line| line.row >= screen.scrollback_rows as i64),
+        )
+    }
+
     /// Serve the cached session snapshots without blocking on an IPC RPC.
     pub fn list_sessions(&self) -> Vec<SessionSnapshot> {
         self.inner
@@ -3210,6 +3340,26 @@ impl FrameCache {
     /// sleep makes the first prompt look slower than the shell actually is.
     pub fn refresh_pane(&self, pane_id: usize) {
         self.inner.refresh(pane_id);
+    }
+
+    /// Hint which pane is currently focused so the cache gives it 0ms immediate
+    /// priority while coalescing rapid background pane bursts.
+    pub fn set_primary_pane(&self, pane_id: usize) {
+        let prev = self
+            .inner
+            .primary_pane
+            .swap(pane_id, std::sync::atomic::Ordering::AcqRel);
+        if prev != pane_id && pane_id != 0 {
+            let was_deferred = self
+                .inner
+                .deferred_panes
+                .lock()
+                .expect("frame cache deferred lock poisoned")
+                .remove(&pane_id);
+            if was_deferred {
+                self.inner.refresh(pane_id);
+            }
+        }
     }
 
     pub fn panes(&self) -> Vec<usize> {

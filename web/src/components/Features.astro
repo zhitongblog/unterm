@@ -198,7 +198,7 @@ const features = [
 const cmpRows = [
   { row: "cmp.r.mcp",      unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.cli",      unterm: "✓",        native: "✗",     warp: "✗",          iterm: "Python API", ghostty: "✗" },
-  { row: "cmp.r.agents",   unterm: "✓ ×7",     native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
+  { row: "cmp.r.agents",   unterm: "✓ ×9",     native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.autowire", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.cockpit",  unterm: "✓",        native: "✗",     warp: "~ cloud",    iterm: "✗",          ghostty: "✗" },
   { row: "cmp.r.identity", unterm: "✓",        native: "✗",     warp: "✗",          iterm: "✗",          ghostty: "✗" },
@@ -222,7 +222,7 @@ const cmpRows = [
 // are i18n keys. This is the "what does it actually expose" section the
 // thin 8-card Features grid only gestures at.
 const capStats = [
-  { n: "152", label: "cap.stat.methods" },
+  { n: "155", label: "cap.stat.methods" },
   { n: "30", label: "cap.stat.namespaces" },
   { n: "34", label: "cap.stat.cli" },
   { n: "4",  label: "cap.stat.surfaces" },
@@ -230,11 +230,11 @@ const capStats = [
   { n: "~12k", label: "cap.stat.kernel" },
 ];
 const capabilities = [
-  { icon: "🛩️", title: "cap.cockpit.title", body: "cap.cockpit.body", meta: "cockpit · fleet.* · review.* · 11", items: "agent.status · cockpit.inbox · fleet.launch · fleet.retry · review.verify · review.diff · review.merge · review.rollback", wide: true },
+  { icon: "🛩️", title: "cap.cockpit.title", body: "cap.cockpit.body", meta: "cockpit · fleet.* · review.* · agent_session.*", items: "agent.status · cockpit.inbox · agent_session.delegate · agent_session.handover · fleet.launch · review.diff · review.merge · review.rollback", wide: true },
   { icon: "🪟", title: "cap.session.title",  body: "cap.session.body",  meta: "session.* · 27", items: "create · split · focus · resize · input · destroy · history · idle · cwd" },
   { icon: "👁️", title: "cap.screen.title",   body: "cap.screen.body",   meta: "screen.* · 8",   items: "text · scrollback_text · search · cursor · detect_errors · scroll" },
   { icon: "▶️", title: "cap.exec.title",     body: "cap.exec.body",     meta: "exec.* · 5",     items: "run · run_wait · send · status · cancel · signal.send" },
-  { icon: "🤖", title: "cap.agents.title",   body: "cap.agents.body",   meta: "agent · 7 CLIs", items: "install · auth · launch · config · mcp-stdio bridge" },
+  { icon: "🤖", title: "cap.agents.title",   body: "cap.agents.body",   meta: "agent · 9 CLIs", items: "install · auth · launch · config · repair-path · mcp-stdio · mcp-trim" },
   { icon: "🪪", title: "cap.identity.title", body: "cap.identity.body", meta: "profile · 7 sniffers", items: "list · current · create · switch · delete" },
   { icon: "🛰️", title: "cap.instance.title", body: "cap.instance.body", meta: "instance.* · 8", items: "list · info · focus · set_title" },
   { icon: "🎬", title: "cap.rec.title",      body: "cap.rec.body",      meta: "recording · markdown", items: "recording_start · stop · status · list · read · export_markdown" },

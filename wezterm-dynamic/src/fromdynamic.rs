@@ -247,6 +247,7 @@ macro_rules! int {
     ($($ty:ty),* $(,)?) => {
         $(
 impl FromDynamic for $ty {
+    #[allow(unreachable_code)]
     fn from_dynamic(value: &Value, _options: FromDynamicOptions) -> Result<Self, Error> {
         match value {
             Value::I64(n) => match (*n).try_into() {

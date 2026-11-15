@@ -218,23 +218,51 @@ fn proxy_config_value() -> serde_json::Value {
 /// The toggle's state, cached briefly: the status bar asks on every paint,
 /// and 0.57.4 cached the same read for the same reason. The setter below
 /// refreshes the cache, so a click on the chip is never shown stale.
-static PROXY_ENABLED_CACHE: std::sync::Mutex<Option<(std::time::Instant, bool)>> =
-    std::sync::Mutex::new(None);
+static PROXY_ENABLED_CACHE: std::sync::Mutex<
+    Option<(std::path::PathBuf, std::time::Instant, bool)>,
+> = std::sync::Mutex::new(None);
 
 /// Whether new sessions get Unterm's proxy env vars.
 pub fn unterm_proxy_enabled() -> bool {
-    const TTL: std::time::Duration = std::time::Duration::from_secs(2);
-    let mut cache = PROXY_ENABLED_CACHE.lock().unwrap();
-    if let Some((at, enabled)) = cache.as_ref() {
-        if at.elapsed() < TTL {
-            return *enabled;
+    const TTL: std::time::Duration = std::time::Duration::from_secs(5);
+    static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let path = proxy_config_path();
+    {
+        let cache = PROXY_ENABLED_CACHE.lock().unwrap();
+        if let Some((cached_path, at, enabled)) = cache.as_ref() {
+            if *cached_path == path {
+                let current = *enabled;
+                if at.elapsed() < TTL {
+                    return current;
+                }
+                drop(cache);
+                if !REFRESHING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    if std::thread::Builder::new()
+                        .name("proxy-config-refresh".into())
+                        .spawn(move || {
+                            let fresh = proxy_config_value()
+                                .get("enabled")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false);
+                            if let Ok(mut guard) = PROXY_ENABLED_CACHE.lock() {
+                                *guard = Some((path, std::time::Instant::now(), fresh));
+                            }
+                            REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                        })
+                        .is_err()
+                    {
+                        REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                    }
+                }
+                return current;
+            }
         }
     }
     let fresh = proxy_config_value()
         .get("enabled")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    *cache = Some((std::time::Instant::now(), fresh));
+    *PROXY_ENABLED_CACHE.lock().unwrap() = Some((path, std::time::Instant::now(), fresh));
     fresh
 }
 
@@ -268,7 +296,7 @@ pub fn set_unterm_proxy_enabled(enabled: bool) -> anyhow::Result<()> {
         }
     }
     std::fs::write(&path, serde_json::to_string_pretty(&value)?)?;
-    *PROXY_ENABLED_CACHE.lock().unwrap() = Some((std::time::Instant::now(), enabled));
+    *PROXY_ENABLED_CACHE.lock().unwrap() = Some((path, std::time::Instant::now(), enabled));
     Ok(())
 }
 

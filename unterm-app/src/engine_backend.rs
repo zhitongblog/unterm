@@ -521,20 +521,18 @@ impl AppEngine {
         }
     }
 
+    pub fn set_primary_pane(&self, pane_id: usize) {
+        if let Self::Core { cache, .. } = self {
+            cache.set_primary_pane(pane_id);
+        }
+    }
+
     pub fn scroll_viewport_to(&self, pane_id: usize, target: isize) -> Result<()> {
         match self {
             Self::Local(engine) => engine.scroll_viewport_to(pane_id, target),
             Self::Core { client, cache } => {
-                if target == isize::MAX {
-                    if let Some(screen) = cache.styled_screen(pane_id) {
-                        let at_bottom = screen
-                            .lines
-                            .first()
-                            .map_or(true, |line| line.row >= screen.scrollback_rows as i64);
-                        if at_bottom {
-                            return Ok(());
-                        }
-                    }
+                if target == isize::MAX && cache.is_viewport_at_bottom(pane_id) == Some(true) {
+                    return Ok(());
                 }
                 client.scroll_viewport_to(pane_id, target)
             }
@@ -1045,24 +1043,49 @@ pub mod mcp_state {
     }
 
     pub fn pending_suggestions_for_pane(pane_id: u64) -> Vec<Suggestion> {
+        static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         match super::CORE_SHARED.get() {
             // A Core that cannot answer is reported as "nothing
             // pending" rather than as an error: this is drawn every
             // frame, and a failed fetch must not become a dialog.
             Some(shared) => {
                 let cache = SUGGESTIONS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+                let mut current = Vec::new();
                 if let Ok(guard) = cache.lock() {
                     if let Some((at, cached)) = guard.get(&pane_id) {
+                        current = cached.clone();
                         if at.elapsed() < MCP_POLL_TTL {
-                            return cached.clone();
+                            return current;
                         }
                     }
                 }
-                let fresh = shared.client.pending_suggestions(pane_id).unwrap_or_default();
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(pane_id, (Instant::now(), fresh.clone()));
+                if !REFRESHING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    let client = shared.client.clone();
+                    if std::thread::Builder::new()
+                        .name("mcp-suggestions-refresh".into())
+                        .spawn(move || {
+                            let fresh = client.pending_suggestions(pane_id).unwrap_or_default();
+                            let mut changed = false;
+                            if let Some(lock) = SUGGESTIONS_CACHE.get() {
+                                if let Ok(mut guard) = lock.lock() {
+                                    changed = guard.get(&pane_id).map_or(!fresh.is_empty(), |(_, old)| {
+                                        old.len() != fresh.len()
+                                            || old.iter().zip(fresh.iter()).any(|(a, b)| a.id != b.id)
+                                    });
+                                    guard.insert(pane_id, (Instant::now(), fresh));
+                                }
+                            }
+                            REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                            if changed {
+                                crate::mcp_host::request_repaint();
+                            }
+                        })
+                        .is_err()
+                    {
+                        REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                    }
                 }
-                fresh
+                current
             }
             None => unterm_mcp::handler::pending_suggestions_for_pane(pane_id),
         }
@@ -1091,21 +1114,38 @@ pub mod mcp_state {
     }
 
     pub fn insights_mcp_snapshot(recent_audit_limit: usize) -> InsightsMcpSnapshot {
+        static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         match super::CORE_SHARED.get() {
             Some(shared) => {
                 let cache = INSIGHTS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+                let mut current = InsightsMcpSnapshot::default();
                 if let Ok(guard) = cache.lock() {
                     if let Some((at, cached)) = guard.get(&recent_audit_limit) {
+                        current = cached.clone();
                         if at.elapsed() < MCP_POLL_TTL {
-                            return cached.clone();
+                            return current;
                         }
                     }
                 }
-                let fresh = shared.client.insights(recent_audit_limit).unwrap_or_default();
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(recent_audit_limit, (Instant::now(), fresh.clone()));
+                if !REFRESHING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    let client = shared.client.clone();
+                    if std::thread::Builder::new()
+                        .name("mcp-insights-refresh".into())
+                        .spawn(move || {
+                            let fresh = client.insights(recent_audit_limit).unwrap_or_default();
+                            if let Some(lock) = INSIGHTS_CACHE.get() {
+                                if let Ok(mut guard) = lock.lock() {
+                                    guard.insert(recent_audit_limit, (Instant::now(), fresh));
+                                }
+                            }
+                            REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                        })
+                        .is_err()
+                    {
+                        REFRESHING.store(false, std::sync::atomic::Ordering::Release);
+                    }
                 }
-                fresh
+                current
             }
             None => unterm_mcp::handler::insights_mcp_snapshot(recent_audit_limit),
         }

@@ -113,6 +113,9 @@ pub enum Item {
     /// The Agent Cockpit tally: agents seen, and how many wait for a person.
     /// Pressing it opens the inbox.
     Cockpit,
+    /// The outbound proxy status pill: left-click toggles proxy, right-click
+    /// opens proxy settings.
+    Proxy,
     Action(Action),
     Menu,
     Minimise,
@@ -151,6 +154,32 @@ pub fn layout(
     pt: f32,
     stats: &str,
     cockpit: &str,
+    title: &str,
+    project_open: bool,
+    quiet: bool,
+    measure: &mut dyn FnMut(&str) -> f32,
+) -> Vec<Placed> {
+    layout_with_proxy(
+        width,
+        logical_width,
+        pt,
+        stats,
+        cockpit,
+        "",
+        title,
+        project_open,
+        quiet,
+        measure,
+    )
+}
+
+pub fn layout_with_proxy(
+    width: f32,
+    logical_width: f32,
+    pt: f32,
+    stats: &str,
+    cockpit: &str,
+    proxy: &str,
     title: &str,
     project_open: bool,
     quiet: bool,
@@ -238,10 +267,15 @@ pub fn layout(
 
     for (action, icon, label_key) in ACTIONS.iter().rev() {
         let wanted = if quiet {
-            // Keep Command Palette and Settings directly reachable in the
-            // quiet bar so essential controls are always one click away even
-            // when the sidebar is collapsed or hidden.
-            matches!(action, Action::CommandPalette | Action::Settings)
+            // Keep Command Palette, Project Files, Split Right, and Settings
+            // directly reachable as quiet borderless icons in the top bar.
+            matches!(
+                action,
+                Action::CommandPalette
+                    | Action::TreeSidebar
+                    | Action::SplitRight
+                    | Action::Settings
+            )
         } else {
             match action {
                 Action::SplitRight => density.show_split,
@@ -269,6 +303,12 @@ pub fn layout(
             None
         };
         take(Item::Action(*action), *icon, &label, tooltip, &mut right);
+    }
+
+    // The Proxy pill sits immediately to the right of the Cockpit pill (so it
+    // is placed just before Cockpit in the right-to-left pass).
+    if !proxy.trim().is_empty() {
+        take(Item::Proxy, '●', proxy, None, &mut right);
     }
 
     // The Cockpit tally sits just left of the actions, when there is one:

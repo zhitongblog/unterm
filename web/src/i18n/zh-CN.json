@@ -6,7 +6,7 @@
   "nav.download": "下载",
   "nav.docs": "文档",
   "cap.title": "完整的控制面",
-  "cap.subtitle": "不是截图导览，而是每个 agent 和脚本都能调用的真实表面：30 个命名空间下 152 个 MCP 方法，外加 34 个 CLI 命令，全部返回同一份 JSON。",
+  "cap.subtitle": "不是截图导览，而是每个 agent 和脚本都能调用的真实表面：30 个命名空间下 155 个 MCP 方法，外加 34 个 CLI 命令，全部返回同一份 JSON。",
   "cap.stat.methods": "MCP 方法",
   "cap.stat.namespaces": "命名空间",
   "cap.stat.cli": "CLI 命令",
@@ -64,7 +64,7 @@
   "tldr.engine_stack": "技术栈",
   "tldr.engine_stack.value": "Rust · 原生 next-core 引擎 · wgpu · MCP（line-delimited JSON-RPC）· Tailwind + Alpine 网页设置",
   "tldr.bundled_agents": "内置 AI agent",
-  "tldr.bundled_agents.value": "7 个签名 manifest —— Claude Code · Codex CLI · Gemini CLI · OpenCode · Aider · Kimi Code CLI · Trae Agent。从 unterm.app/api/agents/manifests 拉 Ed25519 签名信封，每个 agent 可选认证模式。",
+  "tldr.bundled_agents.value": "9 个签名 manifest —— Claude Code · Codex CLI · Gemini CLI · Antigravity (agy) · Qwen Code · OpenCode · Aider · Kimi Code CLI · Trae Agent。从 unterm.app/api/agents/manifests 拉 Ed25519 签名信封，支持官方 OAuth 订阅与国内大模型 Coding Plan。",
   "stand.title": "Unterm 真正与众不同的地方",
   "stand.subtitle": "三条你自己能 grep / build / run 验证的差异。没营销话术。",
   "stand.agents.title": "你启动每个 AI 编码 agent 的终端",
@@ -441,7 +441,7 @@
   "home.cockpit.alt.jump": "跳到 Codex：它正请求执行一次数据库迁移",
   "home.drive.kicker": "为被驱动而生",
   "home.drive.title": "你的 agent 也能驱动这个终端",
-  "home.drive.sub": "一条命令就把 Unterm 注册给 Claude Code、Codex、Gemini、Cursor、Windsurf 和 OpenCode。此后 agent 可以开标签、跑命令、读屏幕、等结果——用的就是你自己写脚本也能用的 152 个 MCP 方法和 34 个 CLI 命令。",
+  "home.drive.sub": "一条命令就把 Unterm 注册给 Claude Code、Codex、Gemini、Antigravity (agy)、Cursor、Windsurf 和 OpenCode。此后 agent 可以开标签、跑命令、读屏幕、跨 Agent 委派任务（agent_session.delegate）、创建隐藏 Git 检查点——用的就是你自己写脚本也能用的 155 个 MCP 方法和 34 个 CLI 命令。",
   "home.drive.1": "在正确的目录开一个标签，跑测试",
   "home.drive.2": "以纯文本读取一个窗格的输出，或者它的全部历史",
   "home.drive.3": "提出一条命令，你按 Tab 才采纳——绝不背着你打字",
@@ -611,6 +611,6 @@
   "whatsnew.update724.body": "<strong>AI Agent 与国内 Coding Plan：</strong>内置 <code class=\"font-mono text-xs\">agy</code>（Google Antigravity CLI）与 <code class=\"font-mono text-xs\">qwen-code</code>（阿里千问 Qwen Code CLI）签名配置，并为 Claude Code、Kimi Code、OpenCode、Trae Agent 新增国内大模型 Coding Plan 模式（智谱 GLM、阿里云百炼 / DashScope、火山方舟、DeepSeek、MiniMax、月之暗面）。<strong>未安装自动引导与修复 PATH：</strong>支持未安装时一键引导安装并自动处理权限回退，新增 <code class=\"font-mono text-xs\">unterm-cli agent repair-path</code>（<code class=\"font-mono text-xs\">fix-path</code>）与 Web 设置页「修复 PATH」按钮，自动幂等更新 <code class=\"font-mono text-xs\">.zshrc</code> / <code class=\"font-mono text-xs\">.bashrc</code> / <code class=\"font-mono text-xs\">config.fish</code> 与 Windows 用户级 <code class=\"font-mono text-xs\">Path</code>。<strong>命令补全与国内镜像：</strong>预加载本机 Shell 历史并持久化补全记录，同步发布至 AtomGit 提供中国大陆高速下载直链。",
   "whatsnew.update725.title": "托管与受管智能体会话、常设审批规则、控制台任务运行时与 Core 托管设置服务",
   "whatsnew.update725.body": "<strong>托管与受管会话体系（#50–#61）：</strong>支持按 <code class=\"font-mono text-xs\">contracts/v0</code>（<code class=\"font-mono text-xs\">brain_event.v0</code>）驱动 Claude Code、Codex（<code class=\"font-mono text-xs\">codex app-server</code>）、OpenCode（<code class=\"font-mono text-xs\">opencode acp</code>）、Antigravity（<code class=\"font-mono text-xs\">agy acp</code>）与 Gemini CLI，提供无头多轮追问、收件箱工具审批（<code class=\"font-mono text-xs\">agent_session.decide</code>）、常设自动放行/拒绝策略（<code class=\"font-mono text-xs\">agent_policy</code>）、受管会话免重复拦截（<code class=\"font-mono text-xs\">UNTERM_HOSTED_GRANT</code>）及进程退出后续接会话（<code class=\"font-mono text-xs\">agent_session.resume</code>）。<strong>控制台任务运行时与 Core 托管设置（#62–#67）：</strong>控制台任务存储、运行与定时收归 Unterm 运行时管理，设置页与控制台 REST 直接由 <code class=\"font-mono text-xs\">unterm-core</code> 提供，并支持启动方自定义终端窗口产品名（<code class=\"font-mono text-xs\">UNTERM_PRODUCT_NAME</code>）。",
-  "whatsnew.update726.title": "零延迟专属输入通道、窗口内原生设置中心、活跃智能体巡检（跨分屏 Y/N 快捷审批）与风险分级自治",
-  "whatsnew.update726.body": "<strong>零延迟输入与窗口内原生设置中心：</strong>为键盘与鼠标输入建立独立持久 IPC 专属通道（<code class=\"font-mono text-xs\">ui_client</code>），配合 <code class=\"font-mono text-xs\">Condvar</code> 事件唤醒（6ms 活跃帧率 + 2ms 键入即时回显唤醒）与 <code class=\"font-mono text-xs\">pane_modes</code>/<code class=\"font-mono text-xs\">mcp_state</code> 内存级缓存，彻底消除使用 <code class=\"font-mono text-xs\">agy</code> 等高频 TUI 时的打字偶发卡顿；点击标题栏 <code class=\"font-mono text-xs\">⚙</code> 或按 <code class=\"font-mono text-xs\">Cmd+,</code> 直接呼出窗口内原生设置中心。<strong>活跃智能体巡检与风险分级自治（#68–#72）：</strong>升级 <code class=\"font-mono text-xs\">Ctrl+Shift+I</code> 智能体与任务巡检面板（实时抓取后台 Agent 终端末尾 2 行动态、支持跨分屏直接按 <code class=\"font-mono text-xs\">Y</code>/<code class=\"font-mono text-xs\">N</code> 远程审批）与左侧边栏悬停预览卡片；新增按操作风险分级的 <code class=\"font-mono text-xs\">Autonomy</code> 自治级别、控制台任务多轮对话、专属受管浏览器身份（<code class=\"font-mono text-xs\">~/.unterm/browser-profile</code>）、本地 CLI 登录、精选技能插件及后台活跃任务 Core 保活。"
+  "whatsnew.update726.title": "零延迟专属输入通道、多主题高定 UI、多 Agent 中枢协同调度（delegate / handover）与风险分级自治",
+  "whatsnew.update726.body": "<strong>零延迟输入与多主题高定 UI：</strong>为键盘与鼠标输入建立独立持久 IPC 专属通道（<code class=\"font-mono text-xs\">ui_client</code>），配合 <code class=\"font-mono text-xs\">Condvar</code> 事件即时唤醒、进程树并发快照释放全局锁与输入回显帧合并，彻底消除高频 TUI 下的打字卡顿；全量升级 7 套主题的视觉层级（顶栏、侧边栏、状态胶囊与快捷键右对齐面板），支持命令报错一键 AI 诊断修复与全拓扑会话恢复。<strong>多 Agent 协同调度与风险分级自治（#68–#73）：</strong>支持 <code class=\"font-mono text-xs\">agent_session.delegate</code> 跨 CLI Agent 委派子任务、<code class=\"font-mono text-xs\">agent_session.handover</code> 遇到登录/验证码请求人工接手、受管 Agent 工具按需裁剪（<code class=\"font-mono text-xs\">mcp-trim</code> 每次请求省约 3 万 token）、外部客户端写入按 <code class=\"font-mono text-xs\">Autonomy</code> 风险等级逐条命令判断，以及 <code class=\"font-mono text-xs\">Ctrl+Shift+I</code> 跨分屏 <code class=\"font-mono text-xs\">Y</code>/<code class=\"font-mono text-xs\">N</code> 快捷审批与专属受管浏览器身份。"
 }

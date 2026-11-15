@@ -1,8 +1,11 @@
-use super::{lifecycle, process_tree, runtime::NextCoreRuntime, session_registry, NextCoreSession};
+use super::{lifecycle, process_tree, session_registry};
+#[cfg(test)]
+use super::{runtime::NextCoreRuntime, NextCoreSession};
 use crate::SessionActivitySnapshot;
 use anyhow::Result;
 use std::time::Instant;
 
+#[cfg(test)]
 pub(super) fn read_snapshot(
     state: &mut NextCoreRuntime,
     pane_id: usize,
@@ -16,6 +19,41 @@ pub(super) fn read_snapshot(
     Ok(snapshot)
 }
 
+pub(in crate::next_core) fn read_snapshot_concurrent(
+    pane_id: usize,
+    now: Instant,
+) -> Result<SessionActivitySnapshot> {
+    let (is_dead, root_pid, shell_process_name, activity) =
+        super::runtime::with_current_mut(|state| -> Result<_> {
+            let session = session_registry::session_mut(state, pane_id)?;
+            let dead_reason = lifecycle::refresh_liveness(session);
+            let is_dead = session.snapshot.is_dead;
+            let root_pid = session.root_pid;
+            let shell_process_name = session.snapshot.shell.process_name.clone();
+            let activity = session.activity.clone();
+            if let Some(reason) = dead_reason {
+                lifecycle::record_dead_reason(state, reason);
+            }
+            Ok((is_dead, root_pid, shell_process_name, activity))
+        })?;
+    let process = process_tree::snapshot(root_pid, &shell_process_name);
+    let foreground_process = process
+        .as_ref()
+        .map(|process| process.foreground_process.clone())
+        .unwrap_or(shell_process_name);
+    let activity = activity.lock();
+    Ok(SessionActivitySnapshot {
+        idle: is_dead || activity.is_idle(now),
+        foreground_process,
+        process,
+        input: activity.input.clone(),
+        output: activity.output.clone(),
+        paste: activity.paste.clone(),
+        screen: activity.screen.clone(),
+    })
+}
+
+#[cfg(test)]
 pub(super) fn snapshot(
     session: &mut NextCoreSession,
     now: Instant,

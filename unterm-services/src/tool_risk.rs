@@ -61,6 +61,14 @@ impl Autonomy {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cautious => "Cautious",
+            Self::Balanced => "Balanced",
+            Self::Autonomous => "Autonomous",
+        }
+    }
+
     /// Whether a call at `risk` may run without anyone being asked.
     pub fn allows(self, risk: Risk) -> bool {
         if !risk.allows_standing_grant() {

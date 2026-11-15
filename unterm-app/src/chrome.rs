@@ -32,6 +32,14 @@ pub struct Chrome {
     pub group_bg: [f32; 4],
     pub footer_bg: [f32; 4],
     pub focus_rail: [f32; 4],
+    pub status_ok: [f32; 4],
+    pub status_ok_bg: [f32; 4],
+    pub status_ok_outline: [f32; 4],
+    pub status_err: [f32; 4],
+    pub status_err_bg: [f32; 4],
+    pub status_err_outline: [f32; 4],
+    pub toast_bg: [f32; 4],
+    pub toast_outline: [f32; 4],
     pub is_light: bool,
 }
 
@@ -46,6 +54,7 @@ pub struct Chrome {
 #[allow(dead_code)]
 pub fn chrome(background: [f32; 4], foreground: [f32; 4]) -> Chrome {
     let is_light = is_light_surface(background);
+    let is_warm = foreground[0] > foreground[2] + 0.008;
 
     // Linear-light mixing is visually stronger than the numeric amount
     // suggests, so dark schemes need only a very small lift.
@@ -60,6 +69,40 @@ pub fn chrome(background: [f32; 4], foreground: [f32; 4]) -> Chrome {
     } else {
         mix(surface, foreground, 0.060)
     };
+
+    // Theme-harmonized focus accent: warm themes (Agent Inbox, Notion Dark,
+    // Notion Light) use waiting amber/bronze; cool/neutral themes (Standard,
+    // Midnight, Daylight, Classic) use luminous teal / ocean teal. Both keep
+    // >= 3.5:1 contrast against `selected_bg`.
+    let focus_rail = match (is_light, is_warm) {
+        (true, true) => srgb(0x8a, 0x65, 0x19),
+        (true, false) => srgb(0x0b, 0x6e, 0x63),
+        (false, true) => srgb(0xe8, 0xb3, 0x4b),
+        (false, false) => srgb(0x2d, 0xd4, 0xbf),
+    };
+
+    let status_ok = if is_light {
+        srgb(0x0d, 0x7a, 0x4e)
+    } else {
+        srgb(0x34, 0xd3, 0x99)
+    };
+    let status_ok_bg = mix(surface, status_ok, if is_light { 0.09 } else { 0.12 });
+    let status_ok_outline = with_alpha(status_ok, if is_light { 0.34 } else { 0.38 });
+
+    let status_err = if is_light {
+        srgb(0xb8, 0x2e, 0x2e)
+    } else {
+        srgb(0xf8, 0x71, 0x71)
+    };
+    let status_err_bg = mix(surface, status_err, if is_light { 0.09 } else { 0.14 });
+    let status_err_outline = with_alpha(status_err, if is_light { 0.36 } else { 0.42 });
+
+    let toast_bg = if is_light {
+        mix(background, foreground, 0.075)
+    } else {
+        mix(surface, foreground, 0.085)
+    };
+    let toast_outline = with_alpha(foreground, if is_light { 0.16 } else { 0.15 });
 
     Chrome {
         surface,
@@ -76,15 +119,15 @@ pub fn chrome(background: [f32; 4], foreground: [f32; 4]) -> Chrome {
         selected_bg,
         group_bg: mix(surface, foreground, if is_light { 0.018 } else { 0.016 }),
         footer_bg: surface,
-        // The waiting amber, in a darker optical variant on light
-        // surfaces so the focus rail stays crisp instead of glowing.
-        // One accent for the whole chrome, and it is the same colour
-        // the status language uses for "needs you".
-        focus_rail: if is_light {
-            srgb(0x8a, 0x65, 0x19)
-        } else {
-            srgb(0xe8, 0xb3, 0x4b)
-        },
+        focus_rail,
+        status_ok,
+        status_ok_bg,
+        status_ok_outline,
+        status_err,
+        status_err_bg,
+        status_err_outline,
+        toast_bg,
+        toast_outline,
         is_light,
     }
 }
@@ -162,10 +205,10 @@ mod tests {
 
     const WCAG_AA_NORMAL_TEXT: f32 = 4.5;
 
-    /// The six themes the product ships, as the previous front end's own
-    /// contrast test listed them. Keeping the list here is what makes a new
-    /// theme's chrome checkable before anyone looks at it.
+    /// The seven themes the product ships. Keeping the list here is what makes
+    /// a new theme's chrome checkable before anyone looks at it.
     const BUNDLED: &[(&str, [f32; 4], [f32; 4])] = &[
+        ("Agent Inbox", srgb(0x0c, 0x0d, 0x0f), srgb(0xec, 0xe8, 0xe1)),
         ("Standard", srgb(0x11, 0x13, 0x15), srgb(0xe8, 0xea, 0xed)),
         ("Midnight", srgb(0x0c, 0x12, 0x20), srgb(0xdf, 0xe7, 0xf1)),
         ("Daylight", srgb(0xf6, 0xf7, 0xf4), srgb(0x16, 0x1a, 0x1d)),

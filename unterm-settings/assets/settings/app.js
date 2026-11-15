@@ -62,6 +62,17 @@ function untermSettings() {
       trusted: { runtime: [], static_config: [], audit_counts: [] },
       audit: [],
       newAgentInput: '',
+      clients: [],
+      clientsBusy: null,
+      autonomy: 'balanced',
+      autonomySaving: false,
+      helpers: [],
+    },
+
+    lastSession: {
+      cwds: [],
+      tabs: [],
+      active_tab: 0,
     },
 
     remote: {
@@ -400,9 +411,30 @@ function untermSettings() {
         this.toast(this.t('web.toast.refresh').replace('{err}', e.message), 'error');
       }
       await this.loadSessions();
+      await this.loadLastSession();
       await this.loadCompat();
       await this.loadUpdates();
       await this.loadRemote();
+    },
+
+    async loadLastSession() {
+      try {
+        const j = await this.api('GET', '/api/sessions/last');
+        this.lastSession = {
+          cwds: j.cwds || [],
+          tabs: j.tabs || [],
+          active_tab: j.active_tab || 0,
+        };
+      } catch (e) {}
+    },
+
+    async openSessionTab(cwd) {
+      try {
+        await this.remoteRpc('tab.create', cwd ? { cwd } : {});
+        this.toast('已在终端新建标签页: ' + (cwd || '~'));
+      } catch (e) {
+        this.toast('新建标签页失败: ' + e.message, 'error');
+      }
     },
 
     async loadRemote() {
@@ -1684,23 +1716,78 @@ function untermSettings() {
     async loadMcp() {
       this.mcp.loading = true;
       try {
-        const [trusted, audit] = await Promise.all([
+        const [trusted, audit, clientsRes, runSettings, helpersRes] = await Promise.all([
           this.api('GET', '/api/mcp/trusted'),
           this.api('GET', '/api/mcp/audit?limit=80'),
+          this.api('GET', '/api/console/clients').catch(() => ({ clients: [] })),
+          this.api('GET', '/api/console/run-settings').catch(() => ({ autonomy: 'balanced' })),
+          this.api('GET', '/api/console/helpers').catch(() => ({ helpers: [] })),
         ]);
         this.mcp.trusted = trusted;
-        // audit endpoint returns { recent: [...], total: N } per
-        // audit_log_snapshot_json's shape. Tolerate both arr-only and
-        // wrapped shapes.
         this.mcp.audit = Array.isArray(audit) ? audit
           : Array.isArray(audit.recent) ? audit.recent
           : Array.isArray(audit.entries) ? audit.entries
           : [];
+        this.mcp.clients = clientsRes.clients || [];
+        this.mcp.autonomy = runSettings.autonomy || 'balanced';
+        this.mcp.helpers = helpersRes.helpers || [];
         this.mcp.loaded = true;
       } catch (e) {
         this.toast(this.t('web.mcp.toast.load_failed').replace('{err}', e.message), 'error');
       } finally {
         this.mcp.loading = false;
+      }
+    },
+
+    async toggleMcpClient(client) {
+      if (!client || !client.slug) return;
+      this.mcp.clientsBusy = client.slug;
+      try {
+        const enable = !client.terminal;
+        await this.api('POST', '/api/console/clients/toggle', {
+          slug: client.slug,
+          section: 'terminal',
+          enable,
+        });
+        await this.loadMcp();
+        this.toast((enable ? '已接入 MCP: ' : '已断开 MCP: ') + client.name);
+      } catch (e) {
+        this.toast('MCP 客户端配置失败: ' + e.message, 'error');
+      } finally {
+        this.mcp.clientsBusy = null;
+      }
+    },
+
+    async connectAllMcpClients() {
+      this.mcp.clientsBusy = '__all__';
+      try {
+        const targets = (this.mcp.clients || []).filter((c) => c.installed && !c.terminal);
+        for (const c of targets) {
+          await this.api('POST', '/api/console/clients/toggle', {
+            slug: c.slug,
+            section: 'terminal',
+            enable: true,
+          });
+        }
+        await this.loadMcp();
+        this.toast(targets.length > 0 ? `已一键接入 ${targets.length} 个 AI 客户端` : '所有已安装客户端均已接入 MCP');
+      } catch (e) {
+        this.toast('一键接入失败: ' + e.message, 'error');
+      } finally {
+        this.mcp.clientsBusy = null;
+      }
+    },
+
+    async setAutonomy(level) {
+      this.mcp.autonomySaving = true;
+      try {
+        const res = await this.api('POST', '/api/console/run-settings', { autonomy: level });
+        this.mcp.autonomy = res.autonomy || level;
+        this.toast('已切换 AI 风险自治等级为: ' + this.mcp.autonomy);
+      } catch (e) {
+        this.toast('切换自治等级失败: ' + e.message, 'error');
+      } finally {
+        this.mcp.autonomySaving = false;
       }
     },
 

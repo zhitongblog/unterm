@@ -85,6 +85,87 @@ pub enum Command {
     SelectCaptureRegion,
     /// Auto-configure installed AI agents (Claude, Codex, Gemini, Agy, Cursor) to connect to Unterm MCP.
     SetupAiAgents,
+    /// Open the native Git Checkpoints & 1-Click Rollback palette for a pane's repository.
+    OpenCheckpoints,
+    /// Create a zero-pollution hidden Git checkpoint (`refs/unterm/checkpoints/<id>`) immediately.
+    CreateCheckpoint,
+    /// Restore the working tree to a checkpoint (automatically creating a pre-restore backup).
+    RestoreCheckpoint {
+        repo: String,
+        oid: String,
+        label: String,
+    },
+    /// Open a diff summary view for a checkpoint.
+    DiffCheckpoint { repo: String, oid: String },
+    /// Open the risk-graded Autonomy selector (`Cautious`, `Balanced`, `Autonomous`).
+    OpenAutonomySelector,
+    /// Apply a risk-graded Autonomy level (`cautious`, `balanced`, `autonomous`).
+    SetAutonomy { level: String },
+    /// Open the 1-Click Portable Agent Handoff target picker.
+    OpenAgentHandoff,
+    /// Package `source_pane`'s context + git state and launch `program` in the same repo.
+    ExecuteAgentHandoff {
+        source_pane: usize,
+        program: String,
+    },
+    /// Execute a multi-line or high-risk paste after explicit user confirmation.
+    ConfirmSafePaste { pane_id: usize, text: String },
+    /// Open the in-window GPU-rendered Unterm Pocket QR pairing modal.
+    OpenPocketQr,
+    /// Reconnect SSH in `pane_id`.
+    ReconnectSsh { pane_id: usize },
+    /// Open the native UI language selector.
+    OpenLanguageSelector,
+    /// Set the active UI language (`zh-CN`, `zh-TW`, `en-US`, etc.) and redraw immediately.
+    SetLanguage { code: String },
+    /// Open the native cursor shape & blink selector.
+    OpenCursorSelector,
+    /// Set the cursor style (`SteadyBlock`, `BlinkingBlock`, `SteadyBar`, `BlinkingBar`, `SteadyUnderline`, `BlinkingUnderline`).
+    SetCursorStyle { style: String },
+    /// Open the native scrollback history limit selector.
+    OpenScrollbackSelector,
+    /// Set the scrollback history line limit for new panes and persist to `~/.unterm/scrollback.json`.
+    SetScrollbackLines { lines: usize },
+    /// Open the per-client MCP integration manager (`unterm_settings::clients`).
+    OpenMcpClients,
+    /// Connect or disconnect an individual AI client (`claude-desktop`, `claude-code`, `cursor`, `codex`, `agy`, etc.).
+    ToggleMcpClient { id: String, connect: bool },
+    /// Open the paired mobile devices manager (`unterm_settings::remote::list_devices`).
+    OpenPairedDevices,
+    /// Revoke a paired mobile device token (`unterm_settings::remote::revoke_device`).
+    RevokePairedDevice { device_id: String },
+    /// Open `~/.unterm/unterm.conf` in the system editor.
+    OpenConfigFile,
+    /// Open the native Network Proxy & Clash Node Settings center.
+    OpenProxySettings,
+    /// Toggle proxy environment injection for newly spawned shells.
+    ToggleProxy,
+    /// Apply (`export` or `unset`) proxy environment variables in the currently focused shell pane.
+    ApplyProxyToCurrentPane { enable: bool },
+    /// Configure proxy mode (`auto` or `manual`) and optional HTTP/SOCKS endpoints in `~/.unterm/proxy.json`.
+    SetProxyPreset {
+        mode: String,
+        http_proxy: Option<String>,
+        socks_proxy: Option<String>,
+    },
+    /// Open an input prompt to type a custom proxy URL (`http://127.0.0.1:7890`).
+    OpenCustomProxyInput,
+    /// Save the custom proxy URL typed in the palette query line.
+    SaveCustomProxyUrl,
+    /// Open the Clash / Mihomo selector groups list.
+    OpenClashGroups,
+    /// Open the node list for a specific Clash selector group.
+    OpenClashGroupNodes { group: String },
+    /// Switch a Clash selector group to `node`.
+    SelectClashNode { group: String, node: String },
+    /// Open `~/.unterm/proxy.json` in the system editor.
+    OpenProxyConfigFile,
+    /// Open the AI error diagnosis & 1-click fix menu for the focused pane.
+    DiagnoseLastFailure,
+    /// Copy the focused pane's error context (exit code, cwd, git status, recent output) to clipboard.
+    CopyFailureContext,
+    /// Open a split pane with `agent` to diagnose and fix the focused pane's failure.
+    FixFailureWithAgent { agent: String },
     /// A row that is information rather than a verb. The Insights card is a
     /// list to read, not a list to run, and pressing a line of it should do
     /// nothing rather than whatever a guess would be.

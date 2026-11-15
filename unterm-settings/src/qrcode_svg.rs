@@ -54,8 +54,8 @@ const VERSIONS: &[VersionSpec] = &[
     },
 ];
 
-/// Render `text` as a crisp, standalone `<svg>` QR code string.
-pub fn render_svg(text: &str) -> String {
+/// Render `text` into a raw boolean QR matrix (`true` = dark module).
+pub fn render_matrix(text: &str) -> Vec<Vec<bool>> {
     let bytes = text.as_bytes();
     let spec = VERSIONS
         .iter()
@@ -66,10 +66,14 @@ pub fn render_svg(text: &str) -> String {
     } else {
         bytes
     };
-
     let codewords = encode_codewords(payload, spec);
-    let matrix = build_matrix(spec, &codewords);
-    let n = spec.size;
+    build_matrix(spec, &codewords)
+}
+
+/// Render `text` as a crisp, standalone `<svg>` QR code string.
+pub fn render_svg(text: &str) -> String {
+    let matrix = render_matrix(text);
+    let n = matrix.len();
     let quiet = 3usize;
     let total = n + quiet * 2;
 

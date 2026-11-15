@@ -268,9 +268,14 @@ pub fn wake_loop() {
     }
 }
 
+/// On the loop's thread: take a repaint request another thread left.
+pub fn take_repaint() -> bool {
+    REPAINT.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+
 /// On the loop's thread: pass on a repaint another thread asked for.
 pub fn deliver_repaint() {
-    if REPAINT.swap(false, std::sync::atomic::Ordering::AcqRel) {
+    if take_repaint() {
         request_repaint();
     }
 }

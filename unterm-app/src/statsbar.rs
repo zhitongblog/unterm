@@ -175,7 +175,29 @@ fn refreshing() -> &'static parking_lot::Mutex<std::collections::HashSet<usize>>
 }
 
 /// How many panes may be refreshing their facts at once.
-const MAX_REFRESHING: usize = 4;
+/// Kept at 1 so background process-table walks serialize gently instead of
+/// queuing a burst of concurrent `session.activity` RPCs against `unterm-core`.
+const MAX_REFRESHING: usize = 1;
+
+/// TTL for background (unfocused) panes when polled by `feed_cockpit`.
+const BACKGROUND_FACTS_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+static LAST_USER_INPUT: std::sync::OnceLock<parking_lot::Mutex<Option<std::time::Instant>>> =
+    std::sync::OnceLock::new();
+
+/// Record that the user just pressed a key or committed IME text so background
+/// process-table walks yield to interactive typing.
+pub fn note_user_input() {
+    *LAST_USER_INPUT.get_or_init(Default::default).lock() = Some(std::time::Instant::now());
+}
+
+/// True when the user typed within the last 650ms.
+pub fn user_typing_recently() -> bool {
+    LAST_USER_INPUT
+        .get_or_init(Default::default)
+        .lock()
+        .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(650))
+}
 
 /// What is known about a pane, refreshing behind the caller's back.
 ///
@@ -184,11 +206,23 @@ const MAX_REFRESHING: usize = 4;
 /// table, git, the per-process sampler) is cached the same way, so the bar
 /// stays a bar rather than becoming a reason the window is slow.
 pub fn facts_for(pane_id: usize) -> Facts {
+    facts_for_with_ttl(pane_id, facts_ttl())
+}
+
+/// Refresh facts for a background pane with a longer TTL so unfocused tabs do
+/// not walk the OS process table every second.
+pub fn facts_for_background(pane_id: usize) -> Facts {
+    facts_for_with_ttl(pane_id, BACKGROUND_FACTS_TTL.max(facts_ttl()))
+}
+
+fn facts_for_with_ttl(pane_id: usize, ttl: std::time::Duration) -> Facts {
     let previous;
     {
         let cache = facts_cache().lock();
         match cache.get(&pane_id) {
-            Some((at, facts)) if at.elapsed() < facts_ttl() => return facts.clone(),
+            Some((at, facts)) if at.elapsed() < ttl || user_typing_recently() => {
+                return facts.clone();
+            }
             Some((_, facts)) => previous = facts.clone(),
             None => previous = Facts::default(),
         }

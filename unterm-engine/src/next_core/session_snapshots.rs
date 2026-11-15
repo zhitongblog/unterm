@@ -43,13 +43,20 @@ pub(super) fn clone_base(state: &NextCoreRuntime, pane_id: usize) -> Result<Sess
 fn snapshot(session: &mut NextCoreSession) -> (SessionSnapshot, Option<String>) {
     let dead_reason = lifecycle::refresh_liveness(session);
     let mut snapshot = session.snapshot.clone();
-    let screen = session.screen.lock();
-    snapshot.cursor = screen.cursor_snapshot();
-    snapshot.scrollback_rows = screen.scrollback_rows();
-    if let Some(title) = screen.title() {
+    let (cursor, scrollback_rows, title, reported) = {
+        let screen = session.screen.lock();
+        (
+            screen.cursor_snapshot(),
+            screen.scrollback_rows(),
+            screen.title(),
+            screen.current_dir(),
+        )
+    };
+    snapshot.cursor = cursor;
+    snapshot.scrollback_rows = scrollback_rows;
+    if let Some(title) = title {
         snapshot.title = title;
     }
-    let reported = screen.current_dir();
     let existing = snapshot.shell.cwd.take();
     snapshot.shell.cwd = process_tree::resolve_cwd(reported, existing, session.root_pid);
     (snapshot, dead_reason)
