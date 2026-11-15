@@ -305,7 +305,7 @@ enum SubCommand {
 
     #[command(
         name = "mcp-trim",
-        about = "Run another MCP stdio server and pass everything through,                  except that its tools/list names only the tools kept.                  Unzoo One mounts a browser this way for the agents it runs."
+        about = "Run another MCP stdio server and pass everything through, except that its tools/list names only the tools kept. Unzoo One mounts a browser this way for the agents it runs."
     )]
     McpTrim(mcp_trim::McpTrimCommand),
 
