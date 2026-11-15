@@ -181,11 +181,21 @@ themselves (signing in, a captcha, a code sent to their phone, a password or car
 type it yourself and never ask for it in the chat: call the unterm MCP tool agent_session.handover \
 with one plain sentence saying what to do and where, and the tab_id when it is in a browser tab. It \
 waits while they do it in the real browser or terminal; when it says done, carry on, and when it \
-says waiting, call it again with the handover_id. In your last reply, name each file you made for \
-the user by its file name: every file named there is shown to them as the result. Do not name the \
-files you only needed along the way (scripts, clones, scratch data), and delete them when you are \
-done if they are no use to the user. Close the browser tabs you \
-opened once you no longer need them.";
+says waiting, call it again with the handover_id.";
+
+/// What every agent run from the console is told, governed or not: the
+/// console lists as the run's result only the files its last reply names.
+pub(crate) const DELIVERABLES_NOTE: &str = "In your last reply, name each file you made for the user \
+by its file name: every file named there is shown to them as the result. Do not name the files you only \
+needed along the way (scripts, clones, scratch data), and delete them when you are done if they are no \
+use to the user. Close the browser tabs you opened once you no longer need them.";
+
+/// The request as an agent that is not governed receives it: governed ones
+/// have [`DELIVERABLES_NOTE`] in their system prompt, the others have no
+/// such channel here, so it follows the request.
+pub(crate) fn with_deliverables_note(prompt: &str) -> String {
+    format!("{prompt}\n\n({DELIVERABLES_NOTE})")
+}
 
 /// Said to a governed agent that may hand work on (not to a helper, which
 /// may not).
@@ -219,7 +229,7 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>) -> Result<Vec<St
                    "args": ["--mcp", "stdio", "--client", super::browser::CLIENT]}),
         );
     }
-    let mut prompt = GOVERNED_PROMPT.to_string();
+    let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE}");
     if let Some(profile) = browser_profile.map(str::trim).filter(|p| !p.is_empty()) {
         if unzoo_service_path().is_some() && profile != super::browser::RESERVED_PROFILE {
             prompt.push(' ');

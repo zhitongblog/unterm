@@ -265,8 +265,13 @@ pub fn outputs_since(dir: &std::path::Path, since: std::time::SystemTime) -> Vec
 /// person. The rest -- a repository it cloned, a script it wrote to scroll a
 /// page, data it kept along the way -- was its working, not the result. A
 /// file is named by its path or by its file name.
+/// When the reply names none of them (an agent that did not say), all are
+/// kept: too many is better than a result that is not there.
 pub fn named_in(outputs: Vec<Output>, reply: &str) -> Vec<Output> {
     let reply = reply.replace('\\', "/");
+    if !outputs.iter().any(|output| names(&reply, &output.path)) {
+        return outputs;
+    }
     outputs.into_iter().filter(|output| names(&reply, &output.path)).collect()
 }
 
@@ -281,10 +286,11 @@ fn listed_outputs(detail: &Value) -> Value {
     let Some(outputs) = detail.get("outputs").and_then(Value::as_array) else { return json!([]) };
     let Some(reply) = detail.get("reply").and_then(Value::as_str) else { return json!(outputs) };
     let reply = reply.replace('\\', "/");
-    json!(outputs
+    let named: Vec<&Value> = outputs
         .iter()
         .filter(|o| o.get("path").and_then(Value::as_str).is_some_and(|path| names(&reply, path)))
-        .collect::<Vec<_>>())
+        .collect();
+    if named.is_empty() { json!(outputs) } else { json!(named) }
 }
 
 /// How much of one output the console is shown.
@@ -435,6 +441,13 @@ fn kept_from(mut kept: Value, from_line: Option<i64>) -> Value {
     kept["row_count"] = json!(rest.len());
     kept["text"] = json!(rest.join("\n"));
     kept
+}
+
+/// Whether a tool is one of an MCP server's, however the agent names it:
+/// Claude Code says `mcp__unzoo__tab_create`, Codex `unzoo.tab_create`.
+fn from_server(tool: &str, server: &str) -> bool {
+    tool.strip_prefix("mcp__").and_then(|rest| rest.strip_prefix(server)).is_some_and(|rest| rest.starts_with("__"))
+        || tool.strip_prefix(server).is_some_and(|rest| rest.starts_with('.'))
 }
 
 /// Closed with its run (see [`tidy_up`]): the last thing it showed.
@@ -972,7 +985,11 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                         "env": skills,
                         "command": command,
                         "session_id": session,
-                        "prompt": prompt,
+                        "prompt": if record.as_ref().is_some_and(|r| r.governed) {
+                            prompt.clone()
+                        } else {
+                            super::agent_run::with_deliverables_note(&prompt)
+                        },
                         // Today's level, not the one the conversation began under.
                         "autonomy": settings.autonomy.as_str(),
                         "task_id": console_task_id,
@@ -1002,7 +1019,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
             let governed = settings.governed && super::agent_run::supports_governed(&settings.agent);
             let mut body = json!({
                 "agent": settings.agent,
-                "prompt": prompt,
+                "prompt": if governed { prompt.clone() } else { super::agent_run::with_deliverables_note(&prompt) },
                 "hosted": true,
                 "governed": governed,
                 "autonomy": settings.autonomy.as_str(),
@@ -1113,14 +1130,14 @@ impl Turn {
                 // answer: `session.create` and `tab_create` name it there.
                 if let (Some(tool), Some(output)) = (tool, event.get("output").and_then(Value::as_str)) {
                     let ok = event.get("ok").and_then(Value::as_bool) != Some(false);
-                    if tool.starts_with("mcp__unterm__") {
+                    if from_server(&tool, "unterm") {
                         if let Some(session) = id_after(output, "session_id") {
                             self.note_terminal(&session);
                             if ok && tool.ends_with("session_create") && !self.opened_terminals.contains(&session) {
                                 self.opened_terminals.push(session);
                             }
                         }
-                    } else if tool.starts_with("mcp__unzoo__") {
+                    } else if from_server(&tool, "unzoo") {
                         if let Some(tab) = id_after(output, "tab_id") {
                             self.note_tab(&tab);
                             if ok && tool.ends_with("tab_create") && !self.opened_tabs.contains(&tab) {
@@ -1179,14 +1196,14 @@ impl Turn {
             return;
         }
         let arguments = &call["arguments"];
-        if tool.starts_with("mcp__unterm__") {
+        if from_server(tool, "unterm") {
             for key in ["session_id", "pane_id", "id"] {
                 if let Some(session) = scalar_id(&arguments[key]) {
                     self.note_terminal(&session);
                     break;
                 }
             }
-        } else if tool.starts_with("mcp__unzoo__") {
+        } else if from_server(tool, "unzoo") {
             if let Some(tab) = scalar_id(&arguments["tab_id"]) {
                 self.note_tab(&tab);
             }
@@ -2050,7 +2067,8 @@ mod tests {
         let reply = "Saved the list as HN-Top10.md and the raw data as `out\\posts.csv`.";
         let named = named_in(written, reply);
         assert_eq!(named.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["HN-Top10.md", "out/posts.csv"]);
-        assert!(named_in(vec![output("scratch.json")], "Done.").is_empty());
+        // A reply that names none of them: all are kept rather than none.
+        assert_eq!(named_in(vec![output("notes.md"), output("tmp.txt")], "Done.").len(), 2);
     }
 
     #[test]
@@ -2247,6 +2265,15 @@ mod tests {
         // was there before (the person's, perhaps).
         assert_eq!(turn.opened_terminals, vec!["5".to_string()]);
         assert_eq!(turn.opened_tabs, vec!["77".to_string()]);
+    }
+
+    #[test]
+    fn tools_are_known_by_their_server_whichever_agent_names_them() {
+        assert!(from_server("mcp__unzoo__tab_create", "unzoo"));
+        assert!(from_server("unzoo.tab_create", "unzoo"));
+        assert!(!from_server("mcp__unzoo_x__tab_create", "unzoo"));
+        assert!(!from_server("unzooish.tab_create", "unzoo"));
+        assert!(!from_server("shell", "unterm"));
     }
 
     #[test]

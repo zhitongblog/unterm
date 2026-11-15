@@ -31,6 +31,10 @@ use crate::{BrainAdapter, BrainEvent, StopReason, Usage};
 const COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
 const PATCH_APPROVAL: &str = "item/fileChange/requestApproval";
 const PERMISSIONS_APPROVAL: &str = "item/permissions/requestApproval";
+/// An MCP server asking the person something through Codex. Under the
+/// `untrusted` policy this is how Codex asks before an MCP tool call (a
+/// browser tool, say): answered "not offered", the call is declined.
+const ELICITATION: &str = "mcpServer/elicitation/request";
 
 fn id_key(id: &Value) -> String {
     match id {
@@ -283,7 +287,7 @@ impl BrainAdapter for CodexAppAdapter {
                 });
             }
             (
-                Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL)),
+                Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL | ELICITATION)),
                 Some(id),
             ) => {
                 self.start_turn(&mut out);
@@ -301,6 +305,17 @@ impl BrainAdapter for CodexAppAdapter {
                             .map(|(_, args)| args.clone())
                             .unwrap_or(Value::Null),
                     ),
+                    // The question names only the server; the call it is
+                    // about is the one of that server's still under way.
+                    ELICITATION => {
+                        let server = str_at(params, "serverName").unwrap_or("mcp");
+                        let prefix = format!("{server}.");
+                        self.items
+                            .values()
+                            .find(|(name, _)| name.starts_with(&prefix))
+                            .cloned()
+                            .unwrap_or_else(|| (server.to_string(), Value::Null))
+                    }
                     _ => (
                         "permissions".to_string(),
                         params.get("permissions").cloned().unwrap_or(Value::Null),
@@ -310,7 +325,9 @@ impl BrainAdapter for CodexAppAdapter {
                     request_id: id_key(id),
                     tool,
                     input,
-                    description: str_at(params, "reason").map(str::to_string),
+                    description: str_at(params, "reason")
+                        .or_else(|| (method == ELICITATION).then(|| str_at(params, "message")).flatten())
+                        .map(str::to_string),
                 });
             }
             (Some(_), _) => {}
@@ -468,7 +485,7 @@ impl HostProtocol for CodexAppHost {
         };
         let mut state = self.state.lock().unwrap();
         match (message.get("method").and_then(Value::as_str), message.get("id")) {
-            (Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL)), Some(id)) => {
+            (Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL | ELICITATION)), Some(id)) => {
                 state.asked.insert(id_key(id), (id.clone(), method.to_string(), message["params"].clone()));
                 Vec::new()
             }
@@ -569,6 +586,14 @@ impl HostProtocol for CodexAppHost {
                 lines.push(Self::request(&mut state, "turn/interrupt", turn).1);
             }
             return lines;
+        }
+        if method == ELICITATION {
+            let result = match decision {
+                Decision::Allow => json!({"action": "accept", "content": {}}),
+                Decision::Deny { interrupt: false, .. } => json!({"action": "decline"}),
+                Decision::Deny { interrupt: true, .. } => json!({"action": "cancel"}),
+            };
+            return vec![json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()];
         }
         let answer = match decision {
             Decision::Allow => "accept",
@@ -740,6 +765,35 @@ mod tests {
             input: json!([{"path": "a.txt", "kind": "add"}]),
             description: Some("write a.txt".into()),
         }));
+    }
+
+    #[test]
+    fn an_mcp_tool_question_is_an_approval_and_its_answer_is_an_action() {
+        let mut adapter = CodexAppAdapter::new();
+        let events = run(
+            &mut adapter,
+            &[
+                r#"{"method": "item/started", "params": {"item": {"type": "mcpToolCall", "id": "m1", "server": "unzoo", "tool": "tab_create", "arguments": {"url": "https://example.com"}, "status": "inProgress"}}}"#,
+                r#"{"method": "mcpServer/elicitation/request", "id": 7, "params": {"serverName": "unzoo", "threadId": "th", "turnId": "tu", "mode": "form", "message": "Allow unzoo to run tab_create?", "requestedSchema": {"type": "object", "properties": {}}}}"#,
+            ],
+        );
+        assert!(events.contains(&BrainEvent::PermissionRequested {
+            request_id: "7".into(),
+            tool: "unzoo.tab_create".into(),
+            input: json!({"url": "https://example.com"}),
+            description: Some("Allow unzoo to run tab_create?".into()),
+        }));
+
+        let host = CodexAppHost::new();
+        let question = r#"{"method": "mcpServer/elicitation/request", "id": 7, "params": {"serverName": "unzoo", "threadId": "th", "mode": "form", "message": "?", "requestedSchema": {}}}"#;
+        assert!(host.observe(question).is_empty(), "held for a decision, not refused");
+        assert_eq!(
+            parsed(host.permission_reply("7", &Decision::Allow, &Value::Null)),
+            vec![json!({"jsonrpc": "2.0", "id": 7, "result": {"action": "accept", "content": {}}})]
+        );
+        host.observe(question);
+        let no = Decision::Deny { message: "no".into(), interrupt: false };
+        assert_eq!(parsed(host.permission_reply("7", &no, &Value::Null))[0]["result"], json!({"action": "decline"}));
     }
 
     fn parsed(lines: Vec<String>) -> Vec<Value> {
