@@ -19,6 +19,7 @@ mod instance;
 mod lang;
 mod legacy;
 mod mcp_stdio;
+mod mcp_trim;
 mod output;
 mod policy;
 mod provider;
@@ -300,7 +301,13 @@ enum SubCommand {
                  an AI agent to this Unterm instance. Spawned automatically by \
                  the agent launcher; rarely run by hand."
     )]
-    McpStdio,
+    McpStdio(mcp_stdio::McpStdioCommand),
+
+    #[command(
+        name = "mcp-trim",
+        about = "Run another MCP stdio server and pass everything through,                  except that its tools/list names only the tools kept.                  Unzoo One mounts a browser this way for the agents it runs."
+    )]
+    McpTrim(mcp_trim::McpTrimCommand),
 
     #[command(
         name = "quit",
@@ -417,7 +424,8 @@ fn main() -> Result<()> {
         SubCommand::Server(cmd) => run_server(cmd, opts.json),
         SubCommand::Remote(cmd) => remote::run(cmd, opts.json),
         SubCommand::SetupAi(cmd) => run_setup_ai(cmd, opts.json),
-        SubCommand::McpStdio => run_mcp_stdio(),
+        SubCommand::McpStdio(cmd) => run_mcp_stdio(cmd),
+        SubCommand::McpTrim(cmd) => mcp_trim::run(cmd),
         SubCommand::Quit(cmd) => quit::run(cmd, opts.json),
         SubCommand::Update(cmd) => update::run(cmd, opts.json),
         SubCommand::Cli(cmd) => legacy::run_cli(cmd, opts.json),
@@ -725,8 +733,8 @@ pub fn run_setup_ai(cmd: SetupAiCommand, json_out: bool) -> Result<()> {
     setup_ai::run(cmd, json_out)
 }
 
-pub fn run_mcp_stdio() -> Result<()> {
-    mcp_stdio::run()
+pub fn run_mcp_stdio(cmd: mcp_stdio::McpStdioCommand) -> Result<()> {
+    mcp_stdio::run(cmd)
 }
 
 /// Apply the optional `--lang <code>` flag for the lifetime of this process.
