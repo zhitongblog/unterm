@@ -182,8 +182,9 @@ type it yourself and never ask for it in the chat: call the unterm MCP tool agen
 with one plain sentence saying what to do and where, and the tab_id when it is in a browser tab. It \
 waits while they do it in the real browser or terminal; when it says done, carry on, and when it \
 says waiting, call it again with the handover_id. In your last reply, name each file you made for \
-the user by its file name: only the files named there are shown to them as the result, and the rest \
-you wrote (scripts, clones, scratch data) is treated as your working. Close the browser tabs you \
+the user by its file name: every file named there is shown to them as the result. Do not name the \
+files you only needed along the way (scripts, clones, scratch data), and delete them when you are \
+done if they are no use to the user. Close the browser tabs you \
 opened once you no longer need them.";
 
 /// Said to a governed agent that may hand work on (not to a helper, which
