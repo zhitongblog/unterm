@@ -40,6 +40,8 @@ pub fn set_target_instance(id: Option<&str>) {
 /// and at most. The server keeps the same numbers.
 pub const DELEGATE_WAIT_SECONDS: u64 = 240;
 pub const DELEGATE_WAIT_MAX_SECONDS: u64 = 600;
+/// How long `agent_session.handover` waits for the person by default.
+pub const HANDOVER_WAIT_SECONDS: u64 = 300;
 
 /// How long a reply may take: the server's confirmation wait and a margin.
 fn default_read_timeout() -> Duration {
@@ -174,8 +176,13 @@ impl McpClient {
 
         // A call that is meant to wait -- for a helper agent's turn -- gets
         // that long and a margin, so its answer is not mistaken for silence.
-        let long_wait = (method == "agent_session.delegate").then(|| {
-            let wait = req["params"]["wait_seconds"].as_u64().unwrap_or(DELEGATE_WAIT_SECONDS);
+        let long_wait = match method {
+            "agent_session.delegate" => Some(DELEGATE_WAIT_SECONDS),
+            "agent_session.handover" => Some(HANDOVER_WAIT_SECONDS),
+            _ => None,
+        }
+        .map(|default| {
+            let wait = req["params"]["wait_seconds"].as_u64().unwrap_or(default);
             Duration::from_secs(wait.min(DELEGATE_WAIT_MAX_SECONDS) + 30)
         });
         if let Some(wait) = long_wait {

@@ -58,9 +58,9 @@ pub(crate) fn supports_hosted(agent_id: &str) -> bool {
 }
 
 /// Whether this agent has a governed preset: its own shell off, Unterm's in
-/// its place. Only Claude Code, for now -- see [`governed_args`].
+/// its place -- see [`governed_args`] and [`session_env`].
 pub(crate) fn supports_governed(agent_id: &str) -> bool {
-    agent_id == "claude-code"
+    matches!(agent_id, "claude-code" | "codex-cli" | "opencode")
 }
 
 /// Where `unterm-cli` is: next to this binary (an installed Unterm), one
@@ -171,65 +171,254 @@ fn capabilities() -> Value {
     })
 }
 
-const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shell tools \
-(Bash, PowerShell) and WebFetch are switched off. Run every command through the unterm MCP \
+const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shell tools and \
+web fetching are switched off. Run every command through the unterm MCP \
 server: open a terminal with its session.create tool when you need one, run commands with \
 exec.run_wait and read their output from the result. For anything in a web browser use the \
 unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
-refused, say what you needed it for instead of trying another way.";
+refused, say what you needed it for instead of trying another way. When something needs the user \
+themselves (signing in, a captcha, a code sent to their phone, a password or card number), never \
+type it yourself and never ask for it in the chat: call the unterm MCP tool agent_session.handover \
+with one plain sentence saying what to do and where, and the tab_id when it is in a browser tab. It \
+waits while they do it in the real browser or terminal; when it says done, carry on, and when it \
+says waiting, call it again with the handover_id.";
+
+/// What every agent run from the console is told, governed or not: the
+/// console lists as the run's result only the files its last reply names.
+pub(crate) const DELIVERABLES_NOTE: &str = "In your last reply, name each file you made for the user \
+by its file name: every file named there is shown to them as the result. Do not name the files you only \
+needed along the way (scripts, clones, scratch data), and delete them when you are done if they are no \
+use to the user. Close the browser tabs you opened once you no longer need them.";
+
+/// The request as an agent that is not governed receives it: governed ones
+/// have [`DELIVERABLES_NOTE`] in their system prompt, the others have no
+/// such channel here, so it follows the request.
+pub(crate) fn with_deliverables_note(prompt: &str) -> String {
+    format!("{prompt}\n\n({DELIVERABLES_NOTE})")
+}
 
 /// Said to a governed agent that may hand work on (not to a helper, which
 /// may not).
 const HELPERS_PROMPT: &str = "Another agent on this machine can take a self-contained piece of the work, for example a long coding job while you work the browser, or when the user names one: hand it over with the unterm MCP tool agent_session.delegate (agent: codex-cli, claude-code, opencode or agy; the call says so if one is not installed). Write its prompt so it stands on its own, since the helper has not seen this conversation. It works in the same folder under the same approvals and its report comes back to you; when the call says it is still working, call again with its session_id. Wait for every helper before you finish, because they stop when your turn ends. Never start agents yourself with agent_session.start.";
 
-/// The governed preset for Claude Code: hosted, its own shell and fetch
-/// switched off, Unterm's MCP (and Unzoo Browser's, when installed) mounted
-/// in their place, and a note saying so. Every command it runs then goes
-/// through Unterm -- `AGENTS.md`'s first rule -- and every one is a question
-/// in the inbox first.
-fn governed_args(agent_id: &str, browser_profile: Option<&str>) -> Result<Vec<String>, String> {
-    if !supports_governed(agent_id) {
-        return Err(format!(
-            "{agent_id} has no governed mode yet: only Claude Code can have its own shell switched off and Unterm mounted in its place"
-        ));
-    }
-    let cli = unterm_cli_path()
-        .ok_or("governed mode needs unterm-cli next to this Unterm (or UNTERM_CLI) to mount Unterm's MCP")?;
-    let mut servers = serde_json::Map::new();
-    servers.insert(
-        "unterm".into(),
-        json!({"type": "stdio", "command": cli.display().to_string(), "args": ["mcp-stdio"]}),
-    );
-    if let Some(unzoo) = unzoo_service_path() {
-        // Unzoo gives each client its own isolated browser profile and tabs.
-        // Not `claude-code`: that is the person's own Claude Code, whose tabs
-        // an agent running here must not navigate away (it did, live).
-        servers.insert(
-            "unzoo".into(),
-            json!({"type": "stdio", "command": unzoo.display().to_string(),
-                   "args": ["--mcp", "stdio", "--client", super::browser::CLIENT]}),
-        );
-    }
-    let mut prompt = GOVERNED_PROMPT.to_string();
+/// What a governed agent is told: how to work here, what it delivers, the
+/// browser profile chosen for it, and (unless it is a helper) that it may
+/// hand work on.
+fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
+    let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE}");
     if let Some(profile) = browser_profile.map(str::trim).filter(|p| !p.is_empty()) {
         if unzoo_service_path().is_some() && profile != super::browser::RESERVED_PROFILE {
             prompt.push(' ');
             prompt.push_str(&super::browser::profile_instructions(profile));
         }
     }
-    Ok(vec![
-        "-p".into(),
-        "--disallowedTools".into(),
-        "Bash,PowerShell,WebFetch".into(),
-        "--mcp-config".into(),
-        json!({"mcpServers": servers}).to_string(),
-        "--append-system-prompt".into(),
-        prompt,
-    ])
+    if !helper {
+        prompt.push(' ');
+        prompt.push_str(HELPERS_PROMPT);
+    }
+    prompt
+}
+
+/// What a governed agent is given in place of its own shell: Unterm's MCP
+/// (`unterm-cli mcp-stdio`), and Unzoo Browser's when it is installed --
+/// as the client `unzoo-one-agent`, so it browses in that client's own
+/// isolated profile. Not the person's own client name (`claude-code`,
+/// `codex`): those tabs are theirs, and an agent running here must not
+/// navigate them away (it did, live).
+///
+/// Each lists only the tools such an agent needs ([`AGENT_TERMINAL_TOOLS`],
+/// [`AGENT_BROWSER_TOOLS`]): every tool listed is described to the model on
+/// every request, and all of them together came to some 50,000 tokens.
+/// A helper is not given `agent_session.delegate`: it does not hand on.
+fn governed_servers(helper: bool) -> Result<Vec<(&'static str, String, Vec<String>)>, String> {
+    let cli = unterm_cli_path()
+        .ok_or("governed mode needs unterm-cli next to this Unterm (or UNTERM_CLI) to mount Unterm's MCP")?;
+    let cli = cli.display().to_string();
+    let terminal: Vec<&str> =
+        AGENT_TERMINAL_TOOLS.iter().copied().filter(|tool| !helper || *tool != "agent_session.delegate").collect();
+    let mut servers = vec![("unterm", cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
+    if let Some(unzoo) = unzoo_service_path() {
+        let mut args = vec!["mcp-trim".to_string(), "--keep".to_string(), AGENT_BROWSER_TOOLS.join(","), "--".to_string()];
+        args.push(unzoo.display().to_string());
+        args.extend(["--mcp", "stdio", "--client", super::browser::CLIENT].map(str::to_string));
+        servers.push(("unzoo", cli, args));
+    }
+    Ok(servers)
+}
+
+/// Unterm's tools a governed agent is given: terminals, commands and their
+/// output, and the two ways to involve someone else (a person, a helper).
+/// Not the ones that decide approvals, change policy or start agents.
+const AGENT_TERMINAL_TOOLS: &[&str] = &[
+    // Not session.destroy: the terminals a run opened are closed when it ends.
+    "session.create", "session.list", "session.status", "session.input", "session.idle",
+    "exec.run_wait", "exec.run", "exec.status", "exec.send", "exec.cancel",
+    "screen.text", "screen.scrollback_text",
+    "agent_session.delegate", "agent_session.handover",
+];
+
+/// Unzoo Browser's tools a governed agent is given: its own tabs, reading
+/// and working a page, downloads, and Unzoo's task recipes. Left out: the
+/// rarely needed (media capture, cookies, leases, the human_* variants), a
+/// third of the list for most of its size.
+const AGENT_BROWSER_TOOLS: &[&str] = &[
+    "tab_create", "tab_close", "tab_list", "profile_list",
+    "browser_navigate", "browser_navigate_back", "browser_reload",
+    "browser_a11y_snapshot", "browser_get_text", "browser_get_html", "browser_get_url", "browser_screenshot",
+    "browser_find", "page_analyze", "extract_structured", "extract_table", "extract_links",
+    "browser_click", "browser_type", "browser_press_key", "browser_scroll", "browser_hover",
+    "browser_select_option", "browser_fill_form", "browser_set_input_files", "browser_dismiss_blocking_dialog",
+    "page_batch_actions", "browser_wait_for_selector", "browser_evaluate",
+    "download_url", "media_download_smart", "media_deps_ensure", "browser_print_pdf",
+    "skill_list", "skill_get",
+];
+
+/// Codex's own ways of running things and of using a browser, switched off
+/// in a governed session: commands go through Unterm, browsing through Unzoo.
+const CODEX_OWN_TOOLS: &[&str] =
+    &["shell_tool", "unified_exec", "browser_use", "browser_use_external", "in_app_browser", "computer_use"];
+
+/// What Codex passes on to the MCP servers it starts. It hands them only a
+/// short list of its own environment; these say which session a call is
+/// from (`UNTERM_HOSTED_GRANT`, without which every write waits for a
+/// person nobody asked) and which Unterm to reach.
+const CODEX_PASSES_ON: &[&str] = &["UNTERM_HOSTED_GRANT", "UNTERM_STATE_DIR", "UNTERM_INSTANCE"];
+
+/// A string as TOML reads it: a JSON string literal is a TOML basic string.
+fn toml_string(text: &str) -> String {
+    json!(text).to_string()
+}
+
+/// The governed preset's command-line arguments: the CLI's own shell and
+/// fetching switched off, [`governed_servers`] mounted in their place, and
+/// [`governed_prompt`] saying so. Every command it runs then goes through
+/// Unterm -- `AGENTS.md`'s first rule -- and is judged before it runs.
+///
+/// - Claude Code: `--disallowedTools`, `--mcp-config`, `--append-system-prompt`.
+/// - Codex (`codex app-server`): `--disable` its own tools, `-c mcp_servers.*`
+///   and `-c developer_instructions`, for this session only.
+/// - OpenCode takes all of it as inline configuration ([`session_env`]).
+fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) -> Result<Vec<String>, String> {
+    if !supports_governed(agent_id) {
+        return Err(format!(
+            "{agent_id} has no governed mode yet: Claude Code, Codex and OpenCode can have their own shell switched off and Unterm mounted in its place"
+        ));
+    }
+    let servers = governed_servers(helper)?;
+    let prompt = governed_prompt(browser_profile, helper);
+    match agent_id {
+        "claude-code" => {
+            let mut mounted = serde_json::Map::new();
+            for (name, command, args) in &servers {
+                mounted.insert((*name).into(), json!({"type": "stdio", "command": command, "args": args}));
+            }
+            Ok(vec![
+                "-p".into(),
+                "--disallowedTools".into(),
+                "Bash,PowerShell,WebFetch".into(),
+                "--mcp-config".into(),
+                json!({"mcpServers": mounted}).to_string(),
+                "--append-system-prompt".into(),
+                prompt,
+            ])
+        }
+        "codex-cli" => {
+            let mut out = Vec::new();
+            for (name, command, args) in &servers {
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.command={}", toml_string(command))]);
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.args={}", json!(args))]);
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.env_vars={}", json!(CODEX_PASSES_ON))]);
+            }
+            for tool in CODEX_OWN_TOOLS {
+                out.extend(["--disable".to_string(), tool.to_string()]);
+            }
+            out.extend(["-c".to_string(), format!("developer_instructions={}", toml_string(&prompt))]);
+            Ok(out)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// OpenCode's governed preset, as inline configuration: its own shell and
+/// fetching off, [`governed_servers`] mounted, and [`governed_prompt`] as an
+/// instructions file (OpenCode takes instructions only from files).
+fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Value, String> {
+    let mut mcp = serde_json::Map::new();
+    for (name, command, args) in governed_servers(helper)? {
+        let mut words = vec![command];
+        words.extend(args);
+        mcp.insert(name.into(), json!({"type": "local", "command": words, "enabled": true}));
+    }
+    let file = unterm_protocol::state_path(format!(
+        "governed/opencode-{}.md",
+        if helper { "helper" } else { "agent" }
+    ))
+    .ok_or("there is no state directory to keep OpenCode's instructions in")?;
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&file, governed_prompt(browser_profile, helper)).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(json!({
+        "mcp": mcp,
+        "tools": {"bash": false, "webfetch": false},
+        "instructions": [file.display().to_string()],
+    }))
 }
 
 /// The adapter a run of this agent is read with. Said back to the console
 /// so it knows which vocabulary the events came from.
+/// The enabled skills for a CLI that is not Claude Code, as the session
+/// environment that hands them over for this session only -- nothing is
+/// written into the person's own configuration. Codex's app server is told
+/// the folder at start (`skills/extraRoots/set`); OpenCode reads it from its
+/// inline configuration. `None` when there is nothing to hand over, or the
+/// CLI has no way to take it.
+pub(crate) fn skill_env(adapter: &str) -> Option<Value> {
+    session_env(adapter, false, None, false)
+}
+
+/// The session's environment: [`skill_env`]'s skills, and for a governed
+/// OpenCode its whole preset ([`opencode_governed`]) -- one inline
+/// configuration, so both go into the same variable.
+pub(crate) fn session_env(adapter: &str, governed: bool, browser_profile: Option<&str>, helper: bool) -> Option<Value> {
+    if adapter != "codex" && adapter != "opencode" {
+        return None;
+    }
+    let dir = match super::skills::prepare_plugin() {
+        Ok(Some(dir)) => Some(dir.join("skills").display().to_string()),
+        Ok(None) => None,
+        Err(error) => {
+            log::warn!("skills were not loaded for this run: {error:#}");
+            None
+        }
+    };
+    if adapter == "codex" {
+        return dir.map(|dir| json!({ unterm_services::agent_session::SKILL_ROOTS_ENV: dir }));
+    }
+    let mut config = if governed {
+        opencode_governed(browser_profile, helper)
+            .map_err(|why| log::warn!("OpenCode runs without its governed preset: {why}"))
+            .unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+    if let Some(dir) = dir {
+        config["skills"] = json!({"paths": [dir]});
+    }
+    (config != json!({})).then(|| json!({ "OPENCODE_CONFIG_CONTENT": config.to_string() }))
+}
+
+/// The agent a session's adapter belongs to: [`adapter_of`] read backwards.
+pub(crate) fn agent_of(adapter: &str) -> Option<&'static str> {
+    match adapter {
+        "claude" => Some("claude-code"),
+        "codex" => Some("codex-cli"),
+        "opencode" => Some("opencode"),
+        "agy" => Some("agy"),
+        _ => None,
+    }
+}
+
 fn adapter_of(agent_id: &str) -> &'static str {
     match agent_id {
         "claude-code" => "claude",
@@ -272,15 +461,78 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
     };
     let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
     let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
+    let command = session_command(agent_id, body)?;
+
+    let mut params = serde_json::Map::new();
+    params.insert("command".into(), Value::Array(command));
+    params.insert("prompt".into(), json!(prompt));
+    let helper = body.get("helper").and_then(Value::as_bool).unwrap_or(false);
+    if let Some(env) = session_env(adapter_of(agent_id), governed, string_field(body, "browser_profile"), helper) {
+        params.insert("env".into(), env);
+    }
+    if hosted {
+        params.insert("hosted".into(), json!(true));
+    }
+    if governed {
+        params.insert("governed".into(), json!(true));
+    }
+    // How much it may do unasked: only a hosted agent asks anything.
+    if let Some(level) = string_field(body, "autonomy") {
+        if !hosted {
+            return Err((400, "Bad Request", "autonomy needs a hosted session".to_string()));
+        }
+        params.insert("autonomy".into(), json!(level));
+    }
+    // Where the agent works: the workspace the console has open. Only an
+    // existing directory -- it decides where the agent reads and writes, not
+    // what runs, but a typo should fail here rather than at spawn.
+    if let Some(cwd) = string_field(body, "cwd") {
+        if !std::path::Path::new(cwd).is_dir() {
+            return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
+        }
+        params.insert("cwd".into(), json!(cwd));
+    }
+    // Carried onto every event and log line, so the console can thread them
+    // back onto the task they belong to.
+    for key in ["task_id", "run_id", "step_id", "idempotency_key"] {
+        if let Some(value) = string_field(body, key) {
+            params.insert(key.into(), json!(value));
+        }
+    }
+
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    match handler.handle(&ctx, "agent_session.start", &Value::Object(params)) {
+        Ok(value) => Ok(json!({
+            "agent": agent_id,
+            "adapter": adapter_of(agent_id),
+            "hosted": hosted,
+            "governed": governed,
+            "session": value,
+        })),
+        Err(e) => Err((400, "Bad Request", e.to_string())),
+    }
+}
+
+/// The agent's command line for a start body (`agent`, `governed`,
+/// `hosted`, `browser_profile`, `helper`): its program, the mode's
+/// arguments, the governed instructions and the skills. What a new
+/// conversation is started with and what a continued one is continued
+/// with, so both follow the instructions as they are today.
+pub(crate) fn session_command(agent_id: &str, body: &Value) -> Result<Vec<Value>, StartError> {
+    let governed = body.get("governed").and_then(Value::as_bool).unwrap_or(false);
+    let hosted = governed || body.get("hosted").and_then(Value::as_bool).unwrap_or(false);
     let governed_args = if governed {
-        match governed_args(agent_id, string_field(body, "browser_profile")) {
-            Ok(mut args) => {
-                let helper = body.get("helper").and_then(Value::as_bool).unwrap_or(false);
-                if let (false, Some(prompt)) = (helper, args.last_mut()) {
-                    prompt.push(' ');
-                    prompt.push_str(HELPERS_PROMPT);
+        let helper = body.get("helper").and_then(Value::as_bool).unwrap_or(false);
+        match governed_args(agent_id, string_field(body, "browser_profile"), helper) {
+            Ok(mut governed) => {
+                // Claude's preset is its whole command line; the others add
+                // theirs to the hosted mode's own arguments.
+                if agent_id != "claude-code" {
+                    let mut all: Vec<String> = hosted_args(agent_id).unwrap_or(&[]).iter().map(|a| a.to_string()).collect();
+                    all.append(&mut governed);
+                    governed = all;
                 }
-                Some(args)
+                Some(governed)
             }
             Err(why) => return Err((400, "Bad Request", why.to_string())),
         }
@@ -357,50 +609,7 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
         }
     }
 
-    let mut params = serde_json::Map::new();
-    params.insert("command".into(), Value::Array(command));
-    params.insert("prompt".into(), json!(prompt));
-    if hosted {
-        params.insert("hosted".into(), json!(true));
-    }
-    if governed {
-        params.insert("governed".into(), json!(true));
-    }
-    // How much it may do unasked: only a hosted agent asks anything.
-    if let Some(level) = string_field(body, "autonomy") {
-        if !hosted {
-            return Err((400, "Bad Request", "autonomy needs a hosted session".to_string()));
-        }
-        params.insert("autonomy".into(), json!(level));
-    }
-    // Where the agent works: the workspace the console has open. Only an
-    // existing directory -- it decides where the agent reads and writes, not
-    // what runs, but a typo should fail here rather than at spawn.
-    if let Some(cwd) = string_field(body, "cwd") {
-        if !std::path::Path::new(cwd).is_dir() {
-            return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
-        }
-        params.insert("cwd".into(), json!(cwd));
-    }
-    // Carried onto every event and log line, so the console can thread them
-    // back onto the task they belong to.
-    for key in ["task_id", "run_id", "step_id", "idempotency_key"] {
-        if let Some(value) = string_field(body, key) {
-            params.insert(key.into(), json!(value));
-        }
-    }
-
-    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
-    match handler.handle(&ctx, "agent_session.start", &Value::Object(params)) {
-        Ok(value) => Ok(json!({
-            "agent": agent_id,
-            "adapter": adapter_of(agent_id),
-            "hosted": hosted,
-            "governed": governed,
-            "session": value,
-        })),
-        Err(e) => Err((400, "Bad Request", e.to_string())),
-    }
+    Ok(command)
 }
 
 /// The rest of a session's life: events, status, input, interrupt, close.
@@ -624,9 +833,11 @@ mod tests {
         assert!(hosted_args("aider").is_none());
         // What the agent list tells the console agrees with what start does.
         assert!(supports_hosted("codex-cli") && !supports_hosted("aider"));
-        assert!(supports_governed("claude-code"));
-        assert!(!supports_governed("codex-cli"));
-        assert!(governed_args("codex-cli", None).is_err());
+        for agent in ["claude-code", "codex-cli", "opencode"] {
+            assert!(supports_governed(agent), "{agent}");
+        }
+        assert!(!supports_governed("agy"));
+        assert!(governed_args("agy", None, false).is_err());
     }
 
     #[test]
@@ -635,7 +846,7 @@ mod tests {
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
         std::fs::write(&cli, b"").unwrap();
         std::env::set_var("UNTERM_CLI", &cli);
-        let args = governed_args("claude-code", None).unwrap();
+        let args = governed_args("claude-code", None, false).unwrap();
         let at = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
         let off = at("--disallowedTools").unwrap();
         for tool in ["Bash", "PowerShell", "WebFetch"] {
@@ -643,13 +854,17 @@ mod tests {
         }
         let config: Value = serde_json::from_str(&at("--mcp-config").unwrap()).unwrap();
         assert_eq!(config["mcpServers"]["unterm"]["command"], cli.display().to_string());
-        assert_eq!(config["mcpServers"]["unterm"]["args"], json!(["mcp-stdio"]));
+        let unterm_args = &config["mcpServers"]["unterm"]["args"];
+        assert_eq!((&unterm_args[0], &unterm_args[1]), (&json!("mcp-stdio"), &json!("--tools")));
+        let served: Vec<&str> = unterm_args[2].as_str().unwrap().split(',').collect();
+        assert!(served.contains(&"exec.run_wait") && served.contains(&"agent_session.handover"));
+        for withheld in ["approval.decide", "policy.set", "agent_session.start", "system.uninstall"] {
+            assert!(!served.contains(&withheld), "{withheld} is not for the agent");
+        }
         assert!(at("--append-system-prompt").unwrap().contains("exec.run_wait"));
         assert!(args.contains(&"-p".to_string()));
-        // Only Claude Code can have its shell switched off today.
-        assert!(governed_args("codex-cli", None).is_err());
         std::env::set_var("UNTERM_CLI", dir.path().join("missing"));
-        assert!(governed_args("claude-code", None).is_err(), "no unterm-cli, no governed mode");
+        assert!(governed_args("claude-code", None, false).is_err(), "no unterm-cli, no governed mode");
         std::env::remove_var("UNTERM_CLI");
     }
 
@@ -671,19 +886,91 @@ mod tests {
             serde_json::from_str::<Value>(&args[at + 1]).unwrap()["mcpServers"]["unzoo"]["args"].clone()
         };
 
-        let own = governed_args("claude-code", None).unwrap();
+        let own = governed_args("claude-code", None, false).unwrap();
         // Not the person's own Claude Code's profile.
-        assert_eq!(mounted(&own), json!(["--mcp", "stdio", "--client", "unzoo-one-agent"]));
+        let browser = mounted(&own);
+        assert_eq!(browser[0], "mcp-trim", "behind the trim, so only the agent's tools are listed");
+        let kept: Vec<&str> = browser[2].as_str().unwrap().split(',').collect();
+        assert!(kept.contains(&"tab_create") && kept.contains(&"tab_close"), "the prompt names them");
+        assert!(!kept.contains(&"human_click"));
+        assert_eq!(browser[3], "--");
+        assert_eq!(browser[4], unzoo.display().to_string());
+        assert_eq!(browser.as_array().unwrap()[5..].to_vec(), vec![json!("--mcp"), json!("stdio"), json!("--client"), json!("unzoo-one-agent")]);
         assert!(!prompt_of(&own).contains("profile_id"));
         // Its own reserved profile needs no instructions either.
-        let reserved = governed_args("claude-code", Some(super::super::browser::RESERVED_PROFILE)).unwrap();
+        let reserved = governed_args("claude-code", Some(super::super::browser::RESERVED_PROFILE), false).unwrap();
         assert!(!prompt_of(&reserved).contains("profile_id"));
         // A chosen one is named on every call, in tabs the agent opened.
-        let chosen = governed_args("claude-code", Some("default")).unwrap();
+        let chosen = governed_args("claude-code", Some("default"), false).unwrap();
         assert!(prompt_of(&chosen).contains("profile_id=\"default\""), "{}", prompt_of(&chosen));
 
         std::env::remove_var("UNTERM_CLI");
         std::env::remove_var("UNZOO_SERVICE");
+    }
+
+    #[test]
+    fn codex_is_governed_with_its_own_tools_off_and_ours_mounted() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        let unzoo = dir.path().join("unzoo service.exe");
+        std::fs::write(&cli, b"").unwrap();
+        std::fs::write(&unzoo, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNZOO_SERVICE", &unzoo);
+        let args = governed_args("codex-cli", Some("default"), false).unwrap();
+        let settings: Vec<&str> =
+            args.windows(2).filter(|w| w[0] == "-c").map(|w| w[1].as_str()).collect();
+        let disabled: Vec<&str> =
+            args.windows(2).filter(|w| w[0] == "--disable").map(|w| w[1].as_str()).collect();
+        for tool in ["shell_tool", "unified_exec", "browser_use", "in_app_browser", "computer_use"] {
+            assert!(disabled.contains(&tool), "{tool} must be off: {disabled:?}");
+        }
+        // Every value is TOML: strings quoted, arrays of strings.
+        let value = |key: &str| {
+            let line = settings.iter().find(|s| s.starts_with(&format!("{key}="))).unwrap();
+            line[key.len() + 1..].to_string()
+        };
+        assert_eq!(serde_json::from_str::<String>(&value("mcp_servers.unterm.command")).unwrap(), cli.display().to_string());
+        assert!(value("mcp_servers.unterm.args").starts_with(r#"["mcp-stdio","--tools","#));
+        assert!(value("mcp_servers.unterm.env_vars").contains("UNTERM_HOSTED_GRANT"));
+        assert_eq!(serde_json::from_str::<String>(&value("mcp_servers.unzoo.command")).unwrap(), cli.display().to_string());
+        let browser: Vec<String> = serde_json::from_str(&value("mcp_servers.unzoo.args")).unwrap();
+        assert_eq!(browser[0], "mcp-trim");
+        assert_eq!(browser[4..], [unzoo.display().to_string(), "--mcp".into(), "stdio".into(), "--client".into(), "unzoo-one-agent".into()]);
+        let told: String = serde_json::from_str(&value("developer_instructions")).unwrap();
+        assert!(told.contains("exec.run_wait") && told.contains("profile_id=\"default\"") && told.contains("agent_session.delegate"));
+        assert!(!governed_args("codex-cli", None, true).unwrap().iter().any(|a| a.contains("agent_session.delegate")),
+            "a helper is not told it may hand work on");
+
+        // Started hosted: the app server, then the preset.
+        let command = session_command("codex-cli", &json!({"governed": true}));
+        if let Ok(command) = command {
+            assert!(command.iter().any(|w| w == "--disable"), "{command:?}");
+        }
+        std::env::remove_var("UNTERM_CLI");
+        std::env::remove_var("UNZOO_SERVICE");
+    }
+
+    #[test]
+    fn opencode_is_governed_through_its_inline_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        std::fs::write(&cli, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNZOO_SERVICE", dir.path().join("no-unzoo-here.exe"));
+        let config = opencode_governed(None, false).unwrap();
+        assert_eq!(config["mcp"]["unterm"]["command"].as_array().unwrap()[..2].to_vec(), vec![json!(cli.display().to_string()), json!("mcp-stdio")]);
+        assert_eq!(config["tools"], json!({"bash": false, "webfetch": false}));
+        let file = config["instructions"][0].as_str().unwrap();
+        assert!(std::fs::read_to_string(file).unwrap().contains("exec.run_wait"));
+        let env = session_env("opencode", true, None, false).unwrap();
+        let inline: Value = serde_json::from_str(env["OPENCODE_CONFIG_CONTENT"].as_str().unwrap()).unwrap();
+        assert_eq!(inline["tools"]["bash"], false);
+        assert!(governed_args("opencode", None, false).unwrap().is_empty(), "nothing on its command line");
+        std::env::remove_var("UNTERM_CLI");
+        std::env::remove_var("UNZOO_SERVICE");
+        std::env::remove_var("UNTERM_STATE_DIR");
     }
 
     #[test]

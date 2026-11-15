@@ -31,6 +31,10 @@ use crate::{BrainAdapter, BrainEvent, StopReason, Usage};
 const COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
 const PATCH_APPROVAL: &str = "item/fileChange/requestApproval";
 const PERMISSIONS_APPROVAL: &str = "item/permissions/requestApproval";
+/// An MCP server asking the person something through Codex. Under the
+/// `untrusted` policy this is how Codex asks before an MCP tool call (a
+/// browser tool, say): answered "not offered", the call is declined.
+const ELICITATION: &str = "mcpServer/elicitation/request";
 
 fn id_key(id: &Value) -> String {
     match id {
@@ -283,7 +287,7 @@ impl BrainAdapter for CodexAppAdapter {
                 });
             }
             (
-                Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL)),
+                Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL | ELICITATION)),
                 Some(id),
             ) => {
                 self.start_turn(&mut out);
@@ -301,6 +305,17 @@ impl BrainAdapter for CodexAppAdapter {
                             .map(|(_, args)| args.clone())
                             .unwrap_or(Value::Null),
                     ),
+                    // The question names only the server; the call it is
+                    // about is the one of that server's still under way.
+                    ELICITATION => {
+                        let server = str_at(params, "serverName").unwrap_or("mcp");
+                        let prefix = format!("{server}.");
+                        self.items
+                            .values()
+                            .find(|(name, _)| name.starts_with(&prefix))
+                            .cloned()
+                            .unwrap_or_else(|| (server.to_string(), Value::Null))
+                    }
                     _ => (
                         "permissions".to_string(),
                         params.get("permissions").cloned().unwrap_or(Value::Null),
@@ -310,7 +325,9 @@ impl BrainAdapter for CodexAppAdapter {
                     request_id: id_key(id),
                     tool,
                     input,
-                    description: str_at(params, "reason").map(str::to_string),
+                    description: str_at(params, "reason")
+                        .or_else(|| (method == ELICITATION).then(|| str_at(params, "message")).flatten())
+                        .map(str::to_string),
                 });
             }
             (Some(_), _) => {}
@@ -376,6 +393,9 @@ struct HostState {
     queued: Vec<String>,
     /// Open questions: the id as Codex wrote it, the method, and the params.
     asked: HashMap<String, (Value, String, Value)>,
+    /// Skill folders for this app server only (`skills/extraRoots/set`),
+    /// so nothing is written into the person's own `~/.codex`.
+    skill_roots: Vec<String>,
 }
 
 /// Drives `codex app-server`.
@@ -435,6 +455,10 @@ impl HostProtocol for CodexAppHost {
         Ok(command)
     }
 
+    fn use_skill_roots(&self, roots: &[String]) {
+        self.state.lock().unwrap().skill_roots = roots.to_vec();
+    }
+
     /// Only `initialize`: the thread is started once it has been answered.
     fn opening(&self, cwd: Option<&str>) -> Vec<String> {
         let mut state = self.state.lock().unwrap();
@@ -461,7 +485,7 @@ impl HostProtocol for CodexAppHost {
         };
         let mut state = self.state.lock().unwrap();
         match (message.get("method").and_then(Value::as_str), message.get("id")) {
-            (Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL)), Some(id)) => {
+            (Some(method @ (COMMAND_APPROVAL | PATCH_APPROVAL | PERMISSIONS_APPROVAL | ELICITATION)), Some(id)) => {
                 state.asked.insert(id_key(id), (id.clone(), method.to_string(), message["params"].clone()));
                 Vec::new()
             }
@@ -494,7 +518,13 @@ impl HostProtocol for CodexAppHost {
                         ),
                     }
                     .1;
-                    return vec![json!({"jsonrpc": "2.0", "method": "initialized"}).to_string(), start];
+                    let mut lines = vec![json!({"jsonrpc": "2.0", "method": "initialized"}).to_string()];
+                    if !state.skill_roots.is_empty() {
+                        let roots = state.skill_roots.clone();
+                        lines.push(Self::request(&mut state, "skills/extraRoots/set", json!({"extraRoots": roots})).1);
+                    }
+                    lines.push(start);
+                    return lines;
                 }
                 let Some(thread) = message["result"]["thread"]["id"].as_str().map(str::to_string) else {
                     return Vec::new();
@@ -556,6 +586,14 @@ impl HostProtocol for CodexAppHost {
                 lines.push(Self::request(&mut state, "turn/interrupt", turn).1);
             }
             return lines;
+        }
+        if method == ELICITATION {
+            let result = match decision {
+                Decision::Allow => json!({"action": "accept", "content": {}}),
+                Decision::Deny { interrupt: false, .. } => json!({"action": "decline"}),
+                Decision::Deny { interrupt: true, .. } => json!({"action": "cancel"}),
+            };
+            return vec![json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()];
         }
         let answer = match decision {
             Decision::Allow => "accept",
@@ -729,11 +767,54 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn an_mcp_tool_question_is_an_approval_and_its_answer_is_an_action() {
+        let mut adapter = CodexAppAdapter::new();
+        let events = run(
+            &mut adapter,
+            &[
+                r#"{"method": "item/started", "params": {"item": {"type": "mcpToolCall", "id": "m1", "server": "unzoo", "tool": "tab_create", "arguments": {"url": "https://example.com"}, "status": "inProgress"}}}"#,
+                r#"{"method": "mcpServer/elicitation/request", "id": 7, "params": {"serverName": "unzoo", "threadId": "th", "turnId": "tu", "mode": "form", "message": "Allow unzoo to run tab_create?", "requestedSchema": {"type": "object", "properties": {}}}}"#,
+            ],
+        );
+        assert!(events.contains(&BrainEvent::PermissionRequested {
+            request_id: "7".into(),
+            tool: "unzoo.tab_create".into(),
+            input: json!({"url": "https://example.com"}),
+            description: Some("Allow unzoo to run tab_create?".into()),
+        }));
+
+        let host = CodexAppHost::new();
+        let question = r#"{"method": "mcpServer/elicitation/request", "id": 7, "params": {"serverName": "unzoo", "threadId": "th", "mode": "form", "message": "?", "requestedSchema": {}}}"#;
+        assert!(host.observe(question).is_empty(), "held for a decision, not refused");
+        assert_eq!(
+            parsed(host.permission_reply("7", &Decision::Allow, &Value::Null)),
+            vec![json!({"jsonrpc": "2.0", "id": 7, "result": {"action": "accept", "content": {}}})]
+        );
+        host.observe(question);
+        let no = Decision::Deny { message: "no".into(), interrupt: false };
+        assert_eq!(parsed(host.permission_reply("7", &no, &Value::Null))[0]["result"], json!({"action": "decline"}));
+    }
+
     fn parsed(lines: Vec<String>) -> Vec<Value> {
         lines
             .iter()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn skill_roots_are_set_for_this_server_before_the_thread_starts() {
+        let host = CodexAppHost::new();
+        host.use_skill_roots(&["C:/state/skills".to_string()]);
+        let opening = parsed(host.opening(Some("C:/w")));
+        let after_init = parsed(host.observe(&json!({"id": opening[0]["id"], "result": {}}).to_string()));
+        assert_eq!(after_init[0]["method"], "initialized");
+        assert_eq!(after_init[1]["method"], "skills/extraRoots/set");
+        assert_eq!(after_init[1]["params"], json!({"extraRoots": ["C:/state/skills"]}));
+        assert_eq!(after_init[2]["method"], "thread/start");
+        // Its answer is not a thread: nothing is sent for it.
+        assert!(host.observe(&json!({"id": after_init[1]["id"], "result": {}}).to_string()).is_empty());
     }
 
     #[test]

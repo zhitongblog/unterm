@@ -261,6 +261,38 @@ pub fn outputs_since(dir: &std::path::Path, since: std::time::SystemTime) -> Vec
     found.into_iter().take(MAX_OUTPUTS).map(|(_, output)| output).collect()
 }
 
+/// Of the files a run wrote, the ones its reply names: what it made for the
+/// person. The rest -- a repository it cloned, a script it wrote to scroll a
+/// page, data it kept along the way -- was its working, not the result. A
+/// file is named by its path or by its file name.
+/// When the reply names none of them (an agent that did not say), all are
+/// kept: too many is better than a result that is not there.
+pub fn named_in(outputs: Vec<Output>, reply: &str) -> Vec<Output> {
+    let reply = reply.replace('\\', "/");
+    if !outputs.iter().any(|output| names(&reply, &output.path)) {
+        return outputs;
+    }
+    outputs.into_iter().filter(|output| names(&reply, &output.path)).collect()
+}
+
+fn names(reply: &str, path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    reply.contains(path) || (!name.is_empty() && reply.contains(name))
+}
+
+/// A run's outputs as the console lists them. Runs recorded before
+/// [`named_in`] kept everything they wrote; they are read the same way.
+fn listed_outputs(detail: &Value) -> Value {
+    let Some(outputs) = detail.get("outputs").and_then(Value::as_array) else { return json!([]) };
+    let Some(reply) = detail.get("reply").and_then(Value::as_str) else { return json!(outputs) };
+    let reply = reply.replace('\\', "/");
+    let named: Vec<&Value> = outputs
+        .iter()
+        .filter(|o| o.get("path").and_then(Value::as_str).is_some_and(|path| names(&reply, path)))
+        .collect();
+    if named.is_empty() { json!(outputs) } else { json!(named) }
+}
+
 /// How much of one output the console is shown.
 const MAX_READ: u64 = 1024 * 1024;
 
@@ -388,6 +420,85 @@ pub fn terminal_screen(handler: &McpHandler, session: &str, from_line: Option<i6
     if !used_by_an_agent("terminals", session)? {
         bail!("{session} is not a terminal an agent used");
     }
+    read_terminal(handler, session, from_line).or_else(|live| {
+        // Closed when its run ended: what it showed last, kept then -- read
+        // from `from_line` on like a live one, so a viewer that already has
+        // the start keeps it.
+        let kept = read_kept("terminal", session).ok_or(live)?;
+        Ok(kept_from(kept, from_line))
+    })
+}
+
+/// A kept terminal view from `from_line` on (all of it without one).
+fn kept_from(mut kept: Value, from_line: Option<i64>) -> Value {
+    let Some(from) = from_line else { return kept };
+    let first = kept.get("first_row").and_then(Value::as_i64).unwrap_or(0);
+    let text = kept.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+    let lines: Vec<&str> = if text.is_empty() { Vec::new() } else { text.split('\n').collect() };
+    let skip = (from - first).clamp(0, lines.len() as i64) as usize;
+    let rest = &lines[skip..];
+    kept["first_row"] = json!(first + skip as i64);
+    kept["row_count"] = json!(rest.len());
+    kept["text"] = json!(rest.join("\n"));
+    kept
+}
+
+/// Whether a tool is one of an MCP server's, however the agent names it:
+/// Claude Code says `mcp__unzoo__tab_create`, Codex `unzoo.tab_create`,
+/// OpenCode `unzoo_tab_create`.
+fn from_server(tool: &str, server: &str) -> bool {
+    tool_risk::mcp_parts(tool).is_some_and(|(of, _)| of == server)
+}
+
+/// Closed with its run (see [`tidy_up`]): the last thing it showed.
+fn kept_path(kind: &str, id: &str) -> Option<std::path::PathBuf> {
+    let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    (!safe.is_empty()).then(|| unterm_protocol::state_path(format!("console_closed/{kind}-{safe}.json"))).flatten()
+}
+
+fn keep(kind: &str, id: &str, mut view: Value) {
+    let Some(path) = kept_path(kind, id) else { return };
+    view["closed"] = json!(true);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, view.to_string());
+}
+
+fn read_kept(kind: &str, id: &str) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(kept_path(kind, id)?).ok()?).ok()
+}
+
+/// Close the terminals and tabs a finished run opened (and the tabs it
+/// used in an agent's own profile), keeping what each showed last. Nothing
+/// of the person's is touched: a terminal or a tab in their profile that the
+/// run only used was there before it and stays.
+fn tidy_up(turns: &[&Turn]) {
+    let handler = McpHandler::new();
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    let mut opened_tabs = Vec::new();
+    let mut used_tabs = Vec::new();
+    for turn in turns {
+        for session in &turn.opened_terminals {
+            if let Ok(view) = read_terminal(&handler, session, None) {
+                keep("terminal", session, view);
+            }
+            let _ = handler.handle(&ctx, "session.destroy", &json!({"session_id": session}));
+        }
+        opened_tabs.extend(turn.opened_tabs.iter().cloned());
+        used_tabs.extend(turn.tabs.iter().cloned());
+    }
+    if opened_tabs.is_empty() && used_tabs.is_empty() {
+        return;
+    }
+    let _ = super::browser::close_tabs(&opened_tabs, &used_tabs, |tab| {
+        if let Ok(view) = super::browser::tab_view(tab) {
+            keep("tab", tab, view);
+        }
+    });
+}
+
+fn read_terminal(handler: &McpHandler, session: &str, from_line: Option<i64>) -> Result<Value> {
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
     // The cursor first: it needs the terminal itself, where reading the
     // history of a closed one falls back to whichever is in front.
@@ -443,7 +554,7 @@ pub fn tab_view(tab: &str) -> Result<Value> {
     if !used_by_an_agent("tabs", tab)? {
         bail!("{tab} is not a tab an agent used");
     }
-    super::browser::tab_view(tab)
+    super::browser::tab_view(tab).or_else(|live| read_kept("tab", tab).ok_or(live))
 }
 
 /// Bring an agent's tab to the front of Unzoo Browser.
@@ -586,7 +697,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
         "waiting": detail.get("waiting").and_then(Value::as_bool).unwrap_or(false),
         "usage": field("usage"),
         "workdir": field("cwd"),
-        "outputs": detail.get("outputs").cloned().unwrap_or_else(|| json!([])),
+        "outputs": listed_outputs(&detail),
     })
 }
 
@@ -595,7 +706,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers"] {
+    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers", "handovers"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
     for key in ["activity", "terminals", "tabs", "helpers"] {
@@ -846,13 +957,41 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
     let resumed = match &continue_from {
         Some(session) => {
             let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+            // The environment is not kept from the earlier session; the
+            // skills it was handed are handed again.
+            let record = agent_session::resume_record(session).ok().flatten();
+            let skills = record.as_ref().and_then(|record| {
+                super::agent_run::session_env(&record.adapter, record.governed, Some(settings.browser_profile.as_str()).filter(|p| !p.is_empty()), false)
+            });
+            // Today's command line for the same agent: the conversation is
+            // continued, the instructions (its own browser profile, handing
+            // over, what is asked) are the ones a new conversation gets.
+            let command = record.as_ref().and_then(|record| {
+                let agent = super::agent_run::agent_of(&record.adapter)?;
+                super::agent_run::session_command(
+                    agent,
+                    &json!({
+                        "governed": record.governed,
+                        "hosted": true,
+                        "browser_profile": settings.browser_profile,
+                    }),
+                )
+                .map_err(|(_, _, why)| log::warn!("continued on the earlier command line: {why}"))
+                .ok()
+            });
             handler
                 .handle(
                     &ctx,
                     "agent_session.resume",
                     &json!({
+                        "env": skills,
+                        "command": command,
                         "session_id": session,
-                        "prompt": prompt,
+                        "prompt": if record.as_ref().is_some_and(|r| r.governed) {
+                            prompt.clone()
+                        } else {
+                            super::agent_run::with_deliverables_note(&prompt)
+                        },
                         // Today's level, not the one the conversation began under.
                         "autonomy": settings.autonomy.as_str(),
                         "task_id": console_task_id,
@@ -882,7 +1021,7 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
             let governed = settings.governed && super::agent_run::supports_governed(&settings.agent);
             let mut body = json!({
                 "agent": settings.agent,
-                "prompt": prompt,
+                "prompt": if governed { prompt.clone() } else { super::agent_run::with_deliverables_note(&prompt) },
                 "hosted": true,
                 "governed": governed,
                 "autonomy": settings.autonomy.as_str(),
@@ -948,6 +1087,12 @@ struct Turn {
     terminals: Vec<String>,
     /// Unzoo Browser tabs it used.
     tabs: Vec<String>,
+    /// The terminals and tabs it opened itself: closed when the run ends.
+    opened_terminals: Vec<String>,
+    opened_tabs: Vec<String>,
+    /// What it asked the person to do themselves (sign in, solve a
+    /// captcha), and whether they did.
+    handovers: Vec<Value>,
 }
 
 impl Turn {
@@ -986,15 +1131,44 @@ impl Turn {
                 // What a terminal or a tab was opened as is only in the
                 // answer: `session.create` and `tab_create` name it there.
                 if let (Some(tool), Some(output)) = (tool, event.get("output").and_then(Value::as_str)) {
-                    if tool.starts_with("mcp__unterm__") {
+                    let ok = event.get("ok").and_then(Value::as_bool) != Some(false);
+                    if from_server(&tool, "unterm") {
                         if let Some(session) = id_after(output, "session_id") {
                             self.note_terminal(&session);
+                            if ok && tool.replace('.', "_").ends_with("session_create") && !self.opened_terminals.contains(&session) {
+                                self.opened_terminals.push(session);
+                            }
                         }
-                    } else if tool.starts_with("mcp__unzoo__") {
+                    } else if from_server(&tool, "unzoo") {
                         if let Some(tab) = id_after(output, "tab_id") {
                             self.note_tab(&tab);
+                            if ok && tool.replace('.', "_").ends_with("tab_create") && !self.opened_tabs.contains(&tab) {
+                                self.opened_tabs.push(tab);
+                            }
                         }
                     }
+                }
+            }
+            "handover.requested" => {
+                let handover = &event["handover"];
+                if let Some(tab) = scalar_id(&handover["tab_id"]) {
+                    self.note_tab(&tab);
+                }
+                if self.handovers.len() < 32 {
+                    self.handovers.push(json!({
+                        "id": handover["id"],
+                        "what": handover["what"],
+                        "tab_id": scalar_id(&handover["tab_id"]),
+                        "state": "waiting",
+                        "at": event.get("at").cloned().unwrap_or(Value::Null),
+                    }));
+                }
+            }
+            "handover.resolved" => {
+                let handover = &event["handover"];
+                if let Some(entry) = self.handovers.iter_mut().find(|h| h["id"] == handover["id"]) {
+                    entry["state"] = handover["state"].clone();
+                    entry["note"] = handover["note"].clone();
                 }
             }
             "approval.requested" => {
@@ -1024,14 +1198,14 @@ impl Turn {
             return;
         }
         let arguments = &call["arguments"];
-        if tool.starts_with("mcp__unterm__") {
+        if from_server(tool, "unterm") {
             for key in ["session_id", "pane_id", "id"] {
                 if let Some(session) = scalar_id(&arguments[key]) {
                     self.note_terminal(&session);
                     break;
                 }
             }
-        } else if tool.starts_with("mcp__unzoo__") {
+        } else if from_server(tool, "unzoo") {
             if let Some(tab) = scalar_id(&arguments["tab_id"]) {
                 self.note_tab(&tab);
             }
@@ -1258,6 +1432,7 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     let mut shown_activity = 0usize;
     let mut idled: Option<Instant> = None;
     let mut helpers: Vec<Followed> = Vec::new();
+    let mut shown_handovers = json!([]);
 
     loop {
         std::thread::sleep(POLL);
@@ -1300,15 +1475,24 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             .and_then(|s| s.get("pending_approvals"))
             .and_then(Value::as_array)
             .is_some_and(|a| !a.is_empty());
-        if pending {
+        let handing_over = agent_session::has_open_handover(&session);
+        if pending || handing_over {
             // Waiting for a person is not being stuck.
             last_progress = Instant::now();
         }
-        let waiting = pending || turn.waiting || helpers.iter().any(|h| h.waiting);
+        let waiting = pending || handing_over || turn.waiting || helpers.iter().any(|h| h.waiting);
         let text_len = turn.text.len();
         let activity_len = turn.activity.len();
         let helpers_changed = helpers.iter().any(|h| h.changed);
-        if waiting != shown_waiting || text_len != shown_len || activity_len != shown_activity || helpers_changed {
+        let handovers_seen = json!(turn.handovers);
+        let handovers_changed = handovers_seen != shown_handovers;
+        if waiting != shown_waiting
+            || text_len != shown_len
+            || activity_len != shown_activity
+            || helpers_changed
+            || handovers_changed
+        {
+            shown_handovers = handovers_seen;
             shown_waiting = waiting;
             shown_len = text_len;
             shown_activity = activity_len;
@@ -1318,6 +1502,12 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             detail["activity"] = json!(turn.activity);
             detail["terminals"] = json!(turn.terminals);
             detail["tabs"] = json!(turn.tabs);
+            // Kept as it goes, so a run cut off by a restart can still have
+            // the tabs it opened closed (see [`sweep_orphans`]).
+            detail["opened_tabs"] = json!(turn.opened_tabs);
+            if !turn.handovers.is_empty() {
+                detail["handovers"] = json!(turn.handovers);
+            }
             if !helpers.is_empty() {
                 detail["helpers"] = helpers_view(&mut helpers);
             }
@@ -1354,6 +1544,11 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     // run is over; the conversation is kept by the CLI and continued, when
     // asked, in a new session.
     let _ = agent_session::close(&session);
+    // What it opened goes with it, so terminals and tabs do not pile up run
+    // after run. What they showed last is kept for the console first.
+    let mut turns: Vec<&Turn> = vec![&turn];
+    turns.extend(helpers.iter().map(|h| &h.turn));
+    tidy_up(&turns);
 
     let ended = turn.ended.clone().unwrap_or_else(|| "failed".into());
     let asked_to_stop = stopping().lock().unwrap().remove(run.as_str());
@@ -1385,7 +1580,7 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
                 Err(error) => detail["skill_error"] = json!(format!("{error:#}")),
             }
         }
-        detail["outputs"] = json!(outputs_since(&dir, started_at));
+        detail["outputs"] = json!(named_in(outputs_since(&dir, started_at), &turn.text));
     }
     if state == State::Failed {
         if let Some(error) = &turn.error {
@@ -1423,6 +1618,7 @@ pub fn sweep_orphans() -> Result<usize> {
     let store = store()?;
     let followed = following().lock().unwrap().clone();
     let mut closed = 0;
+    let mut left_open = Turn::default();
     for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
         for run in store.runs(&task.id)? {
             if run.state != State::Running || followed.contains(run.id.as_str()) {
@@ -1430,6 +1626,17 @@ pub fn sweep_orphans() -> Result<usize> {
             }
             let step = store.steps(&run.id)?.into_iter().find(|s| s.kind == STEP_KIND);
             if let Some(step) = step {
+                let ids = |key: &str| -> Vec<String> {
+                    step.detail
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default()
+                };
+                // Its terminals died with the Core that held them (and their
+                // ids may be some other terminal's now); its tabs did not.
+                left_open.tabs.extend(ids("tabs"));
+                left_open.opened_tabs.extend(ids("opened_tabs"));
                 let mut detail = step.detail.clone();
                 detail["waiting"] = json!(false);
                 detail["error"] = json!("the background service stopped before this run finished");
@@ -1439,6 +1646,9 @@ pub fn sweep_orphans() -> Result<usize> {
             store.finish_run(&run.id, State::Interrupted, run.version)?;
             closed += 1;
         }
+    }
+    if !left_open.tabs.is_empty() || !left_open.opened_tabs.is_empty() {
+        tidy_up(&[&left_open]);
     }
     Ok(closed)
 }
@@ -1630,6 +1840,23 @@ pub fn api_terminal_input(handler: &McpHandler, body: &[u8]) -> Response {
             Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
         },
         _ => Response::err(400, "Bad Request", "session_id and input are required"),
+    }
+}
+
+/// POST /api/console/handover — `{session_id, handover_id, done, note?}`:
+/// the person did what the agent asked them to (or cannot).
+pub fn api_handover(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let done = body.get("done").and_then(Value::as_bool);
+    match (id_field(&body, "session_id"), id_field(&body, "handover_id"), done) {
+        (Some(session), Some(handover), Some(done)) => {
+            let note = body.get("note").and_then(Value::as_str);
+            match agent_session::answer_handover(&session, &handover, done, note) {
+                Ok(()) => Response::ok_json(json!({"answered": handover, "done": done})),
+                Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
+            }
+        }
+        _ => Response::err(400, "Bad Request", "session_id, handover_id and done are required"),
     }
 }
 
@@ -1830,6 +2057,23 @@ mod tests {
     }
 
     #[test]
+    fn the_result_is_the_files_the_reply_names_not_everything_written() {
+        let output = |path: &str| Output { path: path.into(), size: 1, modified: String::new() };
+        let written = vec![
+            output("HN-Top10.md"),
+            output("scroll.js"),
+            output("repo/README.md"),
+            output("repo/Cargo.lock"),
+            output("out/posts.csv"),
+        ];
+        let reply = "Saved the list as HN-Top10.md and the raw data as `out\\posts.csv`.";
+        let named = named_in(written, reply);
+        assert_eq!(named.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["HN-Top10.md", "out/posts.csv"]);
+        // A reply that names none of them: all are kept rather than none.
+        assert_eq!(named_in(vec![output("notes.md"), output("tmp.txt")], "Done.").len(), 2);
+    }
+
+    #[test]
     fn tasks_are_kept_and_an_orphaned_run_is_closed_as_interrupted() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("UNTERM_STATE_DIR", dir.path());
@@ -2019,6 +2263,31 @@ mod tests {
         }
         assert_eq!(turn.terminals, vec!["5".to_string(), "9".to_string()]);
         assert_eq!(turn.tabs, vec!["77".to_string()]);
+        // Only what it opened itself is closed when the run ends: terminal 9
+        // was there before (the person's, perhaps).
+        assert_eq!(turn.opened_terminals, vec!["5".to_string()]);
+        assert_eq!(turn.opened_tabs, vec!["77".to_string()]);
+    }
+
+    #[test]
+    fn tools_are_known_by_their_server_whichever_agent_names_them() {
+        assert!(from_server("mcp__unzoo__tab_create", "unzoo"));
+        assert!(from_server("unzoo.tab_create", "unzoo"));
+        assert!(!from_server("mcp__unzoo_x__tab_create", "unzoo"));
+        assert!(from_server("unterm_exec_run_wait", "unterm"));
+        assert!(!from_server("unzooish.tab_create", "unzoo"));
+        assert!(!from_server("shell", "unterm"));
+    }
+
+    #[test]
+    fn a_closed_terminal_is_read_from_where_the_viewer_is() {
+        let kept = json!({"session_id": "5", "text": "a\nb\nc", "first_row": 10, "row_count": 3, "closed": true});
+        assert_eq!(kept_from(kept.clone(), None), kept);
+        let rest = kept_from(kept.clone(), Some(11));
+        assert_eq!((rest["first_row"].as_i64(), rest["text"].as_str(), rest["row_count"].as_u64()), (Some(11), Some("b\nc"), Some(2)));
+        // Before the start: all of it; past the end: nothing more.
+        assert_eq!(kept_from(kept.clone(), Some(0))["text"], "a\nb\nc");
+        assert_eq!(kept_from(kept, Some(40))["row_count"], 0);
     }
 
     #[test]

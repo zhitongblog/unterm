@@ -38,7 +38,26 @@ const GUI_NOT_RUNNING: &str = "Unterm control server is not running — open Unt
 `unterm start`, or start `unterm-core --headless`, then retry. The tool surface \
 is still listed so you know what will be available once it's up.";
 
-pub fn run() -> Result<()> {
+/// `mcp-stdio [--tools a,b,...]`.
+#[derive(Debug, clap::Args, Clone, Default)]
+pub struct McpStdioCommand {
+    /// Serve only these tools (comma-separated method names, e.g.
+    /// `exec.run_wait,session.create`): `tools/list` names no others and a
+    /// call to any other is refused. Unzoo One gives the agents it runs a
+    /// short list, so each request carries a few thousand tokens of tool
+    /// descriptions instead of fifteen thousand, and they never see the
+    /// tools that decide approvals or change policy. Default: every tool.
+    #[arg(long, value_delimiter = ',')]
+    pub tools: Vec<String>,
+}
+
+/// Is `name` served under `only` (empty: everything)?
+fn served(only: &[String], name: &str) -> bool {
+    only.is_empty() || only.iter().any(|kept| kept == name)
+}
+
+pub fn run(cmd: McpStdioCommand) -> Result<()> {
+    let only = cmd.tools;
     let bridge_started_at = chrono::Utc::now().to_rfc3339();
     let bridge_build = unterm_protocol::BuildHandshake::current(
         unterm_protocol::ProcessRole::McpBridge,
@@ -87,7 +106,10 @@ pub fn run() -> Result<()> {
                     .unwrap_or_else(|_| json!([]))
             })
         });
-    let tools = build_tool_list(&surface);
+    let tools: Vec<Value> = build_tool_list(&surface)
+        .into_iter()
+        .filter(|tool| served(&only, tool.get("name").and_then(Value::as_str).unwrap_or("")))
+        .collect();
 
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -196,6 +218,17 @@ pub fn run() -> Result<()> {
                     .get("arguments")
                     .cloned()
                     .unwrap_or_else(|| json!({}));
+                if !served(&only, &name) {
+                    respond(
+                        &mut stdout,
+                        id,
+                        json!({
+                            "content": [ { "type": "text", "text": format!("{name} is not available in this session") } ],
+                            "isError": true,
+                        }),
+                    )?;
+                    continue;
+                }
                 // Lazy reconnect: the GUI may have started after us.
                 if client.is_none() {
                     match McpClient::connect_as(unterm_protocol::ProcessRole::McpBridge) {
@@ -400,6 +433,17 @@ fn normalize_input_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_list_serves_only_what_it_names() {
+        let only = vec!["exec.run_wait".to_string(), "session.create".to_string()];
+        assert!(served(&only, "exec.run_wait"));
+        assert!(!served(&only, "approval.decide"));
+        assert!(served(&[], "approval.decide"), "no list: every tool");
+        let opt = <crate::Opt as clap::Parser>::try_parse_from(["unterm-cli", "mcp-stdio", "--tools", "exec.run_wait,session.create"]).unwrap();
+        let crate::SubCommand::McpStdio(cmd) = opt.cmd else { panic!("not mcp-stdio") };
+        assert_eq!(cmd.tools, only);
+    }
 
     #[test]
     fn only_compatibility_failures_trigger_bridge_replacement() {

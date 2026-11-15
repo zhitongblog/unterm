@@ -63,6 +63,8 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     crate::console_tasks::start_scheduler(Arc::clone(&handler));
     // The agents it runs may hand work to other agents on this machine.
     unterm_mcp::records::set_delegator(crate::helpers::delegate);
+    // The user's own clients get the same ceiling as the agents it runs.
+    unterm_mcp::handler::set_client_autonomy(|| crate::console_tasks::run_settings().autonomy);
     if crate::remote::load_or_init_config().enabled {
         crate::remote::ensure_remote_server_started(Arc::clone(&handler));
     }
@@ -577,6 +579,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/tasks/thread") => super::console_tasks::api_thread(&req.body),
         ("POST", "/api/console/computer/terminal") => super::console_tasks::api_terminal(handler, &req.body),
         ("POST", "/api/console/computer/terminal/input") => super::console_tasks::api_terminal_input(handler, &req.body),
+        ("POST", "/api/console/handover") => super::console_tasks::api_handover(&req.body),
         ("POST", "/api/console/computer/terminal/focus") => super::console_tasks::api_terminal_focus(handler, &req.body),
         ("POST", "/api/console/computer/tab") => super::console_tasks::api_tab(&req.body),
         ("POST", "/api/console/computer/tab/activate") => super::console_tasks::api_tab_activate(&req.body),

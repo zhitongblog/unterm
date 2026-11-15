@@ -174,6 +174,50 @@ pub fn activate_tab(tab: &str) -> Result<Value> {
     Ok(json!({"tab_id": tab, "activated": true}))
 }
 
+/// Whether a profile folder is one Unzoo keeps for an MCP client
+/// (`...\Profile_mcp-claude-code`): an agent's own, never the person's.
+pub fn is_agent_profile(path: &str) -> bool {
+    path.trim_end_matches(['\\', '/'])
+        .rsplit(['\\', '/'])
+        .next()
+        .is_some_and(|folder| folder.starts_with("Profile_mcp-"))
+}
+
+/// Close the tabs a finished run leaves behind: those it opened itself
+/// (`opened`), and any other tab it used that lives in an agent's own
+/// profile. A tab in the person's profile that the run only used is left
+/// alone -- it was theirs before the run and is theirs after. Tabs already
+/// closed are skipped. Returns the ids closed.
+pub fn close_tabs(opened: &[String], used: &[String], before_closing: impl Fn(&str)) -> Result<Vec<String>> {
+    let listing = call("GET", "/api/v1/tabs", None)?;
+    let open: Vec<(u64, String)> = listing
+        .pointer("/data/tabs")
+        .and_then(Value::as_array)
+        .map(|tabs| {
+            tabs.iter()
+                .filter_map(|t| {
+                    let id = t.get("tab_id").and_then(Value::as_u64)?;
+                    Some((id, t.get("profile_path").and_then(Value::as_str).unwrap_or_default().to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut closed = Vec::new();
+    for tab in opened.iter().chain(used) {
+        let Ok(id) = tab_number(tab) else { continue };
+        let Some((_, profile)) = open.iter().find(|(open_id, _)| *open_id == id) else { continue };
+        let ours = opened.contains(tab) || is_agent_profile(profile);
+        if !ours || closed.contains(tab) {
+            continue;
+        }
+        before_closing(tab);
+        if call("POST", "/api/v1/tabs/close", Some(&json!({"tab_id": id}))).is_ok() {
+            closed.push(tab.clone());
+        }
+    }
+    Ok(closed)
+}
+
 /// What an agent is told when it browses in a profile chosen for it rather
 /// than its own. Unzoo routes a call with a profile but no tab to one of
 /// that profile's existing tabs -- which may be the one the person is
@@ -215,6 +259,15 @@ mod tests {
         assert!(text.contains("profile_id=\"default\""));
         assert!(text.contains("tab_create(profile_id=\"default\")"));
         assert!(text.contains("Never navigate"));
+    }
+
+    #[test]
+    fn only_profiles_kept_for_a_client_are_an_agents_own() {
+        assert!(is_agent_profile(r"C:\Users\a\AppData\Local\Unzoo\User Data\Profile_mcp-claude-code"));
+        assert!(is_agent_profile("/home/a/.unzoo/Profile_mcp-unzoo-one-agent/"));
+        assert!(!is_agent_profile(r"C:\Users\a\AppData\Local\Unzoo\User Data\Default"));
+        assert!(!is_agent_profile(r"C:\x\Profile_work"));
+        assert!(!is_agent_profile(""));
     }
 
     #[test]

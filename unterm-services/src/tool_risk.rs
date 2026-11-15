@@ -74,10 +74,35 @@ impl Autonomy {
     }
 }
 
+/// A CLI's built-in tool for putting a question to the user (Claude Code's
+/// `AskUserQuestion`). Not a risk: it does nothing but ask, and a hosted
+/// session has no screen for it -- see `agent_session`.
+pub fn asks_the_person(tool: &str) -> bool {
+    matches!(tool, "AskUserQuestion")
+}
+
+/// The servers whose tools are read here by name.
+const KNOWN_SERVERS: &[&str] = &["unterm", "unzoo"];
+
+/// An MCP tool's server and name, however the CLI spells it: Claude Code
+/// `mcp__unzoo__tab_create`, Codex `unzoo.tab_create`, OpenCode
+/// `unzoo_tab_create`. The last two are read only for the servers known
+/// here, since a dot or an underscore is also just part of a tool's name.
+pub fn mcp_parts(tool: &str) -> Option<(&str, &str)> {
+    if let Some(rest) = tool.strip_prefix("mcp__") {
+        return rest.split_once("__");
+    }
+    KNOWN_SERVERS.iter().find_map(|server| {
+        let rest = tool.strip_prefix(server)?;
+        let name = rest.strip_prefix('.').or_else(|| rest.strip_prefix('_'))?;
+        (!name.is_empty()).then_some((*server, name))
+    })
+}
+
 /// The risk of one tool call, or `None` for a tool this does not know.
 pub fn classify(tool: &str, input: &Value, cwd: Option<&str>) -> Option<Risk> {
-    if let Some(rest) = tool.strip_prefix("mcp__") {
-        let (server, name) = rest.split_once("__")?;
+    if tool.starts_with("mcp__") || mcp_parts(tool).is_some() {
+        let (server, name) = mcp_parts(tool)?;
         return match server {
             "unterm" => unterm_method_risk(name, input),
             "unzoo" => unzoo_risk(name),
@@ -130,7 +155,8 @@ pub fn command_of(input: &Value) -> Option<String> {
 /// ACP agents' `path`/`TargetFile`, Codex's patch entries.
 fn edited_paths(input: &Value) -> Vec<String> {
     fn take(value: &Value, out: &mut Vec<String>) {
-        for key in ["file_path", "notebook_path", "path", "TargetFile", "target_file", "destination"] {
+        // `filepath`: OpenCode's write and edit.
+        for key in ["file_path", "filepath", "notebook_path", "path", "TargetFile", "target_file", "destination"] {
             if let Some(path) = value.get(key).and_then(Value::as_str) {
                 out.push(path.to_string());
             }
@@ -287,8 +313,10 @@ fn unzoo_risk(name: &str) -> Option<Risk> {
         "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "tab_create",
         "tab_activate", "download_url", "media_download_smart", "ytdlp_download", "lease_request",
     ];
+    // A script run in the agent's own tab can do what a click can (and is how
+    // agents usually read a page in one go): working the page, not more.
     const WORKS_THE_PAGE: &[&str] = &[
-        "browser_click", "browser_double_click", "browser_type", "browser_input_text", "browser_fill_form",
+        "browser_evaluate", "browser_click", "browser_double_click", "browser_type", "browser_input_text", "browser_fill_form",
         "browser_select_option", "browser_check", "browser_press_key", "browser_hover", "browser_focus",
         "browser_drag_and_drop", "browser_dismiss_blocking_dialog", "browser_print_pdf", "page_click",
         "page_type", "page_select", "page_batch_actions", "page_cleanup", "human_click", "human_type",
@@ -348,6 +376,8 @@ pub enum Verb {
     Skill,
     /// Handed work to another agent.
     Delegate,
+    /// Asked the person to take over (sign in, solve a captcha).
+    Handover,
     /// Anything else, named by its tool.
     Use,
 }
@@ -415,14 +445,16 @@ fn relative_to(text: &str, cwd: &str) -> String {
 
 fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
     let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k).and_then(Value::as_str)).unwrap_or_default().to_string();
-    if let Some(rest) = tool.strip_prefix("mcp__") {
-        let (server, name) = rest.split_once("__").unwrap_or(("", rest));
+    if let Some((server, name)) = mcp_parts(tool).or_else(|| tool.strip_prefix("mcp__").map(|rest| ("", rest))) {
         let pretty = name.replace('_', " ");
         if server == "unterm" {
             if name.replace('.', "_") == "agent_session_delegate" {
                 let task = field(&["prompt"]);
                 let agent = field(&["agent", "session_id"]);
                 return (Verb::Delegate, if task.is_empty() { agent } else { format!("{agent}: {task}") });
+            }
+            if name.replace('.', "_") == "agent_session_handover" {
+                return (Verb::Handover, field(&["what", "handover_id"]));
             }
             if name.starts_with("exec_") || name == "session_input" || name == "session_paste" {
                 let command = command_of(input).unwrap_or_else(|| field(&["text", "input", "data"]));
@@ -547,6 +579,16 @@ mod tests {
     }
 
     #[test]
+    fn asking_the_person_to_take_over_runs_nothing() {
+        let input = json!({"what": "Sign in to GitHub", "tab_id": "42"});
+        assert_eq!(risk("mcp__unterm__agent_session_handover", input.clone()), Some(Risk::Read));
+        assert_eq!(
+            describe("mcp__unterm__agent_session_handover", &input),
+            (Verb::Handover, "Sign in to GitHub".to_string())
+        );
+    }
+
+    #[test]
     fn handing_work_on_is_running_a_program_but_acting_for_the_person_is_always_asked() {
         let delegate = risk("mcp__unterm__agent_session_delegate", json!({"agent": "codex", "prompt": "x"}));
         assert_eq!(delegate, Some(Risk::Exec));
@@ -586,14 +628,61 @@ mod tests {
     }
 
     #[test]
+    fn every_cli_spelling_of_an_mcp_tool_is_the_same_tool() {
+        for tool in ["mcp__unzoo__browser_a11y_snapshot", "unzoo.browser_a11y_snapshot", "unzoo_browser_a11y_snapshot"] {
+            assert_eq!(risk(tool, json!({})), Some(Risk::Read), "{tool}");
+        }
+        assert_eq!(risk("unterm.exec_run_wait", json!({"command": "rm -rf /"})), Some(Risk::Destructive));
+        assert_eq!(describe("unzoo.tab_create", &json!({"url": "https://example.com"})).0, Verb::Open);
+        assert_eq!(mcp_parts("unzoo."), None);
+        assert_eq!(mcp_parts("unzooish.x"), None);
+        assert_eq!(mcp_parts("shell"), None);
+    }
+
+    #[test]
     fn unzoo_browser_tools() {
         assert_eq!(risk("mcp__unzoo__browser_a11y_snapshot", json!({})), Some(Risk::Read));
         assert_eq!(risk("mcp__unzoo__browser_navigate", json!({"url": "https://x"})), Some(Risk::Exec));
         assert_eq!(risk("mcp__unzoo__browser_click", json!({"ref": "ref=3"})), Some(Risk::LocalMutation));
+        let evaluate = risk("mcp__unzoo__browser_evaluate", json!({"expression": "document.title"}));
+        assert_eq!(evaluate, Some(Risk::LocalMutation));
+        assert!(Autonomy::Balanced.allows(evaluate.unwrap()));
         assert_eq!(risk("mcp__unzoo__browser_upload_trusted", json!({})), Some(Risk::ExternalSideEffect));
         assert_eq!(risk("mcp__unzoo__cookie_get_all", json!({})), Some(Risk::CredentialAccess));
         assert_eq!(risk("mcp__unzoo__lease_grant", json!({})), Some(Risk::Destructive));
         assert_eq!(risk("mcp__unzoo__brand_new_tool", json!({})), None);
+    }
+
+    /// Every tool Unzoo Browser offers has a risk: one left out is asked
+    /// about on every call, whatever the person chose.
+    #[test]
+    fn every_unzoo_tool_is_classified() {
+        const TOOLS: &[&str] = &[
+            "browser_a11y_snapshot", "browser_check", "browser_click", "browser_delay",
+            "browser_dismiss_blocking_dialog", "browser_double_click", "browser_drag_and_drop",
+            "browser_element_exists", "browser_evaluate", "browser_fill_form", "browser_find", "browser_focus",
+            "browser_get_attribute", "browser_get_bounding_box", "browser_get_console_messages", "browser_get_html",
+            "browser_get_network_requests", "browser_get_text", "browser_get_title", "browser_get_url",
+            "browser_hover", "browser_input_text", "browser_navigate", "browser_navigate_back",
+            "browser_navigate_forward", "browser_network_wait_for", "browser_press_key", "browser_print_pdf",
+            "browser_query_selector_all", "browser_reload", "browser_screenshot", "browser_scroll",
+            "browser_select_option", "browser_set_input_files", "browser_snapshot", "browser_type",
+            "browser_upload_trusted", "browser_wait_for", "browser_wait_for_navigation",
+            "browser_wait_for_network_idle", "browser_wait_for_selector", "cookie", "cookie_delete",
+            "cookie_get_all", "cookie_import", "cookie_set", "download_url", "download_with_cookies",
+            "extract_form_fields", "extract_images", "extract_links", "extract_structured",
+            "extract_structured_data", "extract_table", "file_list", "file_read", "file_write", "human_click",
+            "human_profile_get", "human_profile_set", "human_select", "human_status", "human_task", "human_type",
+            "human_upload", "human_wait", "lease_grant", "lease_list", "lease_request", "media_capture_get",
+            "media_capture_list", "media_capture_remove", "media_capture_start", "media_capture_stop",
+            "media_deps_ensure", "media_deps_status", "media_download_smart", "page_analyze", "page_batch_actions",
+            "page_cleanup", "page_click", "page_select", "page_type", "profile_get_current", "profile_list",
+            "service_status", "service_version", "session_clear", "session_info", "skill_get", "skill_list",
+            "tab_activate", "tab_close", "tab_create", "tab_get_info", "tab_list", "tool_profile_set",
+            "workspace_set", "youtube_transcript", "ytdlp_download",
+        ];
+        let missing: Vec<&str> = TOOLS.iter().copied().filter(|name| unzoo_risk(name).is_none()).collect();
+        assert!(missing.is_empty(), "no risk for {missing:?}");
     }
 
     #[test]

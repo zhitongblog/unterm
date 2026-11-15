@@ -182,6 +182,15 @@ fn base_command(spec: &Spec) -> Command {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // An agent CLI is a console program: started by a process that has no
+    // console (a headless Core), Windows would open a window for it on the
+    // person's desktop. It talks over pipes and is shown in the app.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
         // What a shell does on `cd`, and what Bun/Node agents read first:

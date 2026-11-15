@@ -72,6 +72,13 @@ pub trait HostProtocol: Send + Sync {
         Vec::new()
     }
 
+    /// Folders of skills (each holding skill folders with a SKILL.md) to
+    /// offer this session, for a protocol that is told them at start rather
+    /// than by its command line or environment. Called before [`opening`].
+    ///
+    /// [`opening`]: HostProtocol::opening
+    fn use_skill_roots(&self, _roots: &[String]) {}
+
     /// Lines written before anything else (a handshake).
     fn opening(&self, _cwd: Option<&str>) -> Vec<String> {
         Vec::new()
