@@ -4451,6 +4451,34 @@ pub fn note_console_watching() {
     CONSOLE_SEEN.store(chrono::Utc::now().timestamp(), std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Where the ceiling for agents connected from outside comes from, when the
+/// product has one. See [`set_client_autonomy`].
+static CLIENT_AUTONOMY: std::sync::OnceLock<fn() -> unterm_services::tool_risk::Autonomy> =
+    std::sync::OnceLock::new();
+
+/// Judge a terminal write by an agent connected from outside -- the user's
+/// own Claude Code, Cursor, Codex -- the way the agents the product runs are
+/// judged: by how risky this write is, against how much the user lets agents
+/// do unasked. Read on every write, so a change in the settings counts at
+/// once.
+///
+/// Without one, the older rule stands: ask the first time each agent writes,
+/// then let that agent's writes through. That rule cannot tell `ls` from
+/// `rm -rf`, which is why a product with a ceiling replaces it.
+pub fn set_client_autonomy(source: fn() -> unterm_services::tool_risk::Autonomy) {
+    let _ = CLIENT_AUTONOMY.set(source);
+}
+
+fn client_autonomy() -> Option<unterm_services::tool_risk::Autonomy> {
+    CLIENT_AUTONOMY.get().map(|source| source())
+}
+
+/// How risky a terminal write is: what the method may do, raised by what the
+/// command in it says (`rm -rf`, `git push --force`, `curl ... | sh`).
+fn write_risk(method_risk: unterm_gateway::Risk, input: &str) -> unterm_gateway::Risk {
+    method_risk.max(unterm_gateway::command_risk(input))
+}
+
 /// Whether a console has asked recently enough to be answering.
 pub fn console_watching() -> bool {
     let seen = CONSOLE_SEEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -7180,8 +7208,9 @@ impl McpHandler {
                 &format!("agent={agent} method={method} (no window to approve a destructive action)"),
             );
             return Err(anyhow!(
-                "blocked: {method} cannot be undone and no Unterm window or console is open to approve it. \
-                 Add the agent to mcp_trusted_agents, or set mcp_input_confirmation=never."
+                "blocked: {method} cannot be undone and no {product} window or console is open to approve it. \
+                 Ask the user to open {product} and try again, or to trust this agent there.",
+                product = unterm_protocol::product_name()
             ));
         }
 
@@ -7341,6 +7370,13 @@ impl McpHandler {
         }
 
         let policy = cfg.mcp_input_confirmation;
+        let ceiling = client_autonomy();
+        // With a ceiling, a write is as risky as its command says; without
+        // one, as its method says, as before.
+        let risk = match ceiling {
+            Some(_) => write_risk(gateway.risk, input),
+            None => gateway.risk,
+        };
         // Three ways an agent can already be trusted, and they mean
         // different things. The config list is the user declaring it up
         // front; the session set is this process remembering; the grant is
@@ -7348,12 +7384,30 @@ impl McpHandler {
         // one of the three that can be revoked from the same place as every
         // other permission.
         let trusted_static = cfg.mcp_trusted_agents.iter().any(|n| n == &agent)
-            || agent_is_granted(&agent, method, gateway.risk.as_str());
+            || agent_is_granted(&agent, method, risk.as_str());
         let already_confirmed = {
             let state = mcp_state().lock();
             state.confirmed_agents.contains(&agent)
         };
-        let needs_banner = if trusted_static || already_confirmed {
+        let needs_banner = if trusted_static {
+            false
+        } else if let Some(level) = ceiling {
+            // Each write on its own merits. Having said yes to one command
+            // is not having said yes to the next, so the session set does
+            // not count here: an "always allow" is a grant at its risk.
+            if matches!(policy, unterm_services::settings::McpInputConfirmation::Never) {
+                false
+            } else if level.allows(risk) {
+                self.audit(
+                    "mcp.confirm.autonomy",
+                    Some(&pane_id.to_string()),
+                    &format!("agent={agent} risk={} autonomy={} {preview}", risk.as_str(), level.as_str()),
+                );
+                false
+            } else {
+                true
+            }
+        } else if already_confirmed {
             false
         } else {
             match policy {
@@ -7385,11 +7439,11 @@ impl McpHandler {
                     "agent={agent} {preview} (no window to confirm; trust the agent or set mcp_input_confirmation=never)"
                 ),
             );
-            return Ok(GateOutcome::Block(
-                "blocked: no Unterm window or console is open to approve this write. Add the agent to \
-                 mcp_trusted_agents, or set mcp_input_confirmation=never."
-                    .to_string(),
-            ));
+            return Ok(GateOutcome::Block(format!(
+                "blocked: this write needs someone to say yes, and no {product} window or console is open \
+                 to ask. Ask the user to open {product} and try again, or to trust this agent there.",
+                product = unterm_protocol::product_name()
+            )));
         }
 
         // Put the question in front of whoever is hosting a window and
@@ -7413,7 +7467,7 @@ impl McpHandler {
                     pane_id: pane_id as u64,
                     window_id: None,
                     input_preview: preview.clone(),
-                    risk: gateway.risk.as_str().to_string(),
+                    risk: risk.as_str().to_string(),
                     timeout_ms,
                     state: "pending".to_string(),
                     requested_at: chrono::Local::now().to_rfc3339(),
@@ -7430,7 +7484,7 @@ impl McpHandler {
                     "input_preview": preview,
                     "timeout_ms": timeout_ms,
                     // So "always allow" grants exactly what was on screen.
-                    "risk": gateway.risk.as_str(),
+                    "risk": risk.as_str(),
                 }));
         let window_id = reply
             .as_ref()
@@ -7463,7 +7517,7 @@ impl McpHandler {
                     state.confirmed_agents.insert(agent.clone());
                     finish_confirmation_record(&mut state, confirm_id, "always_allowed", window_id);
                 }
-                grant_agent_trust(&agent, gateway.risk.as_str());
+                grant_agent_trust(&agent, risk.as_str());
                 self.audit(
                     "mcp.confirm.always_allow",
                     Some(&pane_id.to_string()),
@@ -13023,5 +13077,26 @@ mod console_confirmation_tests {
         assert_eq!(asker.join().unwrap().unwrap(), json!("allow"));
 
         CONSOLE_SEEN.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// An outside agent's write is judged by its command, not only its
+    /// method: under any ceiling, typing `rm -rf` is asked about.
+    #[test]
+    fn an_outside_write_is_as_risky_as_its_command() {
+        use unterm_gateway::Risk;
+        use unterm_services::tool_risk::Autonomy;
+        let typed = unterm_gateway::risk_of("session.input").unwrap();
+        let run = unterm_gateway::risk_of("exec.run").unwrap();
+
+        assert!(Autonomy::Balanced.allows(write_risk(run, "cargo test")));
+        assert!(Autonomy::Balanced.allows(write_risk(typed, "ls -la\r")));
+        assert!(!Autonomy::Cautious.allows(write_risk(run, "cargo test")));
+        for level in [Autonomy::Cautious, Autonomy::Balanced, Autonomy::Autonomous] {
+            assert_eq!(write_risk(run, "rm -rf ~/work"), Risk::Destructive);
+            assert!(!level.allows(write_risk(typed, "rm -rf ~/work\r")), "{level:?}");
+            assert!(!level.allows(write_risk(run, "git push --force")), "{level:?}");
+        }
+        assert!(!Autonomy::Balanced.allows(write_risk(run, "git push")));
+        assert!(Autonomy::Autonomous.allows(write_risk(run, "git push")));
     }
 }
