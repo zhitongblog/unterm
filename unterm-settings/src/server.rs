@@ -63,8 +63,13 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     crate::console_tasks::start_scheduler(Arc::clone(&handler));
     // The agents it runs may hand work to other agents on this machine.
     unterm_mcp::records::set_delegator(crate::helpers::delegate);
-    // The user's own clients get the same ceiling as the agents it runs.
-    unterm_mcp::handler::set_client_autonomy(|| crate::console_tasks::run_settings().autonomy);
+    // In a product built on this console (one that names itself), the
+    // user's own clients get the same ceiling as the agents it runs. The
+    // terminal on its own keeps its rule: ask the first time each agent
+    // writes, and refuse when nobody can answer.
+    if unterm_protocol::product_name() != "Unterm" {
+        unterm_mcp::handler::set_client_autonomy(|| crate::console_tasks::run_settings().autonomy);
+    }
     // An update may have changed the built-in skills: refresh the copies in
     // the clients the person connected.
     let _ = thread::Builder::new().name("skills-sync".into()).spawn(|| {

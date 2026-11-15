@@ -43,11 +43,18 @@ pub const DELEGATE_WAIT_MAX_SECONDS: u64 = 600;
 /// How long `agent_session.handover` waits for the person by default.
 pub const HANDOVER_WAIT_SECONDS: u64 = 300;
 
+/// How long a question put to a watching console stays open: the server
+/// gives the person at least this long to switch to it and answer.
+const CONSOLE_ANSWER_SECONDS: u64 = 120;
+
 /// How long a reply may take: the server's confirmation wait and a margin.
+/// At least as long as a console question stays open -- a bridge that gave
+/// up first would tell the agent "no answer" while the person was still
+/// reading the question, and their yes would land on nobody.
 fn default_read_timeout() -> Duration {
     Duration::from_millis(unterm_services::settings::current().mcp_confirmation_timeout_ms)
+        .max(Duration::from_secs(CONSOLE_ANSWER_SECONDS))
         .saturating_add(Duration::from_secs(15))
-        .max(Duration::from_secs(30))
 }
 
 /// Windows reports a socket read timeout as `TimedOut`, but some stacks
@@ -201,9 +208,9 @@ impl McpClient {
             // already proved something is there.
             if is_timeout(&e) {
                 anyhow!(
-                    "MCP {} timed out waiting for a reply. Unterm is running but did not answer; \
-                     if this was a command for a pane, check the Unterm window for a confirmation \
-                     asking you to approve it.",
+                    "MCP {} timed out waiting for a reply. The terminal service is running but did \
+                     not answer; if the call needed approval, ask the user to look for a confirmation \
+                     waiting for them.",
                     method
                 )
             } else {
