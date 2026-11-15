@@ -261,6 +261,32 @@ pub fn outputs_since(dir: &std::path::Path, since: std::time::SystemTime) -> Vec
     found.into_iter().take(MAX_OUTPUTS).map(|(_, output)| output).collect()
 }
 
+/// Of the files a run wrote, the ones its reply names: what it made for the
+/// person. The rest -- a repository it cloned, a script it wrote to scroll a
+/// page, data it kept along the way -- was its working, not the result. A
+/// file is named by its path or by its file name.
+pub fn named_in(outputs: Vec<Output>, reply: &str) -> Vec<Output> {
+    let reply = reply.replace('\\', "/");
+    outputs.into_iter().filter(|output| names(&reply, &output.path)).collect()
+}
+
+fn names(reply: &str, path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    reply.contains(path) || (!name.is_empty() && reply.contains(name))
+}
+
+/// A run's outputs as the console lists them. Runs recorded before
+/// [`named_in`] kept everything they wrote; they are read the same way.
+fn listed_outputs(detail: &Value) -> Value {
+    let Some(outputs) = detail.get("outputs").and_then(Value::as_array) else { return json!([]) };
+    let Some(reply) = detail.get("reply").and_then(Value::as_str) else { return json!(outputs) };
+    let reply = reply.replace('\\', "/");
+    json!(outputs
+        .iter()
+        .filter(|o| o.get("path").and_then(Value::as_str).is_some_and(|path| names(&reply, path)))
+        .collect::<Vec<_>>())
+}
+
 /// How much of one output the console is shown.
 const MAX_READ: u64 = 1024 * 1024;
 
@@ -658,7 +684,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
         "waiting": detail.get("waiting").and_then(Value::as_bool).unwrap_or(false),
         "usage": field("usage"),
         "workdir": field("cwd"),
-        "outputs": detail.get("outputs").cloned().unwrap_or_else(|| json!([])),
+        "outputs": listed_outputs(&detail),
     })
 }
 
@@ -1457,6 +1483,9 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
             detail["activity"] = json!(turn.activity);
             detail["terminals"] = json!(turn.terminals);
             detail["tabs"] = json!(turn.tabs);
+            // Kept as it goes, so a run cut off by a restart can still have
+            // the tabs it opened closed (see [`sweep_orphans`]).
+            detail["opened_tabs"] = json!(turn.opened_tabs);
             if !turn.handovers.is_empty() {
                 detail["handovers"] = json!(turn.handovers);
             }
@@ -1532,7 +1561,7 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
                 Err(error) => detail["skill_error"] = json!(format!("{error:#}")),
             }
         }
-        detail["outputs"] = json!(outputs_since(&dir, started_at));
+        detail["outputs"] = json!(named_in(outputs_since(&dir, started_at), &turn.text));
     }
     if state == State::Failed {
         if let Some(error) = &turn.error {
@@ -1570,6 +1599,7 @@ pub fn sweep_orphans() -> Result<usize> {
     let store = store()?;
     let followed = following().lock().unwrap().clone();
     let mut closed = 0;
+    let mut left_open = Turn::default();
     for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
         for run in store.runs(&task.id)? {
             if run.state != State::Running || followed.contains(run.id.as_str()) {
@@ -1577,6 +1607,17 @@ pub fn sweep_orphans() -> Result<usize> {
             }
             let step = store.steps(&run.id)?.into_iter().find(|s| s.kind == STEP_KIND);
             if let Some(step) = step {
+                let ids = |key: &str| -> Vec<String> {
+                    step.detail
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default()
+                };
+                // Its terminals died with the Core that held them (and their
+                // ids may be some other terminal's now); its tabs did not.
+                left_open.tabs.extend(ids("tabs"));
+                left_open.opened_tabs.extend(ids("opened_tabs"));
                 let mut detail = step.detail.clone();
                 detail["waiting"] = json!(false);
                 detail["error"] = json!("the background service stopped before this run finished");
@@ -1586,6 +1627,9 @@ pub fn sweep_orphans() -> Result<usize> {
             store.finish_run(&run.id, State::Interrupted, run.version)?;
             closed += 1;
         }
+    }
+    if !left_open.tabs.is_empty() || !left_open.opened_tabs.is_empty() {
+        tidy_up(&[&left_open]);
     }
     Ok(closed)
 }
@@ -1991,6 +2035,22 @@ mod tests {
         let outputs = outputs_since(dir.path(), since);
         assert_eq!(outputs.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["out/report.md"]);
         assert_eq!(outputs[0].size, 8);
+    }
+
+    #[test]
+    fn the_result_is_the_files_the_reply_names_not_everything_written() {
+        let output = |path: &str| Output { path: path.into(), size: 1, modified: String::new() };
+        let written = vec![
+            output("HN-Top10.md"),
+            output("scroll.js"),
+            output("repo/README.md"),
+            output("repo/Cargo.lock"),
+            output("out/posts.csv"),
+        ];
+        let reply = "Saved the list as HN-Top10.md and the raw data as `out\\posts.csv`.";
+        let named = named_in(written, reply);
+        assert_eq!(named.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["HN-Top10.md", "out/posts.csv"]);
+        assert!(named_in(vec![output("scratch.json")], "Done.").is_empty());
     }
 
     #[test]
