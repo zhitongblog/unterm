@@ -65,6 +65,13 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     unterm_mcp::records::set_delegator(crate::helpers::delegate);
     // The user's own clients get the same ceiling as the agents it runs.
     unterm_mcp::handler::set_client_autonomy(|| crate::console_tasks::run_settings().autonomy);
+    // An update may have changed the built-in skills: refresh the copies in
+    // the clients the person connected.
+    let _ = thread::Builder::new().name("skills-sync".into()).spawn(|| {
+        if let Err(error) = crate::clients::sync_skills() {
+            log::warn!("could not update the skills in connected clients: {error:#}");
+        }
+    });
     if crate::remote::load_or_init_config().enabled {
         crate::remote::ensure_remote_server_started(Arc::clone(&handler));
     }

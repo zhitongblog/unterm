@@ -39,6 +39,9 @@ struct Client {
     /// Home-relative config file.
     config: &'static str,
     format: Format,
+    /// Home-relative folder the client reads Agent Skills from, when it has
+    /// one: connecting puts Unzoo One's skills there too.
+    skills: Option<&'static str>,
 }
 
 fn desktop_config() -> &'static str {
@@ -63,16 +66,16 @@ fn desktop_dir() -> &'static str {
 
 fn table() -> Vec<Client> {
     vec![
-        Client { id: "claude-desktop", label: "Claude Desktop", detect: vec![desktop_dir()], config: desktop_config(), format: Format::DesktopServers },
-        Client { id: "claude-code", label: "Claude Code", detect: vec![".claude.json", ".claude"], config: ".claude.json", format: Format::Servers },
-        Client { id: "cursor", label: "Cursor", detect: vec![".cursor"], config: ".cursor/mcp.json", format: Format::Servers },
-        Client { id: "codex", label: "Codex", detect: vec![".codex"], config: ".codex/config.toml", format: Format::Toml },
-        Client { id: "windsurf", label: "Windsurf", detect: vec![".codeium/windsurf"], config: ".codeium/windsurf/mcp_config.json", format: Format::Servers },
-        Client { id: "agy", label: "Antigravity", detect: vec![".gemini/antigravity-cli", ".gemini/config"], config: ".gemini/config/mcp_config.json", format: Format::Servers },
-        Client { id: "gemini", label: "Gemini CLI", detect: vec![".gemini"], config: ".gemini/settings.json", format: Format::Servers },
-        Client { id: "opencode", label: "OpenCode", detect: vec![".config/opencode"], config: ".config/opencode/opencode.json", format: Format::OpenCode },
-        Client { id: "kimi", label: "Kimi Code", detect: vec![".kimi"], config: ".kimi/mcp.json", format: Format::Servers },
-        Client { id: "qwen", label: "Qwen Code", detect: vec![".qwen"], config: ".qwen/settings.json", format: Format::Servers },
+        Client { id: "claude-desktop", label: "Claude Desktop", detect: vec![desktop_dir()], config: desktop_config(), format: Format::DesktopServers, skills: None },
+        Client { id: "claude-code", label: "Claude Code", detect: vec![".claude.json", ".claude"], config: ".claude.json", format: Format::Servers, skills: Some(".claude/skills") },
+        Client { id: "cursor", label: "Cursor", detect: vec![".cursor"], config: ".cursor/mcp.json", format: Format::Servers, skills: None },
+        Client { id: "codex", label: "Codex", detect: vec![".codex"], config: ".codex/config.toml", format: Format::Toml, skills: Some(".codex/skills") },
+        Client { id: "windsurf", label: "Windsurf", detect: vec![".codeium/windsurf"], config: ".codeium/windsurf/mcp_config.json", format: Format::Servers, skills: None },
+        Client { id: "agy", label: "Antigravity", detect: vec![".gemini/antigravity-cli", ".gemini/config"], config: ".gemini/config/mcp_config.json", format: Format::Servers, skills: None },
+        Client { id: "gemini", label: "Gemini CLI", detect: vec![".gemini"], config: ".gemini/settings.json", format: Format::Servers, skills: None },
+        Client { id: "opencode", label: "OpenCode", detect: vec![".config/opencode"], config: ".config/opencode/opencode.json", format: Format::OpenCode, skills: Some(".config/opencode/skills") },
+        Client { id: "kimi", label: "Kimi Code", detect: vec![".kimi"], config: ".kimi/mcp.json", format: Format::Servers, skills: None },
+        Client { id: "qwen", label: "Qwen Code", detect: vec![".qwen"], config: ".qwen/settings.json", format: Format::Servers, skills: None },
     ]
 }
 
@@ -167,6 +170,7 @@ pub fn status(cli: Option<&str>) -> Value {
                     "config": path.display().to_string(),
                     "terminal": servers.iter().any(|(key, entry)| key == &name || cli.is_some_and(|cli| runs_bridge(entry, cli))),
                     "browser": servers.iter().any(|(key, _)| key == BROWSER_SERVER),
+                    "skills": client.skills.is_some(),
                 }),
                 Err(error) => json!({
                     "id": client.id,
@@ -253,7 +257,36 @@ pub fn set(id: &str, cli: &str, connect: bool) -> Result<Value> {
             write_atomically(&path, &(serde_json::to_string_pretty(&doc)? + "\n"))?;
         }
     }
-    Ok(json!({"id": id, "name": client.label, "terminal": connect, "config": path.display().to_string()}))
+    let mut reply = json!({"id": id, "name": client.label, "terminal": connect, "config": path.display().to_string()});
+    // The skills go with the terminal: they are how an agent learns to use
+    // it well. A failure here does not undo the connection; it is reported.
+    if let Some(dir) = client.skills.map(|dir| home.join(dir)) {
+        let result = if connect {
+            super::skills::install_into(&dir).map(|(installed, skipped)| json!({"installed": installed, "skipped": skipped}))
+        } else {
+            super::skills::remove_from(&dir).map(|removed| json!({"removed": removed}))
+        };
+        reply["skills"] = result.unwrap_or_else(|error| json!({"error": format!("{error:#}")}));
+    }
+    Ok(reply)
+}
+
+/// Bring the skills up to date in every client that has this terminal and a
+/// skills folder: after a skill is switched, imported or deleted, and when
+/// the service starts (an update may have changed the built-in ones).
+pub fn sync_skills() -> Result<()> {
+    let home = home()?;
+    let name = server_name();
+    for client in table() {
+        let Some(dir) = client.skills else { continue };
+        let connected = servers_in(&home.join(client.config), client.format)
+            .map(|servers| servers.iter().any(|(key, _)| key == &name))
+            .unwrap_or(false);
+        if connected {
+            super::skills::install_into(&home.join(dir))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -272,6 +305,56 @@ mod tests {
 
     fn entry_of<'a>(status: &'a Value, id: &str) -> &'a Value {
         status.as_array().unwrap().iter().find(|c| c["id"] == id).unwrap()
+    }
+
+    /// Connecting puts the skills where the client reads them; the person's
+    /// own folder of the same name, and skills meant only for hosted runs,
+    /// stay out; disconnecting takes back exactly what was put there.
+    #[test]
+    fn the_skills_go_with_the_terminal() {
+        let builtin = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        for name in ["unzoo-terminal", "unzoo-deliverables", "unzoo-browser"] {
+            std::fs::create_dir_all(builtin.path().join(name)).unwrap();
+            std::fs::write(
+                builtin.path().join(name).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: test skill {name}\n---\n\nbody\n"),
+            )
+            .unwrap();
+        }
+        std::env::set_var("UNTERM_BUILTIN_SKILLS", builtin.path());
+        std::env::set_var("UNTERM_STATE_DIR", state.path());
+        with_home(|home| {
+            let cli = "/opt/unzoo-one/unterm-cli";
+            std::fs::create_dir_all(home.join(".claude/skills/unzoo-browser")).unwrap();
+            std::fs::write(home.join(".claude/skills/unzoo-browser/SKILL.md"), "mine").unwrap();
+            std::fs::create_dir_all(home.join(".claude/skills/my-own")).unwrap();
+
+            let reply = set("claude-code", cli, true).unwrap();
+            assert_eq!(reply["skills"]["installed"], json!(["unzoo-terminal"]));
+            assert_eq!(reply["skills"]["skipped"], json!(["unzoo-browser"]));
+            let skills = home.join(".claude/skills");
+            assert!(skills.join("unzoo-terminal/SKILL.md").is_file());
+            assert!(!skills.join("unzoo-deliverables").exists(), "only meaningful in a hosted run");
+            assert_eq!(std::fs::read_to_string(skills.join("unzoo-browser/SKILL.md")).unwrap(), "mine");
+
+            // Switched off here: gone from the connected client too.
+            crate::skills::set_enabled("unzoo-terminal", false).unwrap();
+            assert!(!skills.join("unzoo-terminal").exists());
+            crate::skills::set_enabled("unzoo-terminal", true).unwrap();
+            assert!(skills.join("unzoo-terminal/SKILL.md").is_file());
+
+            set("claude-code", cli, false).unwrap();
+            assert!(!skills.join("unzoo-terminal").exists());
+            assert!(skills.join("unzoo-browser/SKILL.md").is_file(), "the person's own stays");
+            assert!(skills.join("my-own").is_dir());
+
+            // A client without a skills folder gets the terminal alone.
+            std::fs::create_dir_all(home.join(".cursor")).unwrap();
+            assert!(set("cursor", cli, true).unwrap().get("skills").is_none());
+        });
+        std::env::remove_var("UNTERM_BUILTIN_SKILLS");
+        std::env::remove_var("UNTERM_STATE_DIR");
     }
 
     #[test]
