@@ -86,24 +86,7 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
     mirror === "atomgit" || url.searchParams.get("cn") === "1";
   const ua = ctx.request.headers.get("user-agent") || "";
   const arch = hintedArch(ctx.request);
-  let targetUrl = targetForUA(ua, v, arch, useAtomgit);
-  if (useAtomgit && targetUrl.startsWith(`${ATOMGIT_BASE}/download/`)) {
-    try {
-      const probe = await fetch(targetUrl, {
-        method: "GET",
-        redirect: "manual",
-        signal: AbortSignal.timeout(2500),
-      });
-      const cdnLoc = probe.headers.get("location");
-      if (probe.status === 302 && cdnLoc) {
-        targetUrl = cdnLoc;
-      } else if (probe.status === 404 || probe.status >= 500) {
-        targetUrl = targetForUA(ua, v, arch, false);
-      }
-    } catch (_) {
-      targetUrl = targetForUA(ua, v, arch, false);
-    }
-  }
+  const targetUrl = targetForUA(ua, v, arch, useAtomgit);
   const response = Response.redirect(targetUrl, 302);
   // Ask Chromium for the architecture. `Critical-CH` makes a browser that
   // did not send it retry this request once with it, before following the
