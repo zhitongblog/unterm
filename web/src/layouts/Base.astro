@@ -61,7 +61,7 @@ const ogAltLocales = alternates
 // ?v= busts the Cloudflare edge cache (assets/* carries max-age=86400,
 // so the bare URL can keep serving the previous card for up to a day
 // after a deploy). Bump it whenever og.png is regenerated.
-const ogImage = "https://unterm.app/assets/og.png?v=0.71.26-shots";
+const ogImage = "https://unterm.app/assets/og.png?v=0.71.26-craft2";
 
 // Structured data (SEO rich results + GEO / answer-engine extraction).
 // SoftwareApplication is the primary entity; WebSite + Organization give
@@ -88,13 +88,13 @@ const defaultJsonLd: unknown[] = [
       "https://atomgit.com/zhitongblog/unterm",
     ],
     featureList: [
-      "Local Model Context Protocol (MCP) server with 152 methods",
-      "Agent Cockpit: real-time per-pane agent state tracking, inbox, and jump-to-pane",
-      "Multi-Agent Fleets: run concurrent AI agents in isolated Git worktrees",
+      "Local Model Context Protocol (MCP) server with 155 methods and mcp-trim token optimization",
+      "9 signed first-party AI agent manifests including Claude Code, Codex, Gemini CLI, Antigravity (agy), OpenCode, and Qwen Code",
+      "Agent Cockpit & Inspection (Ctrl+Shift+I): real-time per-pane state tracking, 1-key Y/N approval, and live terminal takeover (handover)",
+      "Central Multi-Agent Delegation (agent_session.delegate) & isolated Git worktree fleets",
+      "7 native themes (Obsidian, Carbon, Solarized Dark, Dracula, Nord, Daylight, Paper Light) with high-contrast split-pane focus rings",
+      "Zero-stall input pipeline with concurrent session activity snapshots and sub-millisecond echo wakeup",
       "Review: dangling-commit checkpoints, diffs, test runs, merge as staged changes, rollback",
-      "Recovers orphaned WM_CHAR keystrokes on Windows so fast typing and IME commits do not drop characters",
-      "ECMA-48 cursor handling (IL/DL keep the cursor column) for clean TUI rendering in tools like Claude Code",
-      "Event-driven frame cache so the GUI never blocks on the terminal Core",
       "GPU rendering via wgpu: Metal, Direct3D 12 and Vulkan, with OpenGL and software fallbacks",
       "No telemetry, no account; all servers bind to 127.0.0.1",
       "Cross-platform support for macOS, Linux, and Windows",
@@ -198,6 +198,7 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
           <span class="text-xs font-mono text-notion-faint hidden sm:inline">v0.71.26</span>
         </a>
         <nav class="hidden md:flex items-center gap-6 text-sm text-notion-muted">
+          <a href={pathPrefix + "/#themes"} class="hover:text-notion-ink">{lang.startsWith("zh") ? "7 套主题" : "Themes"}</a>
           <a href={pathPrefix + "/features"} class="hover:text-notion-ink">{t("nav.features")}</a>
           <a href={pathPrefix + "/guide"} class="hover:text-notion-ink">{t("nav.guide")}</a>
           <a href={pathPrefix + "/#compare"} class="hover:text-notion-ink">{t("nav.compare")}</a>

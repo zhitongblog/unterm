@@ -27,9 +27,131 @@ const cu = release.atomgitUrls;
 const hasStars = typeof stats.stars === "number" && stats.stars > 0;
 
 const shot = (name: string) => ({
-  src: `/assets/shots/${name}.webp`,
-  srcset: `/assets/shots/${name}-1000.webp 1000w, /assets/shots/${name}.webp 2000w`,
+  src: `/assets/shots/${name}.webp?v=20261116`,
+  srcset: `/assets/shots/${name}-1000.webp?v=20261116 1000w, /assets/shots/${name}.webp?v=20261116 2000w`,
 });
+
+const nativeThemes = [
+  {
+    id: "obsidian",
+    name: "Obsidian",
+    tag: isZhCN ? "默认深色 · 极光蓝焦点" : "Default Dark · Cyan Focus",
+    bg: "#0D1117",
+    chrome: "#131720",
+    paneBg: "#0D1117",
+    paneDim: "#0A0D13",
+    text: "#EEF2F8",
+    muted: "#8E9AAC",
+    accent: "#38BDF8",
+    amber: "#F0C46E",
+    green: "#34D399",
+    purple: "#C084FC",
+    border: "#262D3A",
+    isLight: false,
+  },
+  {
+    id: "carbon",
+    name: "Carbon",
+    tag: isZhCN ? "OLED 纯黑 · 琥珀金焦点" : "OLED Matte · Amber Focus",
+    bg: "#101012",
+    chrome: "#18181B",
+    paneBg: "#101012",
+    paneDim: "#0B0B0D",
+    text: "#F4F4F5",
+    muted: "#A1A1AA",
+    accent: "#E8B34B",
+    amber: "#F59E0B",
+    green: "#4ADE80",
+    purple: "#A78BFA",
+    border: "#27272A",
+    isLight: false,
+  },
+  {
+    id: "solarized",
+    name: "Solarized Dark",
+    tag: isZhCN ? "经典深青 · 护眼低反差" : "Classic Teal · Precision Contrast",
+    bg: "#002B36",
+    chrome: "#073642",
+    paneBg: "#002B36",
+    paneDim: "#00212B",
+    text: "#FDF6E3",
+    muted: "#93A1A1",
+    accent: "#2AA198",
+    amber: "#B58900",
+    green: "#859900",
+    purple: "#6C71C4",
+    border: "#164B58",
+    isLight: false,
+  },
+  {
+    id: "dracula",
+    name: "Dracula",
+    tag: isZhCN ? "暗夜霓虹 · 紫罗兰焦点" : "Vibrant Night · Violet Focus",
+    bg: "#1E1F29",
+    chrome: "#282A36",
+    paneBg: "#1E1F29",
+    paneDim: "#171821",
+    text: "#F8F8F2",
+    muted: "#929FCF",
+    accent: "#BD93F9",
+    amber: "#F1FA8C",
+    green: "#50FA7B",
+    purple: "#FF79C6",
+    border: "#383A4C",
+    isLight: false,
+  },
+  {
+    id: "nord",
+    name: "Nord",
+    tag: isZhCN ? "极地冰蓝 · 冷静克制" : "Arctic Frost · Ice Cyan Focus",
+    bg: "#242933",
+    chrome: "#2E3440",
+    paneBg: "#242933",
+    paneDim: "#1D212A",
+    text: "#ECEFF4",
+    muted: "#9AA5B8",
+    accent: "#88C0D0",
+    amber: "#EBCB8B",
+    green: "#A3BE8C",
+    purple: "#B48EAD",
+    border: "#3B4252",
+    isLight: false,
+  },
+  {
+    id: "daylight",
+    name: "Daylight",
+    tag: isZhCN ? "高对比浅色 · 晴空蓝焦点" : "Crisp Light · Sky Focus",
+    bg: "#F8FAFC",
+    chrome: "#EEF2F6",
+    paneBg: "#FFFFFF",
+    paneDim: "#F1F5F9",
+    text: "#0F172A",
+    muted: "#64748B",
+    accent: "#0284C7",
+    amber: "#D97706",
+    green: "#059669",
+    purple: "#7C3AED",
+    border: "#CBD5E1",
+    isLight: true,
+  },
+  {
+    id: "paper",
+    name: "Paper Light",
+    tag: isZhCN ? "暖纸墨色 · 沉浸阅读" : "Warm Editorial · Amber Ink",
+    bg: "#FBF8F1",
+    chrome: "#F3EDE0",
+    paneBg: "#FFFDF8",
+    paneDim: "#F4EFE4",
+    text: "#1C1917",
+    muted: "#78716C",
+    accent: "#B45309",
+    amber: "#D97706",
+    green: "#15803D",
+    purple: "#6D28D9",
+    border: "#DFD7C6",
+    isLight: true,
+  },
+];
 
 const cockpit = [
   { title: "home.cockpit.1.title", body: "home.cockpit.1.body" },
@@ -122,6 +244,12 @@ unterm-cli agent inbox`;
       <span class="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent">{t("hero.title.2")}</span>
     </h1>
     <p class="mt-6 text-lg sm:text-xl text-notion-muted max-w-2xl mx-auto leading-relaxed text-balance">{t("home.hero.sub")}</p>
+    <div class="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs font-mono">
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-sky-300">✦ {isZhCN ? "155 项 MCP 工具 · mcp-trim 省 3 万 Token" : "155 MCP Tools · mcp-trim (-30k tok)"}</span>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-amber-300">⚡ {isZhCN ? "0.4ms 零卡顿回显" : "0.4ms Zero-Stall Input"}</span>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-purple-300">🤖 {isZhCN ? "中枢调度 delegate · 真人接手 handover" : "Central Delegate · Human Handover"}</span>
+      <a href="#themes" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border hover:border-sky-400/50 text-emerald-300 transition">🎨 {isZhCN ? "7 套原生深浅主题 ↗" : "7 Native Themes ↗"}</a>
+    </div>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
       <!-- /api/download picks the right file for the visitor's platform at the edge. -->
       <a href={`/api/download?v=${release.tag}${isZhCN ? "&mirror=atomgit" : ""}`}
@@ -154,12 +282,157 @@ unterm-cli agent inbox`;
     </p>
   </div>
   <div class="relative max-w-6xl mx-auto px-4 sm:px-6 pb-20">
-    <div class="absolute inset-x-10 -inset-y-2 bg-gradient-to-r from-amber-500/10 via-amber-300/5 to-amber-500/10 blur-3xl rounded-3xl"></div>
+    <div class="absolute inset-x-10 -inset-y-2 bg-gradient-to-r from-sky-500/10 via-amber-400/10 to-indigo-500/10 blur-3xl rounded-3xl"></div>
     <img src={shot("hero-macos").src} srcset={shot("hero-macos").srcset}
          sizes="(min-width: 1152px) 1104px, 100vw"
          width="2000" height="1360" alt={t("home.hero.alt")}
-         class="relative w-full h-auto rounded-2xl ring-1 ring-white/10 shadow-2xl shadow-black/60"
+         class="relative w-full h-auto rounded-2xl ring-1 ring-white/15 shadow-2xl shadow-black/70"
          fetchpriority="high" />
+  </div>
+</section>
+
+<!-- ============== 7 NATIVE THEMES & SPLIT-PANE CRAFT ============== -->
+<section id="themes" class="py-20 border-t border-notion-border relative overflow-hidden">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
+      <div class="max-w-2xl">
+        <div class="text-xs font-mono uppercase tracking-widest text-sky-400">
+          {isZhCN ? "NATIVE CRAFT · 7 套原生主题与高辨识度分屏" : "NATIVE CRAFT · 7 THEMES & HIGH-CONTRAST SPLITS"}
+        </div>
+        <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink text-balance">
+          {isZhCN
+            ? "一体化 36px 顶栏、毫秒级输入回显，一眼分清当前焦点窗格。"
+            : "Unified 36px chrome, sub-millisecond input echo, and unmistakable split-pane focus."}
+        </h2>
+        <p class="mt-3 text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "融合 Warp、Ghostty 与 macOS HIG 质感标准：活动分屏自带 2px 高亮焦点环与顶部光条，非活动窗格自动柔和降噪；内置 5 套深色与 2 套护眼浅色主题，点击下方按钮即可实时预览。"
+            : "Crafted to macOS HIG and Fluent 2 standards: the active split pane glows with a 2px focus ring and top accent bar while inactive panes softly recede. Click any of the 7 built-in dark & light themes below to preview live."}
+        </p>
+      </div>
+      <div class="flex flex-wrap gap-2" id="theme-switcher">
+        {nativeThemes.map((th, idx) => (
+          <button
+            type="button"
+            data-theme-btn={th.id}
+            data-theme-json={JSON.stringify(th)}
+            class={`theme-pill inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-mono border transition ${
+              idx === 0
+                ? "bg-sky-500/15 border-sky-400 text-sky-200 shadow-sm"
+                : "bg-notion-surface/60 border-notion-border text-notion-muted hover:text-notion-ink hover:border-notion-borderStrong"
+            }`}
+          >
+            <span class="w-2.5 h-2.5 rounded-full border border-white/20" style={`background:${th.accent}`}></span>
+            <span class="font-semibold">{th.name}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+
+    <!-- Live Interactive Terminal Mockup -->
+    <div id="live-theme-window"
+         class="mt-8 rounded-2xl border shadow-2xl overflow-hidden transition-colors duration-300"
+         style="background:#0D1117; border-color:#262D3A;">
+      <!-- 36px Unified Top Bar -->
+      <div id="lt-topbar" class="flex items-center justify-between px-4 py-2.5 border-b text-xs font-mono transition-colors duration-300"
+           style="background:#131720; border-color:#262D3A; color:#EEF2F8;">
+        <div class="flex items-center gap-3 overflow-x-auto">
+          <div class="flex items-center gap-1.5 shrink-0">
+            <span class="w-3 h-3 rounded-full bg-[#FF5F56]"></span>
+            <span class="w-3 h-3 rounded-full bg-[#FFBD2E]"></span>
+            <span class="w-3 h-3 rounded-full bg-[#27C93F]"></span>
+          </div>
+          <div id="lt-active-tab" class="flex items-center gap-2 px-3 py-1 rounded-md border relative shrink-0"
+               style="background:#1D2431; border-color:#38BDF8;">
+            <span id="lt-tab-dot" class="w-2 h-2 rounded-full" style="background:#38BDF8;"></span>
+            <span class="font-semibold">payments-api · rate-limit</span>
+            <span id="lt-tab-badge" class="px-1.5 py-0.5 rounded text-[10px]" style="background:rgba(56,189,248,0.18); color:#38BDF8;">2 panes</span>
+          </div>
+          <div id="lt-inactive-tab" class="hidden sm:flex items-center gap-2 px-3 py-1 rounded-md opacity-70 shrink-0">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>auth-service · handover</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span id="lt-theme-tag" class="px-2.5 py-1 rounded border text-[11px]"
+                style="border-color:#262D3A; color:#8E9AAC;">
+            {nativeThemes[0].tag}
+          </span>
+          <span class="px-2.5 py-1 rounded bg-amber-500/15 border border-amber-400/40 text-amber-300 text-[11px]">
+            ⚡ 3 · ✋ 1
+          </span>
+        </div>
+      </div>
+
+      <!-- 2-Pane Split View -->
+      <div class="grid md:grid-cols-[1.2fr_1fr] gap-3 p-3.5">
+        <!-- Active Pane (Pane 1) -->
+        <div id="lt-pane-active" class="rounded-xl p-4 relative transition-all duration-300"
+             style="background:#0D1117; border:2px solid #38BDF8; box-shadow: 0 0 24px -6px rgba(56,189,248,0.35);">
+          <div id="lt-pane-bar" class="absolute top-0 inset-x-6 h-1 rounded-b" style="background:#38BDF8;"></div>
+          <div class="flex items-center justify-between pb-3 mb-3 border-b" id="lt-pane1-hdr" style="border-color:#262D3A;">
+            <div class="flex items-center gap-2 text-xs font-mono font-semibold" id="lt-pane1-title" style="color:#EEF2F8;">
+              <span id="lt-sparkle" style="color:#38BDF8;">✦</span>
+              <span>Antigravity (agy) · ~/code/payments-api</span>
+            </div>
+            <span id="lt-active-pill" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold border"
+                  style="background:rgba(56,189,248,0.16); border-color:#38BDF8; color:#38BDF8;">
+              ✦ ACTIVE · PANE 1
+            </span>
+          </div>
+          <pre class="text-xs sm:text-[13px] leading-relaxed font-mono overflow-x-auto" id="lt-code-1" style="color:#EEF2F8;"><code><span id="lt-c-accent" style="color:#38BDF8;font-weight:600;">* Antigravity v2.4</span> <span id="lt-c-muted" style="color:#8E9AAC;">· Governed MCP (mcp-trim: -30k tokens/req)</span>
+<span id="lt-c-amber" style="color:#F0C46E;font-weight:600;">&gt; add per-merchant token-bucket rate limiting to POST /v1/charge</span>
+
+<span style="color:#38BDF8;">●</span> Delegating burst e2e suite via <span id="lt-c-purple" style="color:#C084FC;font-weight:600;">agent_session.delegate</span>(agent="claude-code")
+<span id="lt-c-green" style="color:#34D399;font-weight:600;">● unterm.exec.wait</span> cargo nextest run -p payments-api rate_limit
+  <span style="color:#34D399;font-weight:600;">PASS</span> [ 0.08s] payments::rate_limit::allows_burst_within_capacity
+  <span style="color:#34D399;font-weight:600;">PASS</span> [ 0.11s] payments::rate_limit::rejects_101st_request_with_429
+  <span style="color:#34D399;font-weight:600;">Summary</span> [ 0.42s] 14 tests run: <span style="color:#34D399;font-weight:600;">14 passed</span>, 0 failed</code></pre>
+        </div>
+
+        <!-- Inactive Dimmed Pane (Pane 2) -->
+        <div id="lt-pane-dim" class="rounded-xl p-4 border opacity-80 transition-all duration-300"
+             style="background:#0A0D13; border-color:#262D3A;">
+          <div class="flex items-center justify-between pb-3 mb-3 border-b" id="lt-pane2-hdr" style="border-color:#262D3A;">
+            <div class="flex items-center gap-2 text-xs font-mono" id="lt-pane2-title" style="color:#8E9AAC;">
+              <span>●</span>
+              <span>Claude Code · Delegated Subtask #1</span>
+            </div>
+            <span class="px-2 py-0.5 rounded text-[10px] font-mono border" id="lt-dim-pill"
+                  style="border-color:#262D3A; color:#8E9AAC;">
+              PANE 2 · WORKING
+            </span>
+          </div>
+          <pre class="text-xs sm:text-[13px] leading-relaxed font-mono overflow-x-auto" id="lt-code-2" style="color:#8E9AAC;"><code>Parent: agy (pane #1) · Autonomy: PauseOnDestructive
+
++ async fn burst_120_charges_returns_429() &#123;
++   let app = TestServer::spawn_with_limits(100).await;
++   let res = app.fire_charges("merch_1", 120).await;
++   assert_eq!(res.status_429_count, 20);
++ &#125;
+
+✓ Completed in 11.4s · Reporting artifact to Lead Pane #1</code></pre>
+        </div>
+      </div>
+
+      <!-- 26px Bottom Status Bar -->
+      <div id="lt-statusbar" class="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-t text-[11px] font-mono transition-colors duration-300"
+           style="background:#131720; border-color:#262D3A; color:#8E9AAC;">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span id="lt-sb-left" style="color:#EEF2F8;">MCP 155 tools · Core #98742</span>
+          <span>│</span>
+          <span id="lt-sb-agent" style="color:#38BDF8;">✦ agy · governed · mcp-trim (-30k tok)</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span>⎇ feat/rate-limit *2</span>
+          <span>│</span>
+          <span>⚡ 0.4ms input</span>
+          <span>│</span>
+          <span id="lt-sb-theme" class="font-semibold" style="color:#38BDF8;">Obsidian</span>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -464,6 +737,76 @@ unterm-cli agent inbox`;
         const original = code.textContent;
         code.textContent = "✓ copied";
         setTimeout(() => { code.textContent = original; }, 1100);
+      });
+    });
+
+    const themeBtns = document.querySelectorAll("[data-theme-btn]");
+    themeBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        try {
+          const th = JSON.parse(btn.getAttribute("data-theme-json") || "{}");
+          if (!th.id) return;
+          themeBtns.forEach((b) => {
+            const on = b === btn;
+            b.className = "theme-pill inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-mono border transition " +
+              (on ? "bg-sky-500/15 border-sky-400 text-sky-200 shadow-sm" : "bg-notion-surface/60 border-notion-border text-notion-muted hover:text-notion-ink hover:border-notion-borderStrong");
+          });
+          const win = document.getElementById("live-theme-window");
+          const top = document.getElementById("lt-topbar");
+          const sb = document.getElementById("lt-statusbar");
+          const actTab = document.getElementById("lt-active-tab");
+          const tabDot = document.getElementById("lt-tab-dot");
+          const tabBadge = document.getElementById("lt-tab-badge");
+          const thTag = document.getElementById("lt-theme-tag");
+          const pAct = document.getElementById("lt-pane-active");
+          const pBar = document.getElementById("lt-pane-bar");
+          const pDim = document.getElementById("lt-pane-dim");
+          const p1Hdr = document.getElementById("lt-pane1-hdr");
+          const p2Hdr = document.getElementById("lt-pane2-hdr");
+          const p1Title = document.getElementById("lt-pane1-title");
+          const p2Title = document.getElementById("lt-pane2-title");
+          const sparkle = document.getElementById("lt-sparkle");
+          const actPill = document.getElementById("lt-active-pill");
+          const dimPill = document.getElementById("lt-dim-pill");
+          const code1 = document.getElementById("lt-code-1");
+          const code2 = document.getElementById("lt-code-2");
+          const cAccent = document.getElementById("lt-c-accent");
+          const cMuted = document.getElementById("lt-c-muted");
+          const cAmber = document.getElementById("lt-c-amber");
+          const cPurple = document.getElementById("lt-c-purple");
+          const cGreen = document.getElementById("lt-c-green");
+          const sbLeft = document.getElementById("lt-sb-left");
+          const sbAgent = document.getElementById("lt-sb-agent");
+          const sbTheme = document.getElementById("lt-sb-theme");
+
+          if (win) { win.style.background = th.bg; win.style.borderColor = th.border; }
+          if (top) { top.style.background = th.chrome; top.style.borderColor = th.border; top.style.color = th.text; }
+          if (sb) { sb.style.background = th.chrome; sb.style.borderColor = th.border; sb.style.color = th.muted; }
+          if (actTab) { actTab.style.background = th.paneBg; actTab.style.borderColor = th.accent; }
+          if (tabDot) { tabDot.style.background = th.accent; }
+          if (tabBadge) { tabBadge.style.color = th.accent; tabBadge.style.background = th.isLight ? "rgba(2,132,199,0.12)" : "rgba(56,189,248,0.18)"; }
+          if (thTag) { thTag.textContent = th.tag; thTag.style.borderColor = th.border; thTag.style.color = th.muted; }
+          if (pAct) { pAct.style.background = th.paneBg; pAct.style.borderColor = th.accent; }
+          if (pBar) { pBar.style.background = th.accent; }
+          if (pDim) { pDim.style.background = th.paneDim; pDim.style.borderColor = th.border; }
+          if (p1Hdr) { p1Hdr.style.borderColor = th.border; }
+          if (p2Hdr) { p2Hdr.style.borderColor = th.border; }
+          if (p1Title) { p1Title.style.color = th.text; }
+          if (p2Title) { p2Title.style.color = th.muted; }
+          if (sparkle) { sparkle.style.color = th.accent; }
+          if (actPill) { actPill.style.borderColor = th.accent; actPill.style.color = th.accent; actPill.style.background = th.isLight ? "rgba(2,132,199,0.10)" : "rgba(56,189,248,0.15)"; }
+          if (dimPill) { dimPill.style.borderColor = th.border; dimPill.style.color = th.muted; }
+          if (code1) { code1.style.color = th.text; }
+          if (code2) { code2.style.color = th.muted; }
+          if (cAccent) { cAccent.style.color = th.accent; }
+          if (cMuted) { cMuted.style.color = th.muted; }
+          if (cAmber) { cAmber.style.color = th.amber; }
+          if (cPurple) { cPurple.style.color = th.purple; }
+          if (cGreen) { cGreen.style.color = th.green; }
+          if (sbLeft) { sbLeft.style.color = th.text; }
+          if (sbAgent) { sbAgent.style.color = th.accent; }
+          if (sbTheme) { sbTheme.textContent = th.name; sbTheme.style.color = th.accent; }
+        } catch (_) {}
       });
     });
   })();
