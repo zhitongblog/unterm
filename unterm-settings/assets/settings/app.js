@@ -388,6 +388,7 @@ function untermSettings() {
       try {
         const s = await this.api('GET', '/api/state');
         this.state = Object.assign({}, this.state, s);
+        if (this.state.theme) this.syncDocumentTheme(this.state.theme);
         if (s.proxy) this.proxy = s.proxy;
         if (s.proxy) {
           this.proxyForm = {
@@ -2082,10 +2083,73 @@ function untermSettings() {
       }
     },
 
+    syncDocumentTheme(id) {
+      const palettes = {
+        'agent-inbox': {
+          bg: '#16181d', surface: '#1e2128', raised: '#262a33', sunken: '#111317',
+          border: 'rgba(255,255,255,0.09)', borderStrong: 'rgba(255,255,255,0.16)',
+          ink: '#f2efe7', muted: '#b3b1aa', faint: '#84827c',
+          accent: '#e8b34b', accent2: '#6fb3a8', headerBg: 'rgba(22,24,29,0.85)',
+        },
+        'standard': {
+          bg: '#111315', surface: '#191c20', raised: '#22262b', sunken: '#0d0f11',
+          border: 'rgba(255,255,255,0.085)', borderStrong: 'rgba(255,255,255,0.15)',
+          ink: '#f3f4f6', muted: '#b0b6be', faint: '#7c838d',
+          accent: '#5aa7ff', accent2: '#63cdb8', headerBg: 'rgba(17,19,21,0.85)',
+        },
+        'midnight': {
+          bg: '#0c1220', surface: '#131b2e', raised: '#1b2640', sunken: '#080d18',
+          border: 'rgba(130,170,255,0.14)', borderStrong: 'rgba(130,170,255,0.24)',
+          ink: '#dfe7f1', muted: '#9fb0c7', faint: '#718098',
+          accent: '#82aaff', accent2: '#72d6e8', headerBg: 'rgba(12,18,32,0.85)',
+        },
+        'daylight': {
+          bg: '#f5f6f8', surface: '#ffffff', raised: '#eef1f5', sunken: '#ebedf2',
+          border: 'rgba(15,23,42,0.10)', borderStrong: 'rgba(15,23,42,0.20)',
+          ink: '#17191c', muted: '#4b5563', faint: '#6b7280',
+          accent: '#0b6e63', accent2: '#1f6feb', headerBg: 'rgba(245,246,248,0.88)',
+        },
+        'classic': {
+          bg: '#1c1b19', surface: '#252421', raised: '#2f2d29', sunken: '#151412',
+          border: 'rgba(255,250,240,0.09)', borderStrong: 'rgba(255,250,240,0.16)',
+          ink: '#e8e4dc', muted: '#b5afa4', faint: '#878176',
+          accent: '#dfaf5f', accent2: '#78b892', headerBg: 'rgba(28,27,25,0.85)',
+        },
+        'notion-dark': {
+          bg: '#191919', surface: '#232322', raised: '#2c2c2b', sunken: '#141413',
+          border: 'rgba(255,255,255,0.09)', borderStrong: 'rgba(255,255,255,0.16)',
+          ink: '#f2f1ee', muted: '#b8b7b1', faint: '#8a8983',
+          accent: '#4dab9a', accent2: '#7bb4dd', headerBg: 'rgba(25,25,25,0.85)',
+        },
+        'notion-light': {
+          bg: '#fbfaf7', surface: '#ffffff', raised: '#f3f1ec', sunken: '#f1efe9',
+          border: 'rgba(28,25,23,0.10)', borderStrong: 'rgba(28,25,23,0.20)',
+          ink: '#24231f', muted: '#57554f', faint: '#78756e',
+          accent: '#8a6519', accent2: '#2b82ba', headerBg: 'rgba(251,250,247,0.88)',
+        },
+      };
+      const p = palettes[id] || palettes['standard'];
+      const root = document.documentElement;
+      if (!root) return;
+      root.style.setProperty('--unterm-bg', p.bg);
+      root.style.setProperty('--unterm-surface', p.surface);
+      root.style.setProperty('--unterm-surface-raised', p.raised);
+      root.style.setProperty('--unterm-sunken', p.sunken);
+      root.style.setProperty('--unterm-border', p.border);
+      root.style.setProperty('--unterm-border-strong', p.borderStrong);
+      root.style.setProperty('--unterm-ink', p.ink);
+      root.style.setProperty('--unterm-muted', p.muted);
+      root.style.setProperty('--unterm-faint', p.faint);
+      root.style.setProperty('--unterm-accent', p.accent);
+      root.style.setProperty('--unterm-accent-2', p.accent2);
+      root.style.setProperty('--unterm-header-bg', p.headerBg);
+    },
+
     async applyTheme(id) {
       try {
         await this.api('POST', '/api/theme', { name: id });
         this.state.theme = id;
+        this.syncDocumentTheme(id);
         this.toast(this.t('web.toast.theme_applied').replace('{id}', id));
       } catch (e) {
         this.toast(this.t('web.toast.theme_failed').replace('{err}', e.message), 'error');

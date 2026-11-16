@@ -896,6 +896,8 @@ pub struct App {
     /// mailbox, so one window applying a request does not consume it for the
     /// others.
     theme_request_seen: u64,
+    theme_file_mtime: Option<std::time::SystemTime>,
+    theme_file_checked_at: std::time::Instant,
     /// The window being acted on, and everything true of it alone.
     ///
     /// The settings, the engine and the shell belong to the process; a tab
@@ -1643,6 +1645,8 @@ impl App {
             colors_reported: None,
             cell_size_reported: None,
             theme_request_seen: 0,
+            theme_file_mtime: crate::theme::remembered_mtime(),
+            theme_file_checked_at: std::time::Instant::now(),
             font_family: family,
             initial_cols: settings.initial_cols,
             initial_rows: settings.initial_rows,
@@ -11387,20 +11391,37 @@ impl App {
         let Some(theme) = crate::theme::by_id(id) else {
             return;
         };
-        self.window.colors = unterm_render::quads::FrameColors {
+        let frame_colors = unterm_render::quads::FrameColors {
             background: theme.background,
             foreground: theme.foreground,
             palette: &theme.ansi,
         };
+        self.window.colors = frame_colors;
+        for parked in &mut self.parked {
+            parked.state.colors = frame_colors;
+            parked.state.drawn_revision = None;
+            parked.state.frame_sent = None;
+            if let Some(live) = parked.state.state.as_ref() {
+                live.window.request_redraw();
+            }
+        }
         self.theme_id = Some(theme.id.to_string());
         if let Err(err) = crate::theme::remember(theme.id) {
             log::warn!("could not remember the theme: {err:#}");
         }
+        self.theme_file_mtime = crate::theme::remembered_mtime();
+        self.window.frame_sent = None;
+        self.sync_frame();
+        self.report_terminal_colors();
         self.show_notice(unterm_services::i18n::t_args(
             "theme.switched_to",
             &[("name", theme.name)],
         ));
+        self.window.quiet_since = None;
         self.window.drawn_revision = None;
+        if let Some(live) = self.window.state.as_ref() {
+            live.window.request_redraw();
+        }
     }
 
     /// The rows for jumping to a directory.
@@ -14571,6 +14592,17 @@ impl App {
         if let Some(request) = unterm_services::theme_state::after(self.theme_request_seen) {
             self.theme_request_seen = request.generation;
             self.apply_theme(&request.id);
+        } else if self.theme_file_checked_at.elapsed() >= std::time::Duration::from_millis(180) {
+            self.theme_file_checked_at = std::time::Instant::now();
+            let mtime = crate::theme::remembered_mtime();
+            if mtime != self.theme_file_mtime {
+                self.theme_file_mtime = mtime;
+                if let Some(id) = crate::theme::remembered() {
+                    if self.theme_id.as_deref() != Some(id.as_str()) {
+                        self.apply_theme(&id);
+                    }
+                }
+            }
         }
         // Checked every tick rather than with the housekeeping: a window
         // whose Core was replaced is showing tabs for shells that no

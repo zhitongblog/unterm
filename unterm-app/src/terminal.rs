@@ -1531,15 +1531,18 @@ fn glyph_key(font: &mut TerminalFont, ch: char, span: usize) -> Option<(GlyphKey
 pub fn colors_from(config: &Config) -> FrameColors {
     use unterm_engine::next_core::color::parse_hex;
 
-    // The config first, then whatever was last chosen in the picker, then the
-    // default. One order, decided here, so the picker and the config file
-    // cannot each believe they won.
-    let theme = config
+    // A theme saved in `~/.unterm/theme.json` (by the theme picker, Web Settings,
+    // or `unterm-cli theme`) takes priority over the bundled default config's
+    // `[colors]` block so switching to Daylight or Notion Light is not undone by
+    // the default `#111315` background in `assets/unterm.conf`.
+    let config_theme = config
         .str_of("theme")
         .ok()
         .flatten()
-        .and_then(|id| crate::theme::by_id(&id))
-        .or_else(|| crate::theme::remembered().and_then(|id| crate::theme::by_id(&id)))
+        .and_then(|id| crate::theme::by_id(&id));
+    let remembered_theme = crate::theme::remembered().and_then(|id| crate::theme::by_id(&id));
+    let theme = config_theme
+        .or(remembered_theme)
         .unwrap_or_else(crate::theme::default_theme);
 
     let from_config = |key: &str| {
@@ -1558,9 +1561,35 @@ pub fn colors_from(config: &Config) -> FrameColors {
             })
     };
 
+    // Only allow `colors.background` / `colors.foreground` to override when it is
+    // NOT merely repeating the bundled default (`#111315` / `#e8eaed`) while a
+    // non-standard theme is active in `~/.unterm/theme.json`.
+    let is_bundled_default_bg = config
+        .str_of("colors.background")
+        .ok()
+        .flatten()
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("#111315"));
+    let is_bundled_default_fg = config
+        .str_of("colors.foreground")
+        .ok()
+        .flatten()
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("#e8eaed"));
+    let ignore_bundled_colors = remembered_theme.is_some()
+        && config_theme.is_none()
+        && is_bundled_default_bg
+        && is_bundled_default_fg;
+
     FrameColors {
-        background: from_config("colors.background").unwrap_or(theme.background),
-        foreground: from_config("colors.foreground").unwrap_or(theme.foreground),
+        background: if ignore_bundled_colors {
+            theme.background
+        } else {
+            from_config("colors.background").unwrap_or(theme.background)
+        },
+        foreground: if ignore_bundled_colors {
+            theme.foreground
+        } else {
+            from_config("colors.foreground").unwrap_or(theme.foreground)
+        },
         palette: &theme.ansi,
     }
 }

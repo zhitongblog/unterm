@@ -275,13 +275,31 @@ pub fn remembered() -> Option<String> {
     by_id(&id).map(|theme| theme.id.to_string())
 }
 
+/// Modification timestamp of `~/.unterm/theme.json`, used to detect live theme
+/// switches written by `unterm-core` (Web Settings) or `unterm-cli` in another
+/// process without re-reading the file on every tick.
+pub fn remembered_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(remembered_path()?).ok()?.modified().ok()
+}
+
 /// Remember a theme for next time.
 pub fn remember(id: &str) -> anyhow::Result<()> {
+    if remembered().as_deref() == Some(id) {
+        return Ok(());
+    }
     let path = remembered_path().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, serde_json::json!({ "theme": id }).to_string())?;
+    let name = by_id(id).map(|t| t.name).unwrap_or(id);
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "theme": id,
+            "name": name,
+            "color_scheme": name,
+        }))?,
+    )?;
     Ok(())
 }
 
