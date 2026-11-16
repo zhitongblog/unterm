@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.71.27 — 2026-11-16
+
+### Added
+
+- **Central multi-agent delegation (`agent_session.delegate`), human terminal takeover (`agent_session.handover`), live ANSI Console terminal & `mcp-trim` token optimization (#73).**
+  - Adds `agent_session.delegate` so a lead AI agent can dispatch subtasks to other configured agents (`claude`, `codex`, `agy`, `opencode`, `gemini`), wait for completion, and collect structured file artifacts while automatically closing temporary tabs and worktrees on completion or cancellation.
+  - Adds `agent_session.handover` so an agent can pause on login, 2FA, or CAPTCHA gates, notify the user in the Console/terminal, and resume automatically once the user completes the step.
+  - Streams colorized ANSI terminal output history and incremental deltas to the Console UI with direct keyboard forwarding so users can watch and operate agent terminals in real time.
+  - Adds `--mcp-trim` for governed agent sessions (`claude`, `codex`, `opencode`), exposing only the core orchestration MCP tools and saving ~30,000 prompt tokens per request.
+  - Applies risk-graded `Autonomy` (`PauseOnWrite`, `PauseOnDestructive`, `Autonomous`) per command when external MCP clients write to terminals, plus one-click error diagnosis when a terminal command exits non-zero.
+- **Refined 7-theme native UI craft, high-contrast split-pane focus rings & one-screen Quick Start.**
+  - Ships 7 curated native themes (**Obsidian**, **Carbon**, **Solarized Dark**, **Dracula**, **Nord**, **Daylight**, **Paper Light**) with full palette synchronization across the unified 36px top bar, pill tabs, split panes, command palette, and 26px bottom status bar.
+  - Enhances multi-pane split visibility with a high-contrast `2px` active focus border, glowing top accent bar, `✦ ACTIVE` pill indicator, and dimmed inactive pane backdrop.
+  - Redesigned the first-run onboarding into a concise, single-screen Quick Start card.
+
+### Fixed
+
+- **Eliminated typing stutter under multi-session load (`SessionActivity` lock contention & main-thread IPC stalls).**
+  - Moves `process_tree::snapshot` outside `unterm-core`'s global runtime mutex (`read_snapshot_concurrent`) and adds a 500ms per-PID process-tree cache (`snapshot_cached`), preventing `ps` subprocess calls from blocking `WriteInput` across active sessions.
+  - Releases `session.screen.lock()` before resolving working directories in `session_snapshots`, avoids cloning `StyledScreenSnapshot` when the viewport is already at the bottom, and skips redundant `FrameCache::bump()` when session metadata is unchanged.
+  - Adds a 650ms active-typing window (`note_user_input` / `user_typing_recently`) that pauses background process-table sweeps and status housekeeping while the user is typing, paired with 1ms fast polling in `EventHub::wake_for_input`.
+
 ## v0.71.26 — 2026-11-12
 
 ### Added
