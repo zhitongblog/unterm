@@ -251,8 +251,8 @@ unterm-cli agent inbox`;
       <a href="#themes" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border hover:border-sky-400/50 text-emerald-300 transition">🎨 {isZhCN ? "7 套原生深浅主题 ↗" : "7 Native Themes ↗"}</a>
     </div>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
-      <!-- /api/download picks the right file for the visitor's platform at the edge. -->
-      <a href={`/api/download?v=${release.tag}${isZhCN ? "&mirror=atomgit" : ""}`}
+      <!-- /api/download picks the right file for the visitor's platform at the edge (GitHub Release). -->
+      <a href={`/api/download?v=${release.tag}`}
          class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-notion-green hover:bg-notion-teal text-zinc-950 font-semibold transition shadow-lg shadow-amber-500/20">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
         <span>{t("hero.cta.download")}</span>
@@ -698,22 +698,6 @@ unterm-cli agent inbox`;
 
 <script is:inline>
   (function () {
-    try {
-      const lang = (navigator.language || "").toLowerCase();
-      const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone || "").toLowerCase();
-      if (lang === "zh-cn" || lang === "zh-hans" || tz === "asia/shanghai" || tz === "asia/chongqing") {
-        document.querySelectorAll("a[data-cn-href]").forEach((a) => {
-          const cn = a.getAttribute("data-cn-href");
-          if (cn) a.setAttribute("href", cn);
-        });
-        document.querySelectorAll('a[href^="/api/download"]').forEach((a) => {
-          const href = a.getAttribute("href") || "";
-          if (!href.includes("mirror=")) {
-            a.setAttribute("href", href + (href.includes("?") ? "&" : "?") + "mirror=atomgit");
-          }
-        });
-      }
-    } catch (_) {}
     const tabs = document.querySelectorAll(".install-tab");
     const panes = document.querySelectorAll(".install-pane");
     tabs.forEach((tab) =>

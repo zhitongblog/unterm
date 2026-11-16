@@ -80,13 +80,10 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   const url = new URL(ctx.request.url);
   const v = url.searchParams.get("v") || "v0.71.27";
   const mirror = url.searchParams.get("mirror");
-  const cfCountry = (ctx.request as any).cf?.country;
-  const acceptLang = (ctx.request.headers.get("accept-language") || "").trim();
-  const isZhCNLang = /^zh(-cn|-hans)?\b/i.test(acceptLang);
+  // Primary download button (/api/download?v=...) always serves GitHub Releases;
+  // only the dedicated China mirror button (?mirror=atomgit or ?cn=1) uses AtomGit.
   const useAtomgit =
-    mirror === "atomgit" ||
-    url.searchParams.get("cn") === "1" ||
-    (mirror !== "github" && (cfCountry === "CN" || isZhCNLang));
+    mirror === "atomgit" || url.searchParams.get("cn") === "1";
   const ua = ctx.request.headers.get("user-agent") || "";
   const arch = hintedArch(ctx.request);
   let targetUrl = targetForUA(ua, v, arch, useAtomgit);
