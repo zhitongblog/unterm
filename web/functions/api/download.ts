@@ -76,9 +76,9 @@ function targetForUA(
   return pageFallback;
 }
 
-export const onRequestGet: PagesFunction<Env> = (ctx) => {
+export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   const url = new URL(ctx.request.url);
-  const v = url.searchParams.get("v") || "v0.71.25";
+  const v = url.searchParams.get("v") || "v0.71.27";
   const mirror = url.searchParams.get("mirror");
   const cfCountry = (ctx.request as any).cf?.country;
   const acceptLang = (ctx.request.headers.get("accept-language") || "").trim();
@@ -89,7 +89,25 @@ export const onRequestGet: PagesFunction<Env> = (ctx) => {
     (mirror !== "github" && (cfCountry === "CN" || isZhCNLang));
   const ua = ctx.request.headers.get("user-agent") || "";
   const arch = hintedArch(ctx.request);
-  const response = Response.redirect(targetForUA(ua, v, arch, useAtomgit), 302);
+  let targetUrl = targetForUA(ua, v, arch, useAtomgit);
+  if (useAtomgit && targetUrl.startsWith(`${ATOMGIT_BASE}/download/`)) {
+    try {
+      const probe = await fetch(targetUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(2500),
+      });
+      const cdnLoc = probe.headers.get("location");
+      if (probe.status === 302 && cdnLoc) {
+        targetUrl = cdnLoc;
+      } else if (probe.status === 404 || probe.status >= 500) {
+        targetUrl = targetForUA(ua, v, arch, false);
+      }
+    } catch (_) {
+      targetUrl = targetForUA(ua, v, arch, false);
+    }
+  }
+  const response = Response.redirect(targetUrl, 302);
   // Ask Chromium for the architecture. `Critical-CH` makes a browser that
   // did not send it retry this request once with it, before following the
   // redirect -- the only way the very first click can know it is on ARM.
@@ -102,3 +120,5 @@ export const onRequestGet: PagesFunction<Env> = (ctx) => {
   headers.set("Cache-Control", "no-store");
   return new Response(null, { status: 302, headers });
 };
+
+export const onRequestHead: PagesFunction<Env> = onRequestGet;
