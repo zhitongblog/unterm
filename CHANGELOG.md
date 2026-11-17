@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.71.28 — 2026-11-17
+
+### Fixed
+
+- **Real-time cross-process Appearance theme switching between Web Settings (`unterm-core`) and GUI windows (`unterm-app`).**
+  - Polls `~/.unterm/theme.json` modification time (`remembered_mtime`) every 180ms in `unterm-app`'s event loop so theme changes saved by `unterm-core` (`POST /api/theme`) or `unterm-cli theme` in a separate process immediately apply to all active and parked native windows (`apply_theme` + `sync_frame` + `report_terminal_colors` + `request_redraw`).
+  - Prevents the bundled default `assets/unterm.conf` `[colors]` block (`#111315` / `#e8eaed`) from overriding light or custom themes (`Daylight`, `Notion Light`, `Midnight`, `Classic`, `Agent Inbox`) persisted in `~/.unterm/theme.json`.
+  - Synchronizes Web Settings CSS custom properties (`--unterm-bg`, `--unterm-surface`, `--unterm-ink`, `--unterm-accent`, etc.) via `syncDocumentTheme(id)` in `app.js` so the Web Settings UI itself switches between dark and light palettes immediately upon clicking a theme card.
+- **Separated primary GitHub Release download button from dedicated AtomGit mainland China mirror button on `unterm.app`.**
+  - Ensures `/api/download?v=<tag>` always redirects to GitHub Releases while only `/api/download?v=<tag>&mirror=atomgit` routes to AtomGit CDN.
+
 ## v0.71.27 — 2026-11-16
 
 ### Added
