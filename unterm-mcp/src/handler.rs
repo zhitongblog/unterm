@@ -7404,17 +7404,33 @@ impl McpHandler {
         // -- and headless, a refusal of something already approved. The
         // grant is re-checked on every write, so a closed session's
         // connection stops passing at once.
+        //
+        // Unless the host never saw the command: OpenCode asks before it has
+        // its arguments, so its host said yes to "a write" and left the
+        // command to be judged here, as it arrives -- under the session's
+        // own autonomy level, and put to a person when that is not enough.
+        let mut session_ceiling = None;
         if let Some(session) = Self::hosted_session() {
-            self.audit(
-                "mcp.confirm.hosted",
-                Some(&pane_id.to_string()),
-                &format!("agent={agent} {preview} (approved by the host of session {session})"),
-            );
-            return Ok(GateOutcome::Allow);
+            match unterm_services::agent_session::standing(&session).filter(|standing| standing.terminal_judges) {
+                Some(standing) => session_ceiling = Some(standing.autonomy),
+                None => {
+                    self.audit(
+                        "mcp.confirm.hosted",
+                        Some(&pane_id.to_string()),
+                        &format!("agent={agent} {preview} (approved by the host of session {session})"),
+                    );
+                    return Ok(GateOutcome::Allow);
+                }
+            }
         }
 
         let policy = cfg.mcp_input_confirmation;
-        let ceiling = client_autonomy();
+        // A session the host left this to: its own level (without one, the
+        // usual confirmation rules) -- never the external clients' setting.
+        let ceiling = match session_ceiling {
+            Some(level) => level,
+            None => client_autonomy(),
+        };
         // With a ceiling, a write is as risky as its command says; without
         // one, as its method says, as before.
         let risk = match ceiling {
@@ -7580,8 +7596,9 @@ impl McpHandler {
                     &format!("agent={} id=cfm_{} {}", agent, confirm_id, preview),
                 );
                 Ok(GateOutcome::Block(format!(
-                    "refused: the user declined this write in the Unterm window \
-                     (request_id=cfm_{confirm_id}, pane_id={pane_id})"
+                    "refused: the user declined this write in {product} \
+                     (request_id=cfm_{confirm_id}, pane_id={pane_id})",
+                    product = unterm_protocol::product_name()
                 )))
             }
             Err(_) => {

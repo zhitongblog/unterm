@@ -24,6 +24,7 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use unterm_brain::runtime::{self, Running, Spec};
 use unterm_brain::host::{self, Decision, HostProtocol};
@@ -197,6 +198,9 @@ struct Live {
     grant: Option<String>,
     /// How much it answers on its own, for a helper it hands work to.
     autonomy: Option<crate::tool_risk::Autonomy>,
+    /// Set once the CLI has asked to write to a terminal without saying
+    /// what: from then on Unterm's terminal judges its commands.
+    terminal_judges: Arc<AtomicBool>,
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -625,6 +629,7 @@ fn start_with(
         None
     };
     let pending: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+    let terminal_judges = Arc::new(AtomicBool::new(false));
     let turn = TurnTracker::default();
     let tap: Option<runtime::Tap> = host.as_ref().map(|host| {
         let host = Arc::clone(host);
@@ -672,6 +677,7 @@ fn start_with(
             let context = context.clone();
             let id = id.clone();
             let pending = Arc::clone(&pending);
+            let terminal_judges = Arc::clone(&terminal_judges);
             let turn = turn.clone();
             let host = host.clone();
             let writer = running.stdin_writer();
@@ -711,6 +717,7 @@ fn start_with(
                     let mut judged = None;
                     let mut redirected = None;
                     let mut asked_risk = None;
+                    let mut left_to_terminal = None;
                     if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
                         let risk = crate::tool_risk::classify(tool, input, cwd.as_deref());
                         asked_risk = risk;
@@ -722,6 +729,15 @@ fn start_with(
                         // person answers in their next message.
                         if let (Some(host), true) = (&host, crate::tool_risk::asks_the_person(tool)) {
                             redirected = Some((request_id.clone(), host.clone(), input.clone()));
+                        } else if let (Some(host), true, true) =
+                            (&host, governed, crate::tool_risk::command_judged_by_terminal(tool, input))
+                        {
+                            // Nothing to judge here: the command comes with
+                            // the write itself, and Unterm's terminal --
+                            // told so before the agent hears yes -- puts it
+                            // to the autonomy level, a rule or a person.
+                            terminal_judges.store(true, Ordering::SeqCst);
+                            left_to_terminal = Some((request_id.clone(), host.clone(), input.clone()));
                         } else if let (Some(host), Some(rule)) = (
                             &host,
                             crate::agent_policy::evaluate(cwd.as_deref(), tool, input),
@@ -754,6 +770,14 @@ fn start_with(
                         }
                         let mut resolved = resolution(&request_id, &Decision::Allow, "autonomy");
                         resolved["approval"]["risk"] = json!(risk.as_str());
+                        turn.stamp_now(&mut resolved);
+                        push(&events, &context, &id, resolved);
+                    }
+                    if let Some((request_id, host, input)) = left_to_terminal {
+                        for line in host.permission_reply(&request_id, &Decision::Allow, &input) {
+                            let _ = writer.write_line(&line);
+                        }
+                        let mut resolved = resolution(&request_id, &Decision::Allow, "terminal");
                         turn.stamp_now(&mut resolved);
                         push(&events, &context, &id, resolved);
                     }
@@ -807,6 +831,7 @@ fn start_with(
             cwd: cwd.map(str::to_string),
             grant,
             autonomy,
+            terminal_judges,
         },
     );
     Ok(id)
@@ -821,6 +846,11 @@ pub struct Standing {
     pub autonomy: Option<crate::tool_risk::Autonomy>,
     pub governed: bool,
     pub context: TaskContext,
+    /// The host could not see the commands this session writes to a
+    /// terminal ([`crate::tool_risk::command_judged_by_terminal`]): the
+    /// terminal judges each one when it arrives, under [`Self::autonomy`],
+    /// instead of taking the host's word for it.
+    pub terminal_judges: bool,
 }
 
 pub fn standing(id: &str) -> Option<Standing> {
@@ -831,6 +861,7 @@ pub fn standing(id: &str) -> Option<Standing> {
         autonomy: live.autonomy,
         governed: live.grant.is_some(),
         context: live.context.clone(),
+        terminal_judges: live.terminal_judges.load(Ordering::SeqCst),
     })
 }
 
@@ -1227,6 +1258,7 @@ pub fn close(id: &str) -> Result<Value> {
         cwd: _,
         grant,
         autonomy: _,
+        terminal_judges: _,
     } = live;
     // First thing: from here on nothing this session's agent sends through
     // Unterm counts as already approved.

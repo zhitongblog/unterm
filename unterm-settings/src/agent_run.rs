@@ -344,10 +344,15 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
 /// instructions file (OpenCode takes instructions only from files).
 fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Value, String> {
     let mut mcp = serde_json::Map::new();
+    // OpenCode runs MCP tools without asking unless told to, so a command
+    // in Unterm's terminal would never reach the inbox: ask for every tool
+    // of the mounted servers, and the host judges each by its risk.
+    let mut permission = serde_json::Map::new();
     for (name, command, args) in governed_servers(helper)? {
         let mut words = vec![command];
         words.extend(args);
         mcp.insert(name.into(), json!({"type": "local", "command": words, "enabled": true}));
+        permission.insert(format!("{name}_*"), json!("ask"));
     }
     let file = unterm_protocol::state_path(format!(
         "governed/opencode-{}.md",
@@ -361,6 +366,7 @@ fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Valu
     Ok(json!({
         "mcp": mcp,
         "tools": {"bash": false, "webfetch": false},
+        "permission": permission,
         "instructions": [file.display().to_string()],
     }))
 }
@@ -962,6 +968,7 @@ mod tests {
         let config = opencode_governed(None, false).unwrap();
         assert_eq!(config["mcp"]["unterm"]["command"].as_array().unwrap()[..2].to_vec(), vec![json!(cli.display().to_string()), json!("mcp-stdio")]);
         assert_eq!(config["tools"], json!({"bash": false, "webfetch": false}));
+        assert_eq!(config["permission"], json!({"unterm_*": "ask"}), "its terminal's commands come to the inbox");
         let file = config["instructions"][0].as_str().unwrap();
         assert!(std::fs::read_to_string(file).unwrap().contains("exec.run_wait"));
         let env = session_env("opencode", true, None, false).unwrap();

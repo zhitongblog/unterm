@@ -89,6 +89,20 @@ pub fn asks_the_person(tool: &str) -> bool {
     matches!(tool, "AskUserQuestion")
 }
 
+/// A call to write into one of Unterm's terminals that came without the
+/// command it writes. OpenCode asks for an MCP tool before it has its
+/// arguments (its permission request carries an empty input), so the host
+/// cannot judge the command; the terminal judges it instead, when the
+/// write arrives with the command in it -- see `agent_session::Standing`.
+pub fn command_judged_by_terminal(tool: &str, input: &Value) -> bool {
+    let Some(("unterm", name)) = mcp_parts(tool) else { return false };
+    let name = name.replace('.', "_");
+    let writes = matches!(name.as_str(), "exec_run" | "exec_run_wait" | "exec_send" | "session_input" | "session_paste");
+    let says = command_of(input).is_some()
+        || ["text", "input", "data"].iter().any(|key| input.get(*key).is_some());
+    writes && !says
+}
+
 /// The servers whose tools are read here by name.
 const KNOWN_SERVERS: &[&str] = &["unterm", "unzoo"];
 
@@ -539,6 +553,15 @@ fn clip(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_write_without_its_command_is_left_to_the_terminal() {
+        assert!(command_judged_by_terminal("unterm_exec_run_wait", &json!({})), "OpenCode asks before it has the arguments");
+        assert!(command_judged_by_terminal("mcp__unterm__session_input", &Value::Null));
+        assert!(!command_judged_by_terminal("unterm_exec_run_wait", &json!({"command": "rm -rf x"})), "the host judges what it can see");
+        assert!(!command_judged_by_terminal("unterm_session_create", &json!({})), "not a write");
+        assert!(!command_judged_by_terminal("bash", &json!({})), "not Unterm's terminal");
+    }
     use serde_json::json;
 
     const CWD: &str = if cfg!(windows) { r"C:\Users\me\Documents\Unzoo One\report" } else { "/home/me/Documents/Unzoo One/report" };
