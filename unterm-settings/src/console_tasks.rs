@@ -825,7 +825,14 @@ fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
         "console": detail.get("console").cloned().unwrap_or(Value::Null),
         "workdir": detail.get("workdir").cloned().unwrap_or(Value::Null),
         "watch": detail.get("watch").cloned().unwrap_or(Value::Null),
-        "watch_status": watch_of(task).map(|watch| super::console_watch::status(&console_id_of(task), &watch)),
+        "watch_status": watch_of(task).map(|watch| {
+            let id = console_id_of(task);
+            let mut status = super::console_watch::status(&id, &watch);
+            if watch.needs_secret() {
+                status["has_secret"] = json!(super::console_watch::has_secret(&id));
+            }
+            status
+        }),
         "agent": detail.get("agent").cloned().unwrap_or(Value::Null),
         "keep_conversation": keeps_conversation(task),
         "runs": views,
@@ -895,6 +902,11 @@ pub struct Put {
     /// Scheduled and watched runs continue the task's conversation.
     #[serde(default)]
     pub keep_conversation: bool,
+    /// The watch's secret (a mail password, a calendar address), kept in
+    /// the system's credential store, never in the task. Absent: keep the
+    /// one already there.
+    #[serde(default)]
+    pub watch_secret: Option<String>,
 }
 
 pub fn put(put: Put) -> Result<Value> {
@@ -907,6 +919,16 @@ pub fn put(put: Put) -> Result<Value> {
     }
     if let Some(watch) = &put.watch {
         watch.check()?;
+        let given = put.watch_secret.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if watch.needs_secret() {
+            match given {
+                Some(secret) => keep_watch_secret(&put.id, Some(watch), secret)?,
+                None if !super::console_watch::has_secret(&put.id) => {
+                    bail!("this watch needs its password or address")
+                }
+                None => {}
+            }
+        }
     }
     let agent = put.agent.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
     if let Some(agent) = &agent {
@@ -976,6 +998,104 @@ pub struct RunRequest {
     /// it in when the turn ends. Implies `follow_up`.
     #[serde(default)]
     pub save_skill: bool,
+    /// Never more than this, whatever the run settings say: work handed over
+    /// by another agent runs under that agent's terms at most.
+    #[serde(skip)]
+    pub autonomy_cap: Option<Autonomy>,
+}
+
+fn autonomy_rank(level: Autonomy) -> u8 {
+    match level {
+        Autonomy::Cautious => 0,
+        Autonomy::Balanced => 1,
+        Autonomy::Autonomous => 2,
+    }
+}
+
+/// A standing helper, as the hub is told about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StandingHelper {
+    pub id: String,
+    pub title: String,
+    pub agent: String,
+    pub busy: bool,
+}
+
+/// Tasks that keep their conversation: helpers that remember their work,
+/// which a hub may hand more of it to. Paused ones are not.
+pub fn standing_helpers() -> Result<Vec<StandingHelper>> {
+    let store = store()?;
+    let default_agent = run_settings().agent;
+    let mut found = Vec::new();
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        if !keeps_conversation(&task) || task.detail.get("paused").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let busy = store.runs(&task.id)?.iter().any(|r| r.state == State::Running);
+        found.push(StandingHelper {
+            id: console_id_of(&task),
+            title: task.title.clone(),
+            agent: task.detail.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty()).unwrap_or(&default_agent).to_string(),
+            busy,
+        });
+    }
+    Ok(found)
+}
+
+/// The standing helper a hub names: its id, or its title (exactly, or the
+/// one title that contains it).
+fn find_helper(name: &str) -> Result<StandingHelper> {
+    let helpers = standing_helpers()?;
+    let wanted = name.trim().to_lowercase();
+    let listed = || helpers.iter().map(|h| format!("{:?} ({})", h.title, h.id)).collect::<Vec<_>>().join(", ");
+    if let Some(found) = helpers.iter().find(|h| h.id.to_lowercase() == wanted || h.title.to_lowercase() == wanted) {
+        return Ok(found.clone());
+    }
+    let partial: Vec<&StandingHelper> = helpers.iter().filter(|h| h.title.to_lowercase().contains(&wanted)).collect();
+    match partial.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] if helpers.is_empty() => bail!("there are no standing helpers; hand the work to an agent instead"),
+        [] => bail!("no standing helper {name:?}; there are: {}", listed()),
+        _ => bail!("{name:?} could be more than one standing helper: {}", listed()),
+    }
+}
+
+/// Hand a piece of work to a standing helper: a run of its task that
+/// continues its conversation, under `cap` at most. Its questions go to its
+/// own conversation and the inbox. The session it runs in, and how far its
+/// events had come before (a continued session keeps its earlier ones).
+pub fn hand_to_helper(handler: &McpHandler, name: &str, prompt: &str, cap: Autonomy) -> Result<(String, String, usize)> {
+    let helper = find_helper(name)?;
+    if helper.busy {
+        bail!("standing helper {:?} is busy with its own work; try again later", helper.title);
+    }
+    let store = store()?;
+    let task = console_task(&store, &helper.id)?;
+    let earlier = latest_conversation(&store, &task, &helper.agent)?;
+    let before = earlier
+        .as_deref()
+        .and_then(|session| agent_session::events(session, usize::MAX).ok())
+        .map_or(0, |(_, count)| count);
+    let view = run(
+        handler,
+        RunRequest {
+            task_id: helper.id.clone(),
+            prompt: Some(prompt.to_string()),
+            follow_up: true,
+            autonomy_cap: Some(cap),
+            ..RunRequest::default()
+        },
+        "delegate",
+    )?;
+    if view["state"] == "failed" {
+        bail!("standing helper {:?} did not start: {}", helper.title, view["error"].as_str().unwrap_or("unknown error"));
+    }
+    let session = view["session_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("standing helper {:?} started without a session", helper.title))?
+        .to_string();
+    let cursor = if earlier.as_deref() == Some(session.as_str()) { before } else { 0 };
+    Ok((session, helper.agent, cursor))
 }
 
 /// The session of the task's latest run that can be continued: its agent
@@ -1060,6 +1180,11 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| task_prompt(&task));
     let mut settings = run_settings();
+    if let Some(cap) = request.autonomy_cap {
+        if autonomy_rank(cap) < autonomy_rank(settings.autonomy) {
+            settings.autonomy = cap;
+        }
+    }
     // A standing helper's own agent.
     if let Some(agent) = task.detail.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty()) {
         settings.agent = agent.to_string();
@@ -1913,6 +2038,40 @@ pub fn api_put(body: &[u8]) -> Response {
     }
 }
 
+/// Keep a watch's secret for a task, checked for the watch it is for.
+fn keep_watch_secret(task: &str, watch: Option<&Watch>, secret: &str) -> Result<()> {
+    let secret = secret.trim();
+    if secret.is_empty() || secret.len() > 4096 {
+        bail!("the password or address is empty or too long");
+    }
+    let lower = secret.to_ascii_lowercase();
+    let looks_like_address = lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("webcal://");
+    if matches!(watch, Some(Watch::Calendar { .. })) && !looks_like_address {
+        bail!("a calendar is watched through its iCal address (https:// or webcal://)");
+    }
+    task_key(task)?;
+    super::console_watch::set_secret(task, secret).context("could not keep the secret in the system's credential store")
+}
+
+/// POST /api/console/tasks/watch-secret — `{id, secret, kind?}`: the mail
+/// password or calendar address of a task's watch, straight into the
+/// system's credential store. Sent on its own, before the task, so it is
+/// never part of what a page keeps.
+pub fn api_watch_secret(body: &[u8]) -> Response {
+    let body = body_json(body);
+    let (Some(id), Some(secret)) = (id_field(&body, "id"), id_field(&body, "secret")) else {
+        return Response::err(400, "Bad Request", "id and secret are required");
+    };
+    let watch = match body.get("kind").and_then(Value::as_str) {
+        Some("calendar") => Some(Watch::Calendar { minutes_before: 15 }),
+        _ => None,
+    };
+    match keep_watch_secret(&id, watch.as_ref(), &secret) {
+        Ok(()) => Response::ok_json(json!({"kept": true})),
+        Err(e) => Response::err(400, "Bad Request", &format!("{e:#}")),
+    }
+}
+
 /// POST /api/console/tasks/delete — `{id}`
 pub fn api_delete(body: &[u8]) -> Response {
     let Some(id) = id_field(&body_json(body), "id") else {
@@ -2262,6 +2421,32 @@ mod tests {
         assert_eq!(named.iter().map(|o| o.path.as_str()).collect::<Vec<_>>(), vec!["HN-Top10.md", "out/posts.csv"]);
         // A reply that names none of them: all are kept rather than none.
         assert_eq!(named_in(vec![output("notes.md"), output("tmp.txt")], "Done.").len(), 2);
+    }
+
+    #[test]
+    fn standing_helpers_are_tasks_that_keep_their_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
+        unterm_services::cockpit::fleet_store::reset_for_tests();
+
+        put(Put { id: "inbox".into(), title: "Invoice inbox".into(), keep_conversation: true, agent: Some("codex-cli".into()), ..Put::default() }).unwrap();
+        put(Put { id: "shop".into(), title: "Shop support".into(), keep_conversation: true, ..Put::default() }).unwrap();
+        put(Put { id: "once".into(), title: "One-off report".into(), ..Put::default() }).unwrap();
+        put(Put { id: "rest".into(), title: "Resting helper".into(), keep_conversation: true, paused: true, ..Put::default() }).unwrap();
+        assert!(put(Put { id: "x".into(), title: "x".into(), agent: Some("notepad".into()), ..Put::default() }).is_err());
+
+        let mut helpers = standing_helpers().unwrap();
+        helpers.sort_by(|a, b| a.id.cmp(&b.id));
+        let named: Vec<(&str, &str)> = helpers.iter().map(|h| (h.id.as_str(), h.agent.as_str())).collect();
+        assert_eq!(named, vec![("inbox", "codex-cli"), ("shop", run_settings().agent.as_str())]);
+        assert_eq!(find_helper("invoice").unwrap().id, "inbox", "a word of its title is enough");
+        assert_eq!(find_helper("SHOP SUPPORT").unwrap().id, "shop");
+        let unknown = find_helper("payroll").unwrap_err().to_string();
+        assert!(unknown.contains("Invoice inbox") && unknown.contains("Shop support"), "{unknown}");
+        assert!(find_helper("one-off").is_err(), "a task that does not keep its conversation is no standing helper");
+        assert!(autonomy_rank(Autonomy::Cautious) < autonomy_rank(Autonomy::Balanced));
+        assert!(autonomy_rank(Autonomy::Balanced) < autonomy_rank(Autonomy::Autonomous));
     }
 
     #[test]

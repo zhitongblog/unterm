@@ -472,7 +472,7 @@ fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
         if server == "unterm" {
             if name.replace('.', "_") == "agent_session_delegate" {
                 let task = field(&["prompt"]);
-                let agent = field(&["agent", "session_id"]);
+                let agent = field(&["helper", "agent", "session_id"]);
                 return (Verb::Delegate, if task.is_empty() { agent } else { format!("{agent}: {task}") });
             }
             if name.replace('.', "_") == "agent_session_handover" {

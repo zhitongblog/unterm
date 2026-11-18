@@ -215,8 +215,29 @@ fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
     if !helper {
         prompt.push(' ');
         prompt.push_str(HELPERS_PROMPT);
+        let standing = super::console_tasks::standing_helpers().unwrap_or_default();
+        if !standing.is_empty() {
+            prompt.push(' ');
+            prompt.push_str(&standing_prompt(&standing));
+        }
     }
     prompt
+}
+
+/// The standing helpers a hub may hand work to: tasks that keep their own
+/// conversation, so the helper remembers what it did there before.
+fn standing_prompt(helpers: &[super::console_tasks::StandingHelper]) -> String {
+    let listed: Vec<String> = helpers
+        .iter()
+        .take(20)
+        .map(|h| format!("{:?} (helper: {:?}, agent {})", h.title.chars().take(80).collect::<String>(), h.id, h.agent))
+        .collect();
+    format!(
+        "Standing helpers also work here, each looking after one job and remembering its earlier work: {}. \
+When the work belongs to one of them, hand it over with agent_session.delegate and helper (instead of agent) set to its id; \
+it continues its own conversation and its report comes back to you.",
+        listed.join("; ")
+    )
 }
 
 /// What a governed agent is given in place of its own shell: Unterm's MCP

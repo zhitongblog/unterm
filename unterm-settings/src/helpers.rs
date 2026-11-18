@@ -52,6 +52,9 @@ struct Helper {
     ended: Option<String>,
     /// Stopped with its hub.
     closed: bool,
+    /// A standing helper's task: its run is its own and outlives the hub's
+    /// turn; more work goes to it as a new run of that task.
+    standing: Option<String>,
 }
 
 fn helpers() -> &'static Mutex<HashMap<String, Helper>> {
@@ -125,15 +128,21 @@ pub fn active_count() -> usize {
 /// Stop and forget a hub's helpers: its turn is over, and nobody is left to
 /// read what they would say.
 pub fn release(hub: &str) {
+    let standing: Vec<String>;
     let ids: Vec<String> = {
         let mut helpers = helpers().lock().unwrap();
         let ids: Vec<String> = helpers.iter().filter(|(_, h)| h.hub == hub).map(|(id, _)| id.clone()).collect();
+        standing = helpers.iter().filter(|(_, h)| h.hub == hub && h.standing.is_some()).map(|(id, _)| id.clone()).collect();
         for id in &ids {
             helpers.remove(id);
         }
         ids
     };
     for id in ids {
+        if standing.contains(&id) {
+            // Its own task follows it to the end; the hub just stops waiting.
+            continue;
+        }
         let running = agent_session::status(&id)
             .ok()
             .is_some_and(|s| s.get("state").and_then(Value::as_str) == Some("running"));
@@ -174,6 +183,13 @@ pub fn delegate(handler: &McpHandler, hub: &str, params: &Value) -> Result<Value
                 .filter(|h| h.hub == hub)
                 .cloned()
                 .ok_or_else(|| anyhow!("{earlier} is not a helper you started in this turn"))?;
+            if let (Some(prompt), Some(task)) = (prompt, helper.standing.as_deref()) {
+                if helper.ended.is_none() {
+                    return Err(anyhow!("helper {earlier} is still on its last piece of work; wait for it first"));
+                }
+                let session = standing(handler, hub, task, prompt)?;
+                return wait_for(&session, wait);
+            }
             if let Some(prompt) = prompt {
                 if helper.ended.is_none() {
                     return Err(anyhow!("helper {earlier} is still on its last piece of work; wait for it first"));
@@ -191,6 +207,11 @@ pub fn delegate(handler: &McpHandler, hub: &str, params: &Value) -> Result<Value
             }
             earlier.to_string()
         }
+        None if params.get("helper").and_then(Value::as_str).is_some_and(|h| !h.trim().is_empty()) => {
+            let name = params["helper"].as_str().unwrap_or_default();
+            let prompt = prompt.ok_or_else(|| anyhow!("say what the helper should do (prompt)"))?;
+            standing(handler, hub, name, prompt)?
+        }
         None => {
             let name = params.get("agent").and_then(Value::as_str).unwrap_or_default();
             let agent = agent_id(name).ok_or_else(|| {
@@ -201,6 +222,36 @@ pub fn delegate(handler: &McpHandler, hub: &str, params: &Value) -> Result<Value
         }
     };
     wait_for(&session, wait)
+}
+
+/// Hand work to a standing helper (a task that keeps its conversation):
+/// a run of that task, never wider than the hub.
+fn standing(handler: &McpHandler, hub: &str, name: &str, prompt: &str) -> Result<String> {
+    let live = helpers().lock().unwrap().values().filter(|h| h.hub == hub && !h.closed && h.ended.is_none()).count();
+    if live >= MAX_HELPERS {
+        return Err(anyhow!("you already have {MAX_HELPERS} helpers at work; wait for one first"));
+    }
+    let standing = agent_session::standing(hub).ok_or_else(|| anyhow!("your session is not one Unterm is running"))?;
+    let cap = standing.autonomy.unwrap_or_default();
+    let (session, agent, cursor) =
+        super::console_tasks::hand_to_helper(handler, name, &format!("{HELPER_PREAMBLE}\n\n{prompt}"), cap)?;
+    let task = name.trim().to_string();
+    helpers().lock().unwrap().insert(
+        session.clone(),
+        Helper {
+            hub: hub.to_string(),
+            agent,
+            prompt: prompt.to_string(),
+            order: next_order(),
+            cursor,
+            text: String::new(),
+            error: None,
+            ended: None,
+            closed: false,
+            standing: Some(task),
+        },
+    );
+    Ok(session)
 }
 
 fn start(handler: &McpHandler, hub: &str, agent: &str, prompt: &str) -> Result<String> {
@@ -249,6 +300,7 @@ fn start(handler: &McpHandler, hub: &str, agent: &str, prompt: &str) -> Result<S
             error: None,
             ended: None,
             closed: false,
+            standing: None,
         },
     );
     Ok(session)
@@ -381,6 +433,7 @@ mod tests {
             error: None,
             ended: None,
             closed: false,
+            standing: None,
         }
     }
 

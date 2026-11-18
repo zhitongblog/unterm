@@ -585,6 +585,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/console/tasks") => super::console_tasks::api_list(),
         ("POST", "/api/console/tasks/put") => super::console_tasks::api_put(&req.body),
         ("POST", "/api/console/tasks/delete") => super::console_tasks::api_delete(&req.body),
+        ("POST", "/api/console/tasks/watch-secret") => super::console_tasks::api_watch_secret(&req.body),
         ("POST", "/api/console/tasks/run") => super::console_tasks::api_run(handler, &req.body),
         ("POST", "/api/console/tasks/stop") => super::console_tasks::api_stop(&req.body),
         ("POST", "/api/console/tasks/output") => super::console_tasks::api_output(&req.body),
