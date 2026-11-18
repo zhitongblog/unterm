@@ -11,6 +11,7 @@ mod browser;
 pub mod clients;
 mod console_tasks;
 pub use console_tasks::{run_settings, set_run_settings, RunSettings};
+mod console_watch;
 pub mod helpers;
 mod local_agents;
 mod mobile_one;

@@ -174,6 +174,51 @@ pub fn activate_tab(tab: &str) -> Result<Value> {
     Ok(json!({"tab_id": tab, "activated": true}))
 }
 
+/// The identity a watched page is read in: the one the run settings chose
+/// for the agents, else their own when it exists. Never the person's
+/// default profile, where a tab would open in front of them.
+pub fn watch_profile(chosen: &str) -> Result<String> {
+    if !chosen.trim().is_empty() {
+        return Ok(chosen.trim().to_string());
+    }
+    let (profiles, _) = snapshot()?;
+    if profiles.iter().any(|p| p["id"] == RESERVED_PROFILE) {
+        return Ok(RESERVED_PROFILE.to_string());
+    }
+    bail!("the agents have no browser identity to read the page in; choose one in Settings › Agents")
+}
+
+/// What a page says now: opened in a tab of its own in `profile`, read once
+/// its text stops changing, and closed again.
+pub fn page_text(profile: &str, url: &str) -> Result<String> {
+    let created = call("POST", "/api/v1/tabs/create", Some(&json!({"url": url, "profile_id": profile})))?;
+    let id = created
+        .pointer("/data/tab_id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("Unzoo Browser opened no tab"))?;
+    let read = (|| -> Result<String> {
+        let mut last = String::new();
+        for attempt in 0..8 {
+            std::thread::sleep(Duration::from_secs(if attempt == 0 { 3 } else { 2 }));
+            let text = call("POST", "/api/v1/get-text", Some(&json!({"tab_id": id})))?
+                .pointer("/data/result/text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if !text.trim().is_empty() && text == last {
+                return Ok(text);
+            }
+            last = text;
+        }
+        if last.trim().is_empty() {
+            bail!("the page showed no text");
+        }
+        Ok(last)
+    })();
+    let _ = call("POST", "/api/v1/tabs/close", Some(&json!({"tab_id": id})));
+    read
+}
+
 /// Whether a profile folder is one Unzoo keeps for an MCP client
 /// (`...\Profile_mcp-claude-code`): an agent's own, never the person's.
 pub fn is_agent_profile(path: &str) -> bool {

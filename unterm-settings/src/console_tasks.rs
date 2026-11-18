@@ -15,9 +15,15 @@
 //!   the session, the agent's answer and the token count. The runtime starts
 //!   the agent, follows it to the end of its turn and writes the verdict; the
 //!   console only reads.
-//! - **Schedules** are checked every half minute. A daily or weekly task whose
-//!   slot has come since it last ran is run once -- a slot missed while the
-//!   machine was off is caught up once, not once per missed day.
+//! - **Schedules** are checked every half minute. A daily, weekday or weekly
+//!   task whose slot has come since it last ran is run once -- a slot missed
+//!   while the machine was off is caught up once, not once per missed day.
+//!   A task can also run every N minutes, or once at a given moment.
+//! - **Watches** start a run when something changes: a web page, a folder
+//!   (see `console_watch`).
+//! - **Standing helpers** are tasks with an agent of their own (not the run
+//!   settings' one) that keep their conversation: each scheduled or watched
+//!   run continues the last, so the agent remembers what it did before.
 //!
 //! A run is always hosted: every tool call the agent's CLI would ask about
 //! comes to the console's inbox, whether or not anyone is looking at a page.
@@ -34,6 +40,8 @@ use unterm_mcp::handler::McpHandler;
 use unterm_services::agent_session;
 use unterm_services::tool_risk::{self, Autonomy};
 use unterm_tasks::{Run, RunId, State, Step, StepId, Task, TaskId, TaskStore};
+
+use super::console_watch::Watch;
 
 use super::server::Response;
 
@@ -571,21 +579,68 @@ pub fn activate_tab(tab: &str) -> Result<Value> {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Schedule {
     Daily { time: String },
+    /// Monday to Friday.
+    Weekdays { time: String },
     /// `weekday` counts from Monday = 1 to Sunday = 7.
     Weekly { time: String, weekday: u32 },
+    /// Every `minutes` after the last run started (or the task was made).
+    Every { minutes: u32 },
+    /// Once, at a local `YYYY-MM-DDTHH:MM`.
+    Once { at: String },
+}
+
+pub const MIN_EVERY: u32 = 5;
+pub const MAX_EVERY: u32 = 7 * 24 * 60;
+
+impl Schedule {
+    /// Refuse a schedule that would never fire, when it is set.
+    pub fn check(&self) -> Result<()> {
+        match self {
+            Schedule::Daily { time } | Schedule::Weekdays { time } | Schedule::Weekly { time, .. } => {
+                NaiveTime::parse_from_str(time.trim(), "%H:%M").map_err(|_| anyhow!("not a time of day: {time}"))?;
+            }
+            Schedule::Every { minutes } if !(MIN_EVERY..=MAX_EVERY).contains(minutes) => {
+                bail!("a task repeats every {MIN_EVERY} to {MAX_EVERY} minutes")
+            }
+            Schedule::Every { .. } => {}
+            Schedule::Once { at } => {
+                once_moment(at).ok_or_else(|| anyhow!("not a moment: {at}"))?;
+            }
+        }
+        if let Schedule::Weekly { weekday, .. } = self {
+            if !(1..=7).contains(weekday) {
+                bail!("a weekday is 1 (Monday) to 7 (Sunday)");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn once_moment(at: &str) -> Option<chrono::NaiveDateTime> {
+    let at = at.trim();
+    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%dT%H:%M")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%dT%H:%M:%S"))
+        .ok()
 }
 
 /// The most recent moment at or before `now` this schedule asked for a run.
+/// `None` for one that repeats by interval, which has no fixed slots.
 pub fn last_slot<Tz: TimeZone>(schedule: &Schedule, now: &DateTime<Tz>) -> Option<DateTime<Tz>> {
-    let (time, weekday) = match schedule {
-        Schedule::Daily { time } => (time, None),
-        Schedule::Weekly { time, weekday } => (time, Some(*weekday)),
+    let (time, days): (&String, &[u32]) = match schedule {
+        Schedule::Daily { time } => (time, &[1, 2, 3, 4, 5, 6, 7]),
+        Schedule::Weekdays { time } => (time, &[1, 2, 3, 4, 5]),
+        Schedule::Weekly { time, weekday } => (time, std::slice::from_ref(weekday)),
+        Schedule::Every { .. } => return None,
+        Schedule::Once { at } => {
+            let at = now.timezone().from_local_datetime(&once_moment(at)?).earliest()?;
+            return (at <= *now).then_some(at);
+        }
     };
     let time = NaiveTime::parse_from_str(time.trim(), "%H:%M").ok()?;
     let zone = now.timezone();
     let mut day = now.date_naive();
     for _ in 0..8 {
-        if weekday.map_or(true, |wanted| day.weekday().number_from_monday() == wanted) {
+        if days.contains(&day.weekday().number_from_monday()) {
             // A time that does not exist that day (a DST gap) is skipped; one
             // that exists twice is taken the first time.
             if let Some(at) = zone.from_local_datetime(&day.and_time(time)).earliest() {
@@ -607,9 +662,16 @@ pub fn is_due<Tz: TimeZone>(
     created_at: &str,
     last_started_at: Option<&str>,
 ) -> bool {
-    let Some(slot) = last_slot(schedule, now) else { return false };
     let parse = |text: &str| DateTime::parse_from_rfc3339(text).ok();
     let Some(created) = parse(created_at) else { return false };
+    if let Schedule::Every { minutes } = schedule {
+        if !(MIN_EVERY..=MAX_EVERY).contains(minutes) {
+            return false;
+        }
+        let since = last_started_at.and_then(parse).map_or(created, |started| started.max(created));
+        return now.fixed_offset() >= since + chrono::Duration::minutes(i64::from(*minutes));
+    }
+    let Some(slot) = last_slot(schedule, now) else { return false };
     if slot <= created {
         return false;
     }
@@ -762,6 +824,10 @@ fn task_view(store: &TaskStore, task: &Task) -> Result<Value> {
         "paused": detail.get("paused").and_then(Value::as_bool).unwrap_or(false),
         "console": detail.get("console").cloned().unwrap_or(Value::Null),
         "workdir": detail.get("workdir").cloned().unwrap_or(Value::Null),
+        "watch": detail.get("watch").cloned().unwrap_or(Value::Null),
+        "watch_status": watch_of(task).map(|watch| super::console_watch::status(&console_id_of(task), &watch)),
+        "agent": detail.get("agent").cloned().unwrap_or(Value::Null),
+        "keep_conversation": keeps_conversation(task),
         "runs": views,
     }))
 }
@@ -808,7 +874,7 @@ pub fn list() -> Result<Vec<Value>> {
 
 /// What the console sends for one task. `console` is its own view of the
 /// task, kept and handed back untouched.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Put {
     pub id: String,
     pub title: String,
@@ -820,12 +886,33 @@ pub struct Put {
     pub paused: bool,
     #[serde(default)]
     pub console: Value,
+    /// Run when this changes, besides (or instead of) a schedule.
+    #[serde(default)]
+    pub watch: Option<Watch>,
+    /// This task's own agent; the run settings' when absent.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Scheduled and watched runs continue the task's conversation.
+    #[serde(default)]
+    pub keep_conversation: bool,
 }
 
 pub fn put(put: Put) -> Result<Value> {
     let title = put.title.trim();
     if title.is_empty() {
         bail!("a task needs a title");
+    }
+    if let Some(schedule) = &put.schedule {
+        schedule.check()?;
+    }
+    if let Some(watch) = &put.watch {
+        watch.check()?;
+    }
+    let agent = put.agent.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
+    if let Some(agent) = &agent {
+        if !super::agent_run::supports_hosted(agent) {
+            bail!("{agent} cannot be run hosted, so its tool calls could not reach the inbox");
+        }
     }
     let key = task_key(&put.id)?;
     let mut detail = json!({
@@ -834,6 +921,9 @@ pub fn put(put: Put) -> Result<Value> {
         "schedule": put.schedule,
         "paused": put.paused,
         "console": put.console,
+        "watch": put.watch,
+        "agent": agent,
+        "keep_conversation": put.keep_conversation,
     });
     let store = store()?;
     match store.task(&key)? {
@@ -859,6 +949,7 @@ pub fn delete(console_id: &str) -> Result<()> {
     let task = console_task(&store, console_id)?;
     // A task going away takes its agent with it.
     let _ = stop(console_id);
+    super::console_watch::forget(console_id);
     store.delete_task(&task.id)
 }
 
@@ -889,15 +980,38 @@ pub struct RunRequest {
 
 /// The session of the task's latest run that can be continued: its agent
 /// named a conversation (it has a resume record).
-fn latest_conversation(store: &TaskStore, task: &Task) -> Result<Option<String>> {
+/// Only a conversation with the agent the task has now: one handed to
+/// another agent since starts afresh with it.
+fn latest_conversation(store: &TaskStore, task: &Task, agent: &str) -> Result<Option<String>> {
     for run in store.runs(&task.id)?.into_iter().rev() {
         let Some(step) = store.steps(&run.id)?.into_iter().find(|s| s.kind == STEP_KIND) else { continue };
         let Some(session) = step.detail.get("session_id").and_then(Value::as_str) else { continue };
-        if matches!(agent_session::resume_record(session), Ok(Some(_))) {
+        if let Ok(Some(record)) = agent_session::resume_record(session) {
+            if super::agent_run::agent_of(&record.adapter) != Some(agent) {
+                return Ok(None);
+            }
             return Ok(Some(session.to_string()));
         }
     }
     Ok(None)
+}
+
+fn watch_of(task: &Task) -> Option<Watch> {
+    task.detail.get("watch").cloned().and_then(|w| serde_json::from_value(w).ok())
+}
+
+fn keeps_conversation(task: &Task) -> bool {
+    task.detail.get("keep_conversation").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// What a task asks its agent: its prompt, else its title.
+fn task_prompt(task: &Task) -> String {
+    task.detail
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| task.title.clone())
 }
 
 fn running_run(store: &TaskStore, task: &Task) -> Result<Option<(Run, Option<Step>)>> {
@@ -944,13 +1058,16 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         .clone()
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
-        .or_else(|| task.detail.get("prompt").and_then(Value::as_str).map(str::to_string))
-        .unwrap_or_else(|| task.title.clone());
-    let settings = run_settings();
+        .unwrap_or_else(|| task_prompt(&task));
+    let mut settings = run_settings();
+    // A standing helper's own agent.
+    if let Some(agent) = task.detail.get("agent").and_then(Value::as_str).filter(|a| !a.is_empty()) {
+        settings.agent = agent.to_string();
+    }
     let workdir = workdir_for(&store, &task, &settings)?;
     let continue_from = match &request.continue_from {
         Some(session) => Some(session.clone()),
-        None if request.follow_up => latest_conversation(&store, &task)?,
+        None if request.follow_up => latest_conversation(&store, &task, &settings.agent)?,
         None => None,
     };
     let console_run_id = request
@@ -1689,7 +1806,7 @@ pub fn sweep_orphans() -> Result<usize> {
 pub fn has_work() -> Result<bool> {
     let store = store()?;
     for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
-        let scheduled = task.detail.get("schedule").is_some_and(|s| !s.is_null())
+        let scheduled = (task.detail.get("schedule").is_some_and(|s| !s.is_null()) || watch_of(&task).is_some())
             && !task.detail.get("paused").and_then(Value::as_bool).unwrap_or(false);
         if scheduled || store.runs(&task.id)?.iter().any(|r| r.state == State::Running) {
             return Ok(true);
@@ -1703,31 +1820,47 @@ pub fn tick(handler: &McpHandler) -> Result<Vec<String>> {
     sweep_orphans()?;
     let store = store()?;
     let now = chrono::Local::now();
+    let profile = run_settings().browser_profile;
     let mut started = Vec::new();
     for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
         if task.detail.get("paused").and_then(Value::as_bool).unwrap_or(false) {
             continue;
         }
-        let Some(schedule) = task
+        let schedule = task
             .detail
             .get("schedule")
             .cloned()
-            .and_then(|s| serde_json::from_value::<Schedule>(s).ok())
-        else {
+            .and_then(|s| serde_json::from_value::<Schedule>(s).ok());
+        let watch = watch_of(&task);
+        if schedule.is_none() && watch.is_none() {
             continue;
-        };
+        }
         let runs = store.runs(&task.id)?;
         if runs.iter().any(|r| r.state == State::Running) {
             continue;
         }
-        let last = runs.iter().map(|r| r.started_at.as_str()).max();
-        if !is_due(&schedule, &now, &task.created_at, last) {
-            continue;
-        }
         let id = console_id_of(&task);
-        match run(handler, RunRequest { task_id: id.clone(), ..RunRequest::default() }, "schedule") {
+        let last = runs.iter().map(|r| r.started_at.as_str()).max();
+        let (trigger, prompt) = if schedule.as_ref().is_some_and(|s| is_due(s, &now, &task.created_at, last)) {
+            ("schedule", None)
+        } else if let Some(watch) = &watch {
+            let ended = runs
+                .iter()
+                .filter_map(|r| r.ended_at.as_deref())
+                .filter_map(|at| DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.with_timezone(&chrono::Utc))
+                .max();
+            match super::console_watch::changed(&id, watch, &profile, ended, now.with_timezone(&chrono::Utc)) {
+                Some(what) => ("watch", Some(format!("{}\n\n{what}", task_prompt(&task)))),
+                None => continue,
+            }
+        } else {
+            continue;
+        };
+        let request = RunRequest { task_id: id.clone(), prompt, follow_up: keeps_conversation(&task), ..RunRequest::default() };
+        match run(handler, request, trigger) {
             Ok(_) => started.push(id),
-            Err(error) => log::warn!("scheduled run of {id} did not start: {error:#}"),
+            Err(error) => log::warn!("{trigger} run of {id} did not start: {error:#}"),
         }
     }
     Ok(started)
@@ -2026,6 +2159,33 @@ mod tests {
     }
 
     #[test]
+    fn weekdays_skip_the_weekend_and_once_fires_once() {
+        // 2026-11-16 is a Monday; 2026-11-15 a Sunday.
+        let weekdays = Schedule::Weekdays { time: "09:00".into() };
+        assert_eq!(last_slot(&weekdays, &at("2026-11-16T08:00:00+08:00")), Some(at("2026-11-13T09:00:00+08:00")));
+        assert_eq!(last_slot(&weekdays, &at("2026-11-16T09:30:00+08:00")), Some(at("2026-11-16T09:00:00+08:00")));
+        let once = Schedule::Once { at: "2026-11-20T14:30".into() };
+        assert_eq!(last_slot(&once, &at("2026-11-20T14:00:00+08:00")), None);
+        let now = at("2026-11-20T15:00:00+08:00");
+        assert!(is_due(&once, &now, "2026-11-18T01:00:00Z", None));
+        assert!(!is_due(&once, &now, "2026-11-18T01:00:00Z", Some("2026-11-20T06:30:02Z")));
+        assert!(Schedule::Once { at: "tomorrow".into() }.check().is_err());
+        assert!(Schedule::Daily { time: "25:00".into() }.check().is_err());
+    }
+
+    #[test]
+    fn an_interval_counts_from_the_last_run() {
+        let every = Schedule::Every { minutes: 60 };
+        let now = at("2026-11-18T10:00:00+00:00");
+        assert!(!is_due(&every, &now, "2026-11-18T09:30:00Z", None), "made half an hour ago");
+        assert!(is_due(&every, &now, "2026-11-18T08:00:00Z", None));
+        assert!(!is_due(&every, &now, "2026-11-18T08:00:00Z", Some("2026-11-18T09:10:00Z")));
+        assert!(is_due(&every, &now, "2026-11-18T08:00:00Z", Some("2026-11-18T09:00:00Z")));
+        assert!(Schedule::Every { minutes: 1 }.check().is_err());
+        assert!(!is_due(&Schedule::Every { minutes: 1 }, &now, "2026-11-01T00:00:00Z", None));
+    }
+
+    #[test]
     fn the_console_names_and_the_engine_keys_round_trip() {
         assert_eq!(task_key("task-171").unwrap().as_str(), "tsk_task-171");
         assert_eq!(task_key("tsk_abc").unwrap().as_str(), "tsk_abc", "an engine id is not prefixed twice");
@@ -2118,13 +2278,14 @@ mod tests {
             schedule: Some(Schedule::Weekly { time: "09:00".into(), weekday: 5 }),
             paused: false,
             console: json!({"status": "待确认", "target": "repo"}),
+            ..Put::default()
         })
         .unwrap();
         assert_eq!(made["id"], "task-1");
         assert_eq!(made["console"]["target"], "repo", "the console's view comes back untouched");
 
         // Editing keeps the id; the engine has one task, not two.
-        put(Put { id: "task-1".into(), title: "monthly report".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+        put(Put { id: "task-1".into(), title: "monthly report".into(), prompt: None, schedule: None, paused: true, console: json!({}), ..Put::default() })
             .unwrap();
         let tasks = list().unwrap();
         assert_eq!(tasks.len(), 1);
@@ -2154,13 +2315,13 @@ mod tests {
         let workdir = workdir_for(&store, &task, &RunSettings::default()).unwrap();
         assert_eq!(std::path::PathBuf::from(&workdir), root.join("monthly report"));
         assert!(std::path::Path::new(&workdir).is_dir());
-        put(Put { id: "task-1".into(), title: "renamed".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+        put(Put { id: "task-1".into(), title: "renamed".into(), prompt: None, schedule: None, paused: true, console: json!({}), ..Put::default() })
             .unwrap();
         assert_eq!(list().unwrap()[0]["workdir"], json!(workdir));
         let task = console_task(&store, "task-1").unwrap();
         assert_eq!(workdir_for(&store, &task, &RunSettings::default()).unwrap(), workdir);
         // A second task of the same name gets a folder of its own.
-        put(Put { id: "task-2".into(), title: "monthly report".into(), prompt: None, schedule: None, paused: true, console: json!({}) })
+        put(Put { id: "task-2".into(), title: "monthly report".into(), prompt: None, schedule: None, paused: true, console: json!({}), ..Put::default() })
             .unwrap();
         let other = console_task(&store, "task-2").unwrap();
         assert_eq!(
@@ -2194,6 +2355,7 @@ mod tests {
             schedule: Some(Schedule::Daily { time: "09:00".into() }),
             paused: false,
             console: json!({}),
+            ..Put::default()
         })
         .unwrap();
         assert!(has_work().unwrap());
