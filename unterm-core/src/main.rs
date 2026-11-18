@@ -122,9 +122,13 @@ fn main() -> Result<()> {
     // sessions, and two versions can migrate the same database differently.
     // Said at startup, once, because it explains a class of failure nobody
     // would otherwise connect to having installed Unterm twice.
-    let installs = unterm_services::install::survey();
-    for conflict in unterm_services::install::conflicts(&installs) {
-        eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
+    // A product shipping the runtime has its own state directory, so a
+    // standalone Unterm beside it is no conflict.
+    if unterm_protocol::is_standalone() {
+        let installs = unterm_services::install::survey();
+        for conflict in unterm_services::install::conflicts(&installs) {
+            eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
+        }
     }
 
     write_discovery(&endpoint.to_string(), &token, mcp_port, http_port, server.started_at())?;

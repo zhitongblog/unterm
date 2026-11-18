@@ -26,12 +26,10 @@ use std::path::PathBuf;
 /// A provider that offers none of these is refused rather than guessed at.
 pub const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// Where Unterm keeps its own state.
+/// Where Unterm keeps its own state: the product's, see
+/// `unterm_protocol::state_dir`.
 fn state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("UNTERM_STATE_DIR") {
-        return PathBuf::from(dir);
-    }
-    dirs_home().join(".unterm")
+    unterm_protocol::state_dir().unwrap_or_else(|| dirs_home().join(".unterm"))
 }
 
 fn dirs_home() -> PathBuf {

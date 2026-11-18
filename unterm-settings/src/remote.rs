@@ -34,6 +34,19 @@ use unterm_mcp::handler::{ConnectionContext, McpHandler};
 use unterm_services::server_info;
 
 pub const DEFAULT_REMOTE_PORT: u16 = 19880;
+
+/// The port phones reach this install on. A product shipping the runtime
+/// listens on its own, so a standalone Unterm's remote access and the
+/// product's can be on at once (a paired phone keeps its address).
+pub const PRODUCT_REMOTE_PORT: u16 = 19890;
+
+pub fn default_remote_port() -> u16 {
+    if unterm_protocol::is_standalone() {
+        DEFAULT_REMOTE_PORT
+    } else {
+        PRODUCT_REMOTE_PORT
+    }
+}
 pub const PAIRING_TTL_MS: u64 = 120_000; // 2 minutes
 pub const NETWORK_SCOPE_NOTICE: &str =
     "仅支持同一局域网（Wi-Fi / 有线）或 Tailscale 连接，已拦截所有公网来源访问";
@@ -314,7 +327,7 @@ fn load_or_init_config_unlocked() -> RemoteConfig {
     let secret = random_bytes::<32>();
     let cfg = RemoteConfig {
         enabled: false,
-        port: DEFAULT_REMOTE_PORT,
+        port: default_remote_port(),
         machine_id: uuid::Uuid::new_v4().to_string(),
         signing_key_hex: hex::encode(secret),
     };
@@ -1144,7 +1157,7 @@ pub fn dispatch_mobile_rpc(
     // Built-in T3 Code-inspired Agent Harness methods
     match method {
         "ports.list" => {
-            let port = current_bound_port(DEFAULT_REMOTE_PORT);
+            let port = current_bound_port(default_remote_port());
             let ports = crate::harness::discover_listening_ports(&[
                 port,
                 current_info.mcp_port,
@@ -1562,7 +1575,7 @@ pub fn collect_mobile_overview(
         watched_cwd = current_info.cwd.clone().unwrap_or_default();
     }
 
-    let port = current_bound_port(DEFAULT_REMOTE_PORT);
+    let port = current_bound_port(default_remote_port());
     let ports = crate::harness::discover_listening_ports(&[
         port,
         current_info.mcp_port,

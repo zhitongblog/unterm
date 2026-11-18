@@ -83,17 +83,7 @@ fn table() -> Vec<Client> {
 /// `unzoo-one`), so a person reading their client's server list sees the
 /// product they installed.
 pub fn server_name() -> String {
-    let slug: String = unterm_protocol::product_name()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let slug = slug.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
-    if slug.is_empty() {
-        "unterm".into()
-    } else {
-        slug
-    }
+    unterm_protocol::product_slug()
 }
 
 /// Unzoo Browser's own server, which its installer writes.

@@ -520,11 +520,9 @@ fn resolve_legacy_http_endpoint(dir: &Path) -> Result<Option<ServerEndpoint>> {
 /// `unterm-core`. Its `mcp_port` is the agent surface that keeps
 /// working with no GUI alive; the token doubles for MCP auth.
 fn resolve_core_endpoint() -> Option<ServerEndpoint> {
-    let dir = match std::env::var_os("UNTERM_STATE_DIR") {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        Some(_) => return None,
-        None => dirs_next::data_local_dir()?.join("Unterm"),
-    };
+    // The product's own: a bridge from Unzoo One's install reaches Unzoo
+    // One's Core, not a standalone Unterm's running beside it.
+    let dir = unterm_protocol::core_state_dir()?;
     let raw = fs::read_to_string(dir.join("core.json")).ok()?;
     let info: Value = serde_json::from_str(&raw).ok()?;
     let pid = info.get("pid")?.as_u64()? as u32;
