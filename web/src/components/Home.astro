@@ -245,10 +245,11 @@ unterm-cli agent inbox`;
     </h1>
     <p class="mt-6 text-lg sm:text-xl text-notion-muted max-w-2xl mx-auto leading-relaxed text-balance">{t("home.hero.sub")}</p>
     <div class="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs font-mono">
-      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-sky-300">✦ {isZhCN ? "155 项 MCP 工具 · mcp-trim 省 3 万 Token" : "155 MCP Tools · mcp-trim (-30k tok)"}</span>
-      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-amber-300">⚡ {isZhCN ? "0.4ms 零卡顿回显" : "0.4ms Zero-Stall Input"}</span>
-      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-purple-300">🤖 {isZhCN ? "中枢调度 delegate · 真人接手 handover" : "Central Delegate · Human Handover"}</span>
-      <a href="#themes" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border hover:border-sky-400/50 text-emerald-300 transition">🎨 {isZhCN ? "7 套原生深浅主题 ↗" : "7 Native Themes ↗"}</a>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-sky-300">🌿 {isZhCN ? "原生 Git Worktree 并行工作台" : "Native Git Worktree Studio"}</span>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-amber-300">🔍 {isZhCN ? "内嵌 Diff 审查 · 单文件打回 Agent" : "Inline Diff Review · 1-Click Revert"}</span>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-purple-300">📊 {isZhCN ? "Token 水位预警 · 一键 /compact" : "Context HUD · 1-Click /compact"}</span>
+      <a href="#unzoo" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-amber-400/40 hover:border-amber-300 text-amber-200 transition">🦁 {isZhCN ? "Unzoo Browser 受管预览 ↗" : "Unzoo Browser Synergy ↗"}</a>
+      <a href="#themes" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border hover:border-sky-400/50 text-emerald-300 transition">🎨 {isZhCN ? "7 套原生主题 · 110ms 阻尼动效 ↗" : "7 Native Themes · 110ms Motion ↗"}</a>
     </div>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
       <!-- /api/download picks the right file for the visitor's platform at the edge (GitHub Release). -->
@@ -431,6 +432,105 @@ unterm-cli agent inbox`;
           <span>│</span>
           <span id="lt-sb-theme" class="font-semibold" style="color:#38BDF8;">Obsidian</span>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== V0.71.29 WORKTREE STUDIO, INLINE DIFF & UNZOO SYNERGY ============== -->
+<section id="unzoo" class="py-20 border-t border-notion-border relative overflow-hidden">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="max-w-3xl">
+      <div class="text-xs font-mono uppercase tracking-widest text-amber-400">
+        {isZhCN ? "NEW IN V0.71.29 · 全链路 AI 并行开发工作台" : "NEW IN V0.71.29 · PARALLEL AI ENGINEERING STUDIO"}
+      </div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink text-balance">
+        {isZhCN
+          ? "Worktree 零冲突并发、内嵌 Diff 单文件打回、Token 水位监控，以及 Unzoo 受管浏览器黄金组合。"
+          : "Zero-conflict Git worktrees, inline single-file diff review, live context HUD, and Unzoo Browser synergy."}
+      </h2>
+      <p class="mt-4 text-notion-muted leading-relaxed">
+        {isZhCN
+          ? "不把笨重的 WebView 硬塞进终端进程，而是以原生 GPU 渲染提供毫秒级代码审查、并行分支隔离与远端 SSH 漫游，并通过本地 MCP 与 Unzoo Browser 形成「终端 + 指纹隔离浏览器」的双引擎护城河。"
+          : "Instead of bloating the terminal with an embedded WebView, Unterm keeps its pure GPU terminal core and pairs over zero-config local MCP with Unzoo Browser for isolated, lease-governed frontend preview and automation."}
+      </p>
+    </div>
+
+    <div class="mt-10 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="rounded-xl border border-notion-border bg-notion-surface/50 p-5">
+        <div class="text-xs font-mono text-emerald-400">🌿 WORKTREE STUDIO (W)</div>
+        <div class="mt-2 font-semibold text-notion-ink">
+          {isZhCN ? "原生 Git Worktree 并行工作台" : "Native Git Worktree Studio"}
+        </div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "从「+ 新建会话 ▾」一键创建隔离 Worktree 并拉起 Claude / Agy / Codex；侧边栏实时显示 +added -deleted 统计，完成后一键 Squash 合并回主分支并自动清理。"
+            : "Spin up isolated worktrees on branch wt/<task> in one click, watch live +added -deleted badges in the sidebar, and squash-merge & clean up when done."}
+        </p>
+      </div>
+
+      <div class="rounded-xl border border-notion-border bg-notion-surface/50 p-5">
+        <div class="text-xs font-mono text-sky-400">🔍 INLINE DIFF & REVERT (D)</div>
+        <div class="mt-2 font-semibold text-notion-ink">
+          {isZhCN ? "内嵌 Diff 审查与单文件打回" : "Inline Diff & Single-File Revert"}
+        </div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "点击右侧 Git 面板中的任意变更文件即可查看内嵌 Unified Diff，支持一键回滚单个文件（自动存检查点）或把该文件 Diff 直接发给当前 Agent 重写。"
+            : "Click any changed file in the Git dock to inspect unified hunks in-window, revert a single file with an auto-checkpoint, or send the diff to the active agent."}
+        </p>
+      </div>
+
+      <div class="rounded-xl border border-notion-border bg-notion-surface/50 p-5">
+        <div class="text-xs font-mono text-purple-400">📊 CONTEXT & COST HUD (T)</div>
+        <div class="mt-2 font-semibold text-notion-ink">
+          {isZhCN ? "Token 水位预警与一键 /compact" : "Context Pressure & Cost HUD"}
+        </div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "自动提取各 CLI Agent 屏幕中的上下文占用百分比（ctx %）、Token 用量与账单费用；达到 85% 临界值时高亮预警，点击即可一键发送 /compact 或跨 Agent 接力。"
+            : "Automatically parses live ctx %, token counts, and $ cost from CLI screens, flagging 85%+ critical pressure with 1-click /compact or Cross-Agent Handoff."}
+        </p>
+      </div>
+
+      <div class="rounded-xl border border-notion-border bg-notion-surface/50 p-5">
+        <div class="text-xs font-mono text-amber-400">🌐 SSH REMOTE ROAMING (S)</div>
+        <div class="mt-2 font-semibold text-notion-ink">
+          {isZhCN ? "SSH 远端服务器漫游与克隆" : "SSH Remote Server Roaming"}
+        </div>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "自动识别 ssh [-p PORT] user@host 与远端工作目录，在侧边栏展示 🌐 host · ~/path，支持一键在同一远端服务器的同一目录下克隆并排 SSH 会话。"
+            : "Detects active SSH connections and remote working directories (🌐 host · ~/path), allowing 1-click parallel SSH session cloning into the exact same remote folder."}
+        </p>
+      </div>
+    </div>
+
+    <!-- Unterm x Unzoo Browser Synergy Banner -->
+    <div class="mt-6 rounded-2xl border border-amber-400/30 bg-gradient-to-r from-amber-500/10 via-notion-surface/80 to-sky-500/10 p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+      <div class="max-w-2xl">
+        <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-400/15 border border-amber-400/30 text-amber-300 text-xs font-mono">
+          <span>🦁 UNTERM × UNZOO BROWSER</span>
+          <span>·</span>
+          <span>{isZhCN ? "AI 程序员黄金开发组合" : "THE AI DEVELOPER DUO"}</span>
+        </div>
+        <h3 class="mt-3 text-2xl font-semibold text-notion-ink">
+          {isZhCN
+            ? "终端内嗅探 localhost 端口，一键在 Unzoo 指纹隔离浏览器中受管预览"
+            : "Sniff localhost dev servers in Unterm, preview & automate in Unzoo Browser"}
+        </h3>
+        <p class="mt-2 text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "在 Unterm 中按 U（或打开右上角 ▾ 菜单）即可呼出 Unzoo 联动中心：自动识别终端里跑起的 localhost:3000 / 5173 服务并在 Unzoo 独立指纹 Profile 中打开；零配置直连本地 MCP，支持租约级权限一键暂停与验证码真人接手，绝不污染个人主浏览器。"
+            : "Press U in the Agent Inbox to open the Unzoo Synergy Hub: auto-detect running localhost:3000 / 5173 servers, launch them in Unzoo Browser's isolated anti-detect profiles over zero-config local MCP, and pause or revoke AI browser leases anytime."}
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-3 shrink-0">
+        <a href="https://unzoo.com" target="_blank" rel="noopener"
+           class="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 font-semibold text-sm transition shadow-lg shadow-amber-500/20">
+          <span>🦁 {isZhCN ? "免费下载 Unzoo Browser" : "Get Unzoo Browser"}</span>
+          <span>↗</span>
+        </a>
       </div>
     </div>
   </div>
