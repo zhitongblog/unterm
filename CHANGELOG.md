@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.71.29 — 2026-11-19
+
+### Added
+
+- **Native Git Worktree Parallel Studio (`worktree.rs`).**
+  - Create isolated Git worktrees (`<repo>.worktrees/<slug>` on branch `wt/<slug>`) in one click from the `+ New Session ▾` menu, Command Palette, or `⚡` Agent Inbox (`W`), optionally auto-launching `claude`, `agy`, `codex`, or `gemini`.
+  - Non-blocking background `git diff --numstat` sampling displays live `+added -deleted` change badges next to branch names in the left sidebar (` branch +42 -12`).
+  - Supports 1-click Squash-Merge back into the main repository worktree with automatic worktree cleanup.
+- **Interactive Inline Git Diff Review & Single-File Actions (`git.rs`).**
+  - Upgrades the right-docked Git panel (`Cmd+Shift+G`) with color-coded status glyphs (`M`, `A`, `??`, `D`), hover highlights, and click-to-inspect unified diff hunks (also reachable via `D` in the `⚡` Agent Inbox).
+  - Supports 1-click **Send File Diff to Active AI Agent**, **Revert Single File to HEAD** (with an automatic pre-revert safety checkpoint), and **Open File in Editor at First Changed Line**.
+- **AI Agent Telemetry, Context Pressure & Cost HUD (`telemetry.rs`).**
+  - Extracts live context-window occupancy (`ctx %` and `% context left`), token counts, and session cost (`$X.XX`) from active CLI agent screens (`T` in the `⚡` Agent Inbox), grading pressure (`Normal`, `Elevated 70%+`, `Critical 85%+`) and offering 1-click `/compact` or Cross-Agent Handoff.
+- **SSH Remote Agent Roaming & Same-Directory Session Clone (`ssh_roam.rs`).**
+  - Detects active `ssh [-p PORT] user@host` sessions and remote prompt titles (`user@host: ~/path`), displaying `🌐 host · ~/remote/path` in the sidebar and offering 1-click remote session cloning into the same remote working directory (`S` in the `⚡` Agent Inbox).
+- **Unzoo Browser Synergy Hub & Guided Onboarding (`unzoo_hub.rs`).**
+  - Sniffs live local dev-server URLs (`http://localhost:3000`, `http://localhost:5173`, etc.) from terminal panes for 1-click managed preview in **Unzoo Browser** (`U` in the `⚡` Agent Inbox or top-right `▾` menu).
+  - Surfaces live local MCP binding and capability lease controls (Bind, Pause/Resume Leases, Unbind & Revoke), plus a guided download and onboarding flow (`https://unzoo.com`) when Unzoo Browser is not yet installed.
+- **Refined Window Chrome Hierarchy & 110ms GPU Micro-Animations (`chrome.rs`, `topbar.rs`, `sidebar.rs`, `ui_tokens.rs`, `window.rs`).**
+  - Unified top-bar right action capsule (removing the duplicate `⚙` gear in quiet mode), centered title pill container, high-contrast active sidebar cards with `3pt × 16pt` selection pills, first-party accent coloring for all AI agent icons (`✦`, `✻`, `󰋘`, `◇`), expanded sidebar footer breathing room, and 110ms `ease_out_cubic` flyout entrance & selection pill glide animations.
+
 ## v0.71.28 — 2026-11-17
 
 ### Fixed

@@ -311,6 +311,96 @@ pub fn render_segment(panel: &Panel) -> String {
     out
 }
 
+/// Read the unified diff for a single file (`path`) inside `directory`,
+/// returning `(diff_lines, first_changed_line_number)`.
+/// Works for both tracked modified files and untracked (`??`) files.
+pub fn file_diff(directory: &std::path::Path, path: &str, code: &str) -> (Vec<String>, Option<usize>) {
+    let mut raw = String::new();
+    if code == "??" {
+        let full = directory.join(path);
+        if let Ok(content) = std::fs::read_to_string(&full) {
+            raw.push_str(&format!("--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{} @@\n", content.lines().count()));
+            for line in content.lines().take(120) {
+                raw.push('+');
+                raw.push_str(line);
+                raw.push('\n');
+            }
+        }
+    } else {
+        if let Ok(out) = hidden_command("git")
+            .args(["diff", "HEAD", "--", path])
+            .current_dir(directory)
+            .output()
+        {
+            raw = String::from_utf8_lossy(&out.stdout).to_string();
+        }
+        if raw.trim().is_empty() {
+            if let Ok(out) = hidden_command("git")
+                .args(["diff", "--", path])
+                .current_dir(directory)
+                .output()
+            {
+                raw = String::from_utf8_lossy(&out.stdout).to_string();
+            }
+        }
+    }
+    let first_line = parse_first_hunk_line(&raw);
+    let lines: Vec<String> = raw
+        .lines()
+        .filter(|l| {
+            !l.starts_with("diff --git")
+                && !l.starts_with("index ")
+                && !l.starts_with("--- ")
+                && !l.starts_with("+++ ")
+        })
+        .take(140)
+        .map(str::to_string)
+        .collect();
+    (lines, first_line)
+}
+
+/// Extract the starting new-file line number from the first `@@ -a,b +c,d @@` hunk header.
+pub fn parse_first_hunk_line(diff_text: &str) -> Option<usize> {
+    for line in diff_text.lines() {
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            let plus_part = rest.split_whitespace().find(|w| w.starts_with('+'))?;
+            let line_str = plus_part
+                .trim_start_matches('+')
+                .split(',')
+                .next()
+                .unwrap_or("");
+            if let Ok(n) = line_str.parse::<usize>() {
+                return Some(n.max(1));
+            }
+        }
+    }
+    None
+}
+
+/// Revert a single file in `directory` back to `HEAD` (or remove it if untracked `??`).
+pub fn revert_file(directory: &std::path::Path, path: &str, code: &str) -> Result<(), String> {
+    if code == "??" {
+        let target = directory.join(path);
+        if target.is_dir() {
+            std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+        } else if target.exists() {
+            std::fs::remove_file(&target).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    let out = hidden_command("git")
+        .args(["checkout", "HEAD", "--", path])
+        .current_dir(directory)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    // Clear cache so the Git panel updates immediately.
+    cache().lock().remove(directory);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

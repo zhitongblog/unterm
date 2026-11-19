@@ -1079,6 +1079,8 @@ impl WindowState {
             pocket_qr: None,
             last_agent_states: Default::default(),
             ssh_targets: Default::default(),
+            flyout_opened_at: None,
+            sidebar_pill_anim: None,
         }
     }
 }
@@ -1387,6 +1389,8 @@ struct WindowState {
     last_agent_states:
         std::collections::HashMap<u64, unterm_services::cockpit::status::AgentState>,
     ssh_targets: std::collections::HashMap<usize, String>,
+    flyout_opened_at: Option<std::time::Instant>,
+    sidebar_pill_anim: Option<(f32, f32, std::time::Instant)>,
 }
 
 /// What closing the window should do to the sessions behind it.
@@ -3320,9 +3324,21 @@ impl App {
                             base_task
                         }
                     }),
-                    branch: session
-                        .and_then(|session| session.shell.cwd.as_deref())
-                        .and_then(|cwd| crate::git::branch_hint(std::path::Path::new(cwd))),
+                    branch: session.and_then(|session| {
+                        if let Some(remote) = crate::ssh_roam::detect(
+                            &session.shell.process_name,
+                            &session.title,
+                        ) {
+                            return Some(remote.sidebar_subtitle());
+                        }
+                        let cwd = session.shell.cwd.as_deref()?;
+                        let path = std::path::Path::new(cwd);
+                        let branch = crate::git::branch_hint(path)?;
+                        match crate::worktree::cached_diff_stat(path).and_then(|s| s.badge()) {
+                            Some(stat) => Some(format!("{branch} {stat}")),
+                            None => Some(branch),
+                        }
+                    }),
                     active: Some(tab) == active,
                     indicators,
                 }
@@ -3583,7 +3599,7 @@ impl App {
     fn sidebar_selection_fill(&self, active: bool) -> [f32; 4] {
         let chrome = self.chrome();
         if active {
-            crate::chrome::mix(chrome.hover_bg, chrome.selected_bg, 0.3)
+            chrome.selected_bg
         } else {
             chrome.hover_bg
         }
@@ -3744,8 +3760,12 @@ impl App {
                 let wide = self.chrome_width(&glyph);
                 let icon_left = (left + (width - wide) / 2.0).round();
                 let icon_top = (tile_top + (tile_height - line) / 2.0 + nudge).round();
-                let color = if *icon == crate::sidebar::ROBOT {
-                    chrome.focus_rail
+                let color = if crate::sidebar::is_agent_icon(*icon) {
+                    let mut c = chrome.focus_rail;
+                    if !*active && !hovered {
+                        c[3] = 0.86;
+                    }
+                    c
                 } else if *active || hovered {
                     foreground
                 } else {
@@ -4082,9 +4102,9 @@ impl App {
         (self.chrome_row_height() * crate::ui_tokens::SIDEBAR_ROW_LINES).round()
     }
 
-    /// The footer's one line of actions.
+    /// The footer's one line of actions, with comfortable vertical margin.
     fn sidebar_footer_height(&self) -> f32 {
-        self.chrome_row_height()
+        (self.chrome_row_height() + 8.0 * self.chrome_pt()).round()
     }
 
     /// How tall one row of the strip is. Heights follow what a row holds: a
@@ -4106,7 +4126,7 @@ impl App {
         match row {
             crate::sidebar::Row::Group { .. } => (line * 1.2).round(),
             crate::sidebar::Row::Tab { subtitle: Some(_), .. } => (line * 1.55).round(),
-            crate::sidebar::Row::Tab { .. } => (line * 0.95).round(),
+            crate::sidebar::Row::Tab { .. } => (line * 1.18).round(),
         }
     }
 
@@ -4447,8 +4467,10 @@ impl App {
         }
         let footer_left = left + inset;
         let footer_width = (width - inset * 2.0).max(0.0);
+        let pad_y = (5.0 * pt).round();
+        let pill_h = (row_height - pad_y * 2.0).max(1.0);
         let (picker_left, picker_right, settings_left) =
-            self.sidebar_footer_zones(footer_left, footer_width, row_height, pt);
+            self.sidebar_footer_zones(footer_left, footer_width, pill_h, pt);
         if x >= settings_left {
             Some(2)
         } else if x >= picker_right {
@@ -4836,12 +4858,36 @@ impl App {
                         ));
                     }
                     if *active {
-                        self.append_selection_pill(row_left, tile_top, tile_height, quads);
+                        let now = std::time::Instant::now();
+                        let anim_top = match self.window.sidebar_pill_anim {
+                            Some((from_top, to_top, started_at)) => {
+                                let elapsed = now.saturating_duration_since(started_at).as_secs_f32() * 1000.0;
+                                let t = crate::ui_tokens::ease_out_cubic(elapsed, 110.0);
+                                let current = from_top + (to_top - from_top) * t;
+                                if (to_top - tile_top).abs() > 1.0 {
+                                    self.window.sidebar_pill_anim = Some((current, tile_top, now));
+                                    self.window.animate_until =
+                                        Some(now + std::time::Duration::from_millis(115));
+                                    current
+                                } else {
+                                    if t < 1.0 {
+                                        self.window.animate_until =
+                                            Some(now + std::time::Duration::from_millis(16));
+                                    }
+                                    current
+                                }
+                            }
+                            None => {
+                                self.window.sidebar_pill_anim = Some((tile_top, tile_top, now));
+                                tile_top
+                            }
+                        };
+                        self.append_selection_pill(row_left, anim_top, tile_height, quads);
                     }
 
                     let line = self.window.chrome_font.metrics().height;
                     let nudge = crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt;
-                    let line_gap = (1.5 * pt).round();
+                    let line_gap = (2.0 * pt).round();
                     let (first_top, second_top) = if subtitle.is_some() {
                         let block = line * 2.0 + line_gap;
                         let first = (tile_top + (tile_height - block) / 2.0 + nudge).max(tile_top);
@@ -4853,8 +4899,12 @@ impl App {
                     let mut pen = row_left + 8.0 * pt;
                     pen = self.append_chrome(
                         &icon.to_string(),
-                        if *icon == crate::sidebar::ROBOT {
-                            chrome.focus_rail
+                        if crate::sidebar::is_agent_icon(*icon) {
+                            let mut c = chrome.focus_rail;
+                            if !*active && !hovered {
+                                c[3] = 0.86;
+                            }
+                            c
                         } else if *active {
                             foreground
                         } else {
@@ -4945,7 +4995,10 @@ impl App {
         use unterm_services::i18n::t;
         // The footer is one chrome line, not a two-line list row.
         let row_height = footer_height;
-        let text_offset = ((row_height - self.window.chrome_font.metrics().height) / 2.0
+        let pad_y = (5.0 * pt).round();
+        let pill_top = footer_top + pad_y;
+        let pill_h = (row_height - pad_y * 2.0).max(1.0);
+        let text_offset = ((pill_h - self.window.chrome_font.metrics().height) / 2.0
             + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
             .max(0.0);
         let footer_left = left + inset;
@@ -4958,14 +5011,12 @@ impl App {
             color: chrome.inner_highlight,
         });
         let hovered = self.sidebar_footer_action_at(self.window.pointer.0, self.window.pointer.1);
-        let square = crate::sidebar::footer_mark_width(row_height);
+        let square = crate::sidebar::footer_mark_width(pill_h);
         let (picker_left, picker_right, settings_left) =
-            self.sidebar_footer_zones(footer_left, footer_width, row_height, pt);
+            self.sidebar_footer_zones(footer_left, footer_width, pill_h, pt);
         let main_width = (picker_left - footer_left).max(1.0);
         let split_width = (picker_right - footer_left).max(1.0);
         let settings_width = (footer_left + footer_width - settings_left).max(square);
-        let pill_top = footer_top + 2.0 * pt;
-        let pill_h = (row_height - 4.0 * pt).max(1.0);
         let ink = |on: bool| if on { foreground } else { chrome.dim_text };
 
         // Left capsule: [+ 新建会话 | ▾]
@@ -5040,7 +5091,7 @@ impl App {
         pen = self.append_chrome(
             "+",
             ink(hovered == Some(0)),
-            (pen, footer_top + text_offset),
+            (pen, pill_top + text_offset),
             quads,
         );
         pen += 5.0 * pt;
@@ -5051,7 +5102,7 @@ impl App {
         self.append_chrome(
             &new_label,
             ink(hovered == Some(0)),
-            (pen, footer_top + text_offset),
+            (pen, pill_top + text_offset),
             quads,
         );
         let wide = self.chrome_width("\u{25BE}");
@@ -5064,7 +5115,7 @@ impl App {
             picker_ink,
             (
                 picker_left + ((square - wide) / 2.0).max(0.0),
-                footer_top + text_offset + 1.0 * pt,
+                pill_top + text_offset + 1.0 * pt,
             ),
             quads,
         );
@@ -5076,7 +5127,7 @@ impl App {
             ink(hovered == Some(2)),
             (
                 settings_left + ((settings_width - settings_text_w) / 2.0).max(4.0 * pt),
-                footer_top + text_offset,
+                pill_top + text_offset,
             ),
             quads,
         );
@@ -5205,6 +5256,38 @@ impl App {
         let text_top = ((height - self.window.chrome_font.metrics().height) / 2.0
             + crate::ui_tokens::TOPBAR_TEXT_NUDGE * pt)
             .max(0.0);
+
+        // Group the trailing action icons + menu chevron inside one quiet
+        // toolbar capsule so they read as a cohesive control cluster rather
+        // than unanchored glyphs beside the Cockpit/Proxy pills.
+        let action_bounds = bar
+            .iter()
+            .filter(|p| matches!(p.item, crate::topbar::Item::Action(_) | crate::topbar::Item::Menu))
+            .fold(None::<(f32, f32)>, |acc, p| match acc {
+                Some((l, r)) => Some((l.min(p.left), r.max(p.left + p.width))),
+                None => Some((p.left, p.left + p.width)),
+            });
+        if let Some((group_left, group_right)) = action_bounds {
+            let inset = (3.0 * pt).round();
+            let group_h = (height - inset * 2.0).max(1.0);
+            let group_w = (group_right - group_left).max(1.0);
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                group_left - 1.0,
+                inset - 1.0,
+                group_w + 2.0,
+                group_h + 2.0,
+                radius + 1.0,
+                chrome.inner_highlight,
+            ));
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                group_left,
+                inset,
+                group_w,
+                group_h,
+                radius,
+                chrome.group_bg,
+            ));
+        }
 
         for piece in &bar {
             let is_hovered = hovered == Some(piece.item);
@@ -5460,16 +5543,24 @@ impl App {
                 crate::topbar::Item::Stats => chrome.dim_text,
                 // The title is context, not a label to read first: it
                 // sits below the brand and the tally in the bar's own
-                // order of voices.
+                // order of voices, framed by a subtle centered pill.
                 crate::topbar::Item::Title => {
+                    let pad_x = (8.0 * pt).round();
+                    let inset = (3.5 * pt).round();
+                    let pill_h = (height - inset * 2.0).max(1.0);
+                    quads.backgrounds.extend(unterm_render::rounded::panel(
+                        piece.left - pad_x,
+                        inset,
+                        piece.width + pad_x * 2.0,
+                        pill_h,
+                        radius,
+                        chrome.group_bg,
+                    ));
                     let mut quiet = chrome.dim_text;
-                    // On Windows it is the title bar's title, beside the icon,
-                    // and Fluent sets that in secondary text; centred on macOS
-                    // and GNOME it is a quieter subtitle.
                     if crate::topbar::native_traffic_lights()
                         || crate::window_buttons::style() != crate::window_buttons::Style::Fluent
                     {
-                        quiet[3] *= 0.66;
+                        quiet[3] *= 0.85;
                     }
                     quiet
                 }
@@ -7274,6 +7365,26 @@ impl App {
                 self.window.inbox_open = false;
                 self.open_agent_handoff();
             }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("w") => {
+                self.window.inbox_open = false;
+                self.open_worktree_studio();
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("d") => {
+                self.window.inbox_open = false;
+                self.open_git_diff_review();
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("t") => {
+                self.window.inbox_open = false;
+                self.open_agent_telemetry();
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("s") => {
+                self.window.inbox_open = false;
+                self.open_ssh_roaming();
+            }
+            WinitKey::Character(ch) if ch.eq_ignore_ascii_case("u") => {
+                self.window.inbox_open = false;
+                self.open_unzoo_hub();
+            }
             WinitKey::Character(ch)
                 if (ch.eq_ignore_ascii_case("y") || ch.eq_ignore_ascii_case("n")) && count > 0 =>
             {
@@ -7702,13 +7813,10 @@ impl App {
         let foreground = self.window.colors.foreground;
 
         let heading = status.heading();
-        let lines: Vec<String> = status
-            .entries()
-            .iter()
-            .take(MAX_GIT_ROWS)
-            .map(|entry| format!("{:<3}{}", entry.code, entry.path))
-            .collect();
+        let entries = status.entries();
         let height = self.terminal_height();
+        let chrome = self.chrome();
+        let pointer = self.window.pointer;
 
         quads.backgrounds.extend(unterm_render::rounded::panel(
             left,
@@ -7716,8 +7824,15 @@ impl App {
             width,
             height,
             self.corner_radius(),
-            mix(self.window.colors.background, foreground, 0.10),
+            chrome.surface,
         ));
+        quads.backgrounds.push(unterm_render::quads::Quad {
+            left,
+            top,
+            width: 1.0,
+            height,
+            color: chrome.outer_edge,
+        });
         crate::terminal::append_text(
             &heading,
             &mut self.window.font,
@@ -7726,16 +7841,42 @@ impl App {
             (left + metrics.width, top),
             quads,
         );
-        for (index, line) in lines.iter().enumerate() {
+        for (index, entry) in entries.iter().take(MAX_GIT_ROWS).enumerate() {
+            let row_top = top + metrics.height * (index + 1) as f32;
+            let hovered = pointer.0 >= left
+                && pointer.0 < left + width
+                && pointer.1 >= row_top
+                && pointer.1 < row_top + metrics.height;
+            if hovered {
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    left + 4.0,
+                    row_top,
+                    (width - 8.0).max(1.0),
+                    metrics.height,
+                    self.corner_radius() * 0.6,
+                    chrome.hover_bg,
+                ));
+            }
+            let code_color = match entry.code.as_str() {
+                "A" | "??" => chrome.status_ok,
+                "D" => chrome.status_err,
+                _ => chrome.focus_rail,
+            };
+            let code_str = format!("{:<3}", entry.code);
             crate::terminal::append_text(
-                line,
+                &code_str,
                 &mut self.window.font,
                 &mut self.window.atlas,
-                foreground,
-                (
-                    left + metrics.width,
-                    top + metrics.height * (index + 1) as f32,
-                ),
+                code_color,
+                (left + metrics.width, row_top),
+                quads,
+            );
+            crate::terminal::append_text(
+                &entry.path,
+                &mut self.window.font,
+                &mut self.window.atlas,
+                if hovered { foreground } else { chrome.dim_text },
+                (left + metrics.width * 4.0, row_top),
                 quads,
             );
         }
@@ -8319,15 +8460,39 @@ impl App {
         }
     }
 
-    fn click_git_panel(&self) -> bool {
+    fn click_git_panel(&mut self) -> bool {
         let Some(live) = self.window.state.as_ref() else {
             return false;
         };
         let width = self.git_panel_width();
-        width > 0.0
+        let inside = width > 0.0
             && self.window.pointer.0 >= live.width as f32 - width
             && self.window.pointer.1 >= self.terminal_top()
-            && self.window.pointer.1 < live.height as f32 - self.status_bar_height()
+            && self.window.pointer.1 < live.height as f32 - self.status_bar_height();
+        if !inside {
+            return false;
+        }
+        let row_h = self.window.font.metrics().height.max(1.0);
+        let rel_y = (self.window.pointer.1 - self.terminal_top()).max(0.0);
+        let row_idx = (rel_y / row_h) as usize;
+        if row_idx == 0 {
+            self.open_git_diff_review();
+            return true;
+        }
+        let entry_opt = self
+            .window
+            .git_panel
+            .as_ref()
+            .and_then(|dock| {
+                dock.panel
+                    .entries()
+                    .get(row_idx - 1)
+                    .map(|e| (dock.cwd.display().to_string(), e.path.clone(), e.code.clone()))
+            });
+        if let Some((repo, path, code)) = entry_opt {
+            self.inspect_git_file_diff(&repo, &path, &code);
+        }
+        true
     }
 
     /// Open the native directory chooser away from winit's event thread.
@@ -10616,6 +10781,764 @@ impl App {
         self.show_notice(format!("proxy.json \u{00b7} {target}"));
     }
 
+    fn open_worktree_studio(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(cwd) = self.current_directory() else {
+            self.show_notice(if is_zh {
+                "当前窗格没有工作目录".to_string()
+            } else {
+                "No working directory in the focused pane".to_string()
+            });
+            return;
+        };
+        let worktrees = crate::worktree::list_worktrees(&cwd);
+        let main_repo = worktrees
+            .first()
+            .map(|w| w.path.clone())
+            .or_else(|| unterm_services::cockpit::review::repo_root(&cwd).ok())
+            .unwrap_or_else(|| cwd.clone());
+        let main_repo_str = main_repo.display().to_string();
+
+        let mut entries = Vec::new();
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "+ 新建隔离 Git Worktree 会话 (纯 Shell)".to_string()
+            } else {
+                "+ New Isolated Git Worktree Session (Shell)".to_string()
+            },
+            hint: "git worktree add".to_string(),
+            command: crate::palette::Command::CreateWorktreeSession { agent: None },
+        });
+        for agent in unterm_services::cockpit::fleet::installed_agents() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("+ 新建隔离 Worktree 并启动 {agent}")
+                } else {
+                    format!("+ New Isolated Worktree running {agent}")
+                },
+                hint: format!("wt/{agent}"),
+                command: crate::palette::Command::CreateWorktreeSession {
+                    agent: Some(agent.to_string()),
+                },
+            });
+        }
+
+        for wt in &worktrees {
+            let wt_str = wt.path.display().to_string();
+            let branch = wt
+                .branch
+                .clone()
+                .unwrap_or_else(|| wt.head.chars().take(8).collect());
+            let stat = crate::worktree::compute_diff_stat(&wt.path)
+                .badge()
+                .unwrap_or_else(|| "clean".to_string());
+            let role = if wt.is_main {
+                if is_zh { "主工作区" } else { "main" }
+            } else if is_zh {
+                "并行工作区"
+            } else {
+                "worktree"
+            };
+            entries.push(crate::palette::Entry {
+                label: format!("🌿 [{role}] {branch}  ({stat})"),
+                hint: wt_str.clone(),
+                command: crate::palette::Command::NewTabIn {
+                    path: wt_str.clone(),
+                },
+            });
+            if !wt.is_main {
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!("   \u{2934} 一键 Squash 合并 `{branch}` 回主工作区并清理")
+                    } else {
+                        format!("   \u{2934} Squash-Merge `{branch}` into Main & Clean")
+                    },
+                    hint: "git merge --squash".to_string(),
+                    command: crate::palette::Command::MergeWorktree {
+                        main_repo: main_repo_str.clone(),
+                        worktree_path: wt_str.clone(),
+                        branch: branch.clone(),
+                    },
+                });
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!("   \u{2715} 移除并清理并行工作区 `{branch}`")
+                    } else {
+                        format!("   \u{2715} Remove Worktree `{branch}`")
+                    },
+                    hint: "git worktree remove".to_string(),
+                    command: crate::palette::Command::RemoveWorktree {
+                        main_repo: main_repo_str.clone(),
+                        worktree_path: wt_str,
+                    },
+                });
+            }
+        }
+
+        let title = if is_zh {
+            "Git Worktree 并行工作台 (多 Agent 零冲突隔离开发)".to_string()
+        } else {
+            "Git Worktree Parallel Studio (Zero-Conflict AI Workspaces)".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn create_worktree_session(&mut self, agent: Option<&str>) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(cwd) = self.current_directory() else {
+            return;
+        };
+        let hint = agent.unwrap_or("session");
+        match crate::worktree::create_worktree(&cwd, hint) {
+            Ok((wt_path, branch)) => {
+                let wt_str = wt_path.display().to_string();
+                self.new_tab_in(&wt_str);
+                if let Some(agent_bin) = agent {
+                    let focused = self.focused_session();
+                    let _ = self
+                        .engine
+                        .write_input(focused, &format!("{agent_bin}\r"));
+                }
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已创建隔离工作区 {branch} \u{00b7} {wt_str}")
+                } else {
+                    format!("\u{2713} Created isolated worktree {branch} \u{00b7} {wt_str}")
+                });
+            }
+            Err(err) => {
+                self.show_notice(if is_zh {
+                    format!("创建 Worktree 失败: {err}")
+                } else {
+                    format!("Worktree creation failed: {err}")
+                });
+            }
+        }
+    }
+
+    fn merge_worktree(&mut self, main_repo: &str, worktree_path: &str, branch: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match crate::worktree::squash_merge_worktree(
+            std::path::Path::new(main_repo),
+            std::path::Path::new(worktree_path),
+            branch,
+        ) {
+            Ok(_) => {
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已将 `{branch}` Squash 合并回主分支并清理工作区")
+                } else {
+                    format!("\u{2713} Squash-merged `{branch}` into main worktree & cleaned up")
+                });
+            }
+            Err(err) => {
+                self.show_notice(if is_zh {
+                    format!("合并 Worktree 失败: {err}")
+                } else {
+                    format!("Merge worktree failed: {err}")
+                });
+            }
+        }
+    }
+
+    fn remove_worktree(&mut self, main_repo: &str, worktree_path: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match crate::worktree::remove_worktree(
+            std::path::Path::new(main_repo),
+            std::path::Path::new(worktree_path),
+        ) {
+            Ok(()) => {
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已移除并行工作区 {worktree_path}")
+                } else {
+                    format!("\u{2713} Removed worktree {worktree_path}")
+                });
+            }
+            Err(err) => {
+                self.show_notice(format!("remove worktree failed: {err}"));
+            }
+        }
+    }
+
+    fn open_git_diff_review(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let Some(cwd) = self.current_directory() else {
+            return;
+        };
+        let repo = unterm_services::cockpit::review::repo_root(&cwd).unwrap_or(cwd);
+        let repo_str = repo.display().to_string();
+        let panel = crate::git::read(&repo);
+        let entries_list = panel.entries();
+        let mut rows = Vec::new();
+        if entries_list.is_empty() {
+            rows.push(crate::palette::Entry {
+                label: if is_zh {
+                    "✓ 当前工作区干净 (无未提交变更)".to_string()
+                } else {
+                    "✓ Working tree is clean (no uncommitted changes)".to_string()
+                },
+                hint: repo_str,
+                command: crate::palette::Command::Nothing,
+            });
+        } else {
+            for entry in entries_list {
+                rows.push(crate::palette::Entry {
+                    label: format!("[{}]  {}", entry.code, entry.path),
+                    hint: if is_zh {
+                        "点击查看内嵌 Diff / 单文件回滚 / 发给 Agent".to_string()
+                    } else {
+                        "Inspect Diff · Revert File · Send to Agent".to_string()
+                    },
+                    command: crate::palette::Command::InspectGitFileDiff {
+                        repo: repo_str.clone(),
+                        path: entry.path.clone(),
+                        code: entry.code.clone(),
+                    },
+                });
+            }
+        }
+        let title = if is_zh {
+            "Git 变更内嵌 Diff 审查与单文件操作".to_string()
+        } else {
+            "Inline Git Diff Review & Single-File Actions".to_string()
+        };
+        self.open_named_palette(rows, title);
+    }
+
+    fn inspect_git_file_diff(&mut self, repo: &str, path: &str, code: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let repo_path = std::path::Path::new(repo);
+        let (diff_lines, first_line) = crate::git::file_diff(repo_path, path, code);
+        let full_path = repo_path.join(path).display().to_string();
+
+        let mut rows = vec![
+            crate::palette::Entry {
+                label: if is_zh {
+                    format!("🤖 将 `{path}` 的 Diff 发送给当前 AI Agent 要求审查/修改")
+                } else {
+                    format!("🤖 Send `{path}` Diff to Active AI Agent for Review/Revision")
+                },
+                hint: "Prompt Agent".to_string(),
+                command: crate::palette::Command::SendFileDiffToAgent {
+                    repo: repo.to_string(),
+                    path: path.to_string(),
+                    code: code.to_string(),
+                },
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    format!("↺ 一键回滚/丢弃 `{path}` 的未提交改动 (自动存检查点)")
+                } else {
+                    format!("↺ Revert `{path}` to HEAD (auto-saves safety checkpoint)")
+                },
+                hint: "git checkout --".to_string(),
+                command: crate::palette::Command::RevertGitFile {
+                    repo: repo.to_string(),
+                    path: path.to_string(),
+                    code: code.to_string(),
+                },
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    format!(
+                        "↗ 在编辑器中打开 `{path}`{}",
+                        first_line.map(|l| format!(" (第 {l} 行)")).unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "↗ Open `{path}` in Editor{}",
+                        first_line.map(|l| format!(" (line {l})")).unwrap_or_default()
+                    )
+                },
+                hint: full_path.clone(),
+                command: crate::palette::Command::OpenFileAtLine {
+                    path: full_path,
+                    line: first_line,
+                },
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "← 返回变更文件列表".to_string()
+                } else {
+                    "← Back to Changed Files".to_string()
+                },
+                hint: String::new(),
+                command: crate::palette::Command::OpenGitDiffReview,
+            },
+        ];
+
+        for line in diff_lines {
+            rows.push(crate::palette::Entry {
+                label: line,
+                hint: String::new(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
+        self.open_named_palette(rows, format!("Diff · [{code}] {path}"));
+    }
+
+    fn revert_git_file(&mut self, repo: &str, path: &str, code: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let repo_path = std::path::Path::new(repo);
+        let pane_id = self.focused_session() as u64;
+        // Take a non-invasive safety checkpoint before reverting the file.
+        let _ = unterm_services::cockpit::review::record_auto_checkpoint(
+            repo_path,
+            "before-file-revert",
+            pane_id,
+        );
+        match crate::git::revert_file(repo_path, path, code) {
+            Ok(()) => {
+                if let Some(dock) = self.window.git_panel.as_mut() {
+                    dock.panel = crate::git::read(&dock.cwd);
+                }
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已回滚文件: {path}")
+                } else {
+                    format!("\u{2713} Reverted file: {path}")
+                });
+            }
+            Err(err) => {
+                self.show_notice(format!("Revert failed: {err}"));
+            }
+        }
+    }
+
+    fn send_file_diff_to_agent(&mut self, repo: &str, path: &str, code: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let repo_path = std::path::Path::new(repo);
+        let (diff_lines, _) = crate::git::file_diff(repo_path, path, code);
+        let excerpt: String = diff_lines.into_iter().take(35).collect::<Vec<_>>().join(" | ");
+        let prompt = if is_zh {
+            format!(
+                "请检查并优化文件 `{path}` 的当前未提交改动（摘要: {excerpt}）\r"
+            )
+        } else {
+            format!(
+                "Please review and refine the uncommitted changes in `{path}` (diff excerpt: {excerpt})\r"
+            )
+        };
+        let pane_id = self.focused_session();
+        let _ = self.engine.write_input(pane_id, &prompt);
+        self.show_notice(if is_zh {
+            format!("\u{2713} 已将 `{path}` Diff 发送至当前窗格")
+        } else {
+            format!("\u{2713} Sent `{path}` diff review prompt to focused pane")
+        });
+    }
+
+    fn open_agent_telemetry(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let sessions =
+            unterm_engine::SessionEngine::list_sessions(&self.engine).unwrap_or_default();
+        let statuses = unterm_services::cockpit::status::snapshot();
+        let mut entries = Vec::new();
+
+        for session in &sessions {
+            let screen_lines = self
+                .engine
+                .read_screen(session.id)
+                .ok()
+                .map(|s| s.lines)
+                .unwrap_or_default();
+            let telemetry = crate::telemetry::extract_from_lines(&screen_lines);
+            let status_opt = statuses.iter().find(|s| s.pane_id == session.id as u64);
+            let agent_name = status_opt
+                .map(|s| s.agent.clone())
+                .or_else(|| crate::statsbar::known_facts(session.id).agent_id)
+                .unwrap_or_else(|| crate::statusbar::short_name(&session.shell.process_name));
+            let state_str = status_opt
+                .map(|s| {
+                    format!(
+                        "{} · {}",
+                        crate::cockpit::describe_state(s.state),
+                        crate::cockpit::describe_age(s.since.elapsed().as_secs())
+                    )
+                })
+                .unwrap_or_else(|| "active".to_string());
+            let badge = telemetry
+                .summary_badge()
+                .unwrap_or_else(|| if is_zh { "上下文正常" } else { "ctx normal" }.to_string());
+            let cwd_short = session
+                .shell
+                .cwd
+                .as_deref()
+                .map(crate::sidebar::project_name)
+                .unwrap_or_else(|| "~".to_string());
+
+            let pressure_tag = match telemetry.pressure() {
+                crate::telemetry::ContextPressure::Critical => {
+                    if is_zh { " · ⚠ 建议立即压缩" } else { " · ⚠ compact recommended" }
+                }
+                crate::telemetry::ContextPressure::Elevated => {
+                    if is_zh { " · 水位偏高" } else { " · elevated" }
+                }
+                crate::telemetry::ContextPressure::Normal => "",
+            };
+            entries.push(crate::palette::Entry {
+                label: format!("⚡ {agent_name}  ({cwd_short})  ·  {badge}{pressure_tag}"),
+                hint: format!("pane {} · {state_str}", session.id),
+                command: crate::palette::Command::SendCompactToAgent {
+                    pane_id: session.id,
+                },
+            });
+        }
+
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "🤝 跨 Agent 上下文无缝接力 (当上下文满载时切换至新 Agent)…".to_string()
+            } else {
+                "🤝 Cross-Agent Context Handoff (Switch when context is full)…".to_string()
+            },
+            hint: "Handoff".to_string(),
+            command: crate::palette::Command::OpenAgentHandoff,
+        });
+
+        let title = if is_zh {
+            "AI 智能体 Token / 上下文水位与耗时看板 (点击会话发送 /compact)".to_string()
+        } else {
+            "AI Agent Telemetry & Context HUD (Click pane to send /compact)".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn send_compact_to_agent(&mut self, pane_id: usize) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let _ = self.engine.write_input(pane_id, "/compact\r");
+        self.show_notice(if is_zh {
+            format!("\u{2713} 已向窗格 #{pane_id} 发送 `/compact` 上下文压缩指令")
+        } else {
+            format!("\u{2713} Sent `/compact` to pane #{pane_id}")
+        });
+    }
+
+    fn open_ssh_roaming(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let sessions =
+            unterm_engine::SessionEngine::list_sessions(&self.engine).unwrap_or_default();
+        let mut entries = Vec::new();
+        for session in &sessions {
+            if let Some(remote) = crate::ssh_roam::detect(&session.shell.process_name, &session.title) {
+                let clone_cmd = remote.clone_command();
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!("+ 在 `{}` 同目录新建并排 SSH 会话 ({})", remote.target, remote.remote_cwd.as_deref().unwrap_or("~"))
+                    } else {
+                        format!("+ Clone SSH Session on `{}` ({})", remote.target, remote.remote_cwd.as_deref().unwrap_or("~"))
+                    },
+                    hint: clone_cmd.clone(),
+                    command: crate::palette::Command::CloneSshSession {
+                        command: clone_cmd,
+                    },
+                });
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!("🔄 重新连接远端会话 `{}` (pane #{})", remote.target, session.id)
+                    } else {
+                        format!("🔄 Reconnect SSH `{}` (pane #{})", remote.target, session.id)
+                    },
+                    hint: "reconnect".to_string(),
+                    command: crate::palette::Command::ReconnectSsh {
+                        pane_id: session.id,
+                    },
+                });
+            }
+        }
+        if entries.is_empty() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "当前没有检测到活跃的 SSH 远端会话 (在任意终端运行 `ssh user@host` 后自动识别)".to_string()
+                } else {
+                    "No active SSH sessions detected (run `ssh user@host` in any pane to activate)".to_string()
+                },
+                hint: "ssh user@host".to_string(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
+        let title = if is_zh {
+            "SSH 远端服务器 Agent 漫游与同目录会话克隆".to_string()
+        } else {
+            "SSH Remote Server Agent Roaming & Session Clone".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn clone_ssh_session(&mut self, command: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        self.new_tab();
+        let pane_id = self.focused_session();
+        let _ = self.engine.write_input(pane_id, &format!("{command}\r"));
+        self.show_notice(if is_zh {
+            format!("\u{2713} 已在新建标签页启动远端漫游会话: {command}")
+        } else {
+            format!("\u{2713} Cloned remote SSH session: {command}")
+        });
+    }
+
+    fn open_unzoo_hub(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let state = crate::unzoo_hub::detect_state();
+        let sessions =
+            unterm_engine::SessionEngine::list_sessions(&self.engine).unwrap_or_default();
+        let mut dev_urls = Vec::new();
+        for session in &sessions {
+            if let Ok(screen) = self.engine.read_screen(session.id) {
+                for url in crate::unzoo_hub::extract_dev_urls(&screen.lines) {
+                    if !dev_urls.contains(&url) {
+                        dev_urls.push(url);
+                    }
+                }
+            }
+        }
+
+        let mut entries = Vec::new();
+        for url in &dev_urls {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("🌐 在 Unzoo Browser 受管环境中打开本地预览: {url}")
+                } else {
+                    format!("🌐 Preview Local Dev Server in Unzoo Browser: {url}")
+                },
+                hint: "Unzoo Preview".to_string(),
+                command: crate::palette::Command::OpenUrlInUnzoo { url: url.clone() },
+            });
+        }
+
+        match state {
+            crate::unzoo_hub::UnzooState::Running {
+                endpoint,
+                bound,
+                paused,
+                active_leases,
+            } => {
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!(
+                            "🦁 Unzoo Browser 已在线 ({}) · {}",
+                            if bound {
+                                if paused { "已暂停租约" } else { "MCP 已绑定" }
+                            } else {
+                                "待绑定"
+                            },
+                            if active_leases > 0 {
+                                format!("{active_leases} 个活跃 AI 租约")
+                            } else {
+                                "零配置就绪".to_string()
+                            }
+                        )
+                    } else {
+                        format!(
+                            "🦁 Unzoo Browser Online ({}) · {active_leases} active leases",
+                            if bound { "Bound" } else { "Ready to bind" }
+                        )
+                    },
+                    hint: endpoint,
+                    command: crate::palette::Command::LaunchOrBindUnzoo,
+                });
+                if bound {
+                    entries.push(crate::palette::Entry {
+                        label: if is_zh {
+                            if paused {
+                                "▶ 恢复 AI Agent 对 Unzoo Browser 的自动化操控权限".to_string()
+                            } else {
+                                "⏸ 一键暂停 AI Agent 对 Unzoo Browser 的操控租约".to_string()
+                            }
+                        } else if paused {
+                            "▶ Resume AI Agent Browser Automation Leases".to_string()
+                        } else {
+                            "⏸ Pause AI Agent Browser Automation Leases".to_string()
+                        },
+                        hint: "lease control".to_string(),
+                        command: crate::palette::Command::ToggleUnzooPause { pause: !paused },
+                    });
+                    entries.push(crate::palette::Entry {
+                        label: if is_zh {
+                            "🔓 解除 Unzoo 绑定并吊销全部浏览器租约".to_string()
+                        } else {
+                            "🔓 Unbind Unzoo Browser & Revoke All Leases".to_string()
+                        },
+                        hint: "revoke".to_string(),
+                        command: crate::palette::Command::UnbindUnzoo,
+                    });
+                }
+            }
+            crate::unzoo_hub::UnzooState::Installed { path } => {
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        "🦁 一键启动 Unzoo Browser 并自动绑定 Unterm MCP".to_string()
+                    } else {
+                        "🦁 Launch Unzoo Browser & Auto-Bind to Unterm MCP".to_string()
+                    },
+                    hint: path.display().to_string(),
+                    command: crate::palette::Command::LaunchOrBindUnzoo,
+                });
+            }
+            crate::unzoo_hub::UnzooState::NotInstalled => {
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        "⬇ 免费获取 Unzoo Browser —— AI 程序员首选指纹隔离受管浏览器".to_string()
+                    } else {
+                        "⬇ Download Unzoo Browser — The Anti-Detect AI Managed Browser".to_string()
+                    },
+                    hint: "unzoo.com".to_string(),
+                    command: crate::palette::Command::OpenUrl {
+                        url: crate::unzoo_hub::UNZOO_DOWNLOAD_URL.to_string(),
+                    },
+                });
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        "   ✦ 为什么搭配 Unzoo：1. 零配置直连 Unterm MCP，AI 自主调试网页与前端".to_string()
+                    } else {
+                        "   ✦ Why Unzoo: 1. Zero-config Unterm MCP bridge for AI frontend debugging".to_string()
+                    },
+                    hint: "Zero-Config MCP".to_string(),
+                    command: crate::palette::Command::OpenUrl {
+                        url: crate::unzoo_hub::UNZOO_DOWNLOAD_URL.to_string(),
+                    },
+                });
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        "   ✦ 2. 独立多 Profile 指纹/Cookie 物理隔离，绝不污染个人主浏览器".to_string()
+                    } else {
+                        "   ✦ 2. Isolated multi-profile fingerprints & cookies — never touches your personal browser".to_string()
+                    },
+                    hint: "Profile Isolation".to_string(),
+                    command: crate::palette::Command::OpenUrl {
+                        url: crate::unzoo_hub::UNZOO_DOWNLOAD_URL.to_string(),
+                    },
+                });
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        "   ✦ 3. 租约级安全护栏 (Lease)，在终端内随时一键暂停或真人接手验证码".to_string()
+                    } else {
+                        "   ✦ 3. Lease-gated safety & 1-click human handover for logins/captchas".to_string()
+                    },
+                    hint: "Lease Guardrail".to_string(),
+                    command: crate::palette::Command::OpenUrl {
+                        url: crate::unzoo_hub::UNZOO_DOWNLOAD_URL.to_string(),
+                    },
+                });
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        "🔄 我已安装 Unzoo Browser，立即重新扫描并绑定".to_string()
+                    } else {
+                        "🔄 I've Installed Unzoo Browser — Rescan & Bind Now".to_string()
+                    },
+                    hint: "rescan".to_string(),
+                    command: crate::palette::Command::LaunchOrBindUnzoo,
+                });
+            }
+        }
+
+        let title = if is_zh {
+            "Unzoo Browser 联动中心 (Unterm × Unzoo 黄金开发组合)".to_string()
+        } else {
+            "Unzoo Browser Synergy Hub (Unterm × Unzoo Developer Stack)".to_string()
+        };
+        self.open_named_palette(entries, title);
+    }
+
+    fn launch_or_bind_unzoo(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let _ = unterm_services::providers::rediscover();
+        let discovered = unterm_services::providers::statuses()
+            .into_iter()
+            .any(|s| s.id == crate::unzoo_hub::UNZOO_PROVIDER_ID && s.state != "offline");
+        if discovered {
+            match unterm_services::providers::bind(crate::unzoo_hub::UNZOO_PROVIDER_ID) {
+                Ok(h) => {
+                    self.show_notice(if is_zh {
+                        format!(
+                            "\u{2713} 已绑定 Unzoo Browser ({} v{})",
+                            h.identity.name, h.identity.version
+                        )
+                    } else {
+                        format!(
+                            "\u{2713} Bound Unzoo Browser ({} v{})",
+                            h.identity.name, h.identity.version
+                        )
+                    });
+                }
+                Err(err) => {
+                    self.show_notice(format!("Unzoo bind: {err}"));
+                }
+            }
+            return;
+        }
+        match crate::unzoo_hub::launch_unzoo(None) {
+            Ok(()) => {
+                self.show_notice(if is_zh {
+                    "🦁 正在启动 Unzoo Browser，启动后将自动接入 Unterm MCP…".to_string()
+                } else {
+                    "🦁 Launching Unzoo Browser…".to_string()
+                });
+            }
+            Err(_) => {
+                let _ = crate::links::open(crate::unzoo_hub::UNZOO_DOWNLOAD_URL);
+                self.show_notice(if is_zh {
+                    "未检测到本地 Unzoo Browser，已为你打开官方下载页 unzoo.com".to_string()
+                } else {
+                    "Opening Unzoo Browser download page (unzoo.com)…".to_string()
+                });
+            }
+        }
+    }
+
+    fn open_url_in_unzoo(&mut self, url: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        if crate::unzoo_hub::launch_unzoo(Some(url)).is_ok() {
+            self.show_notice(if is_zh {
+                format!("🦁 已在 Unzoo Browser 中打开 {url}")
+            } else {
+                format!("🦁 Opened {url} in Unzoo Browser")
+            });
+        } else {
+            let _ = crate::links::open(url);
+            self.show_notice(if is_zh {
+                format!("已在默认浏览器打开 {url} (安装 Unzoo Browser 可获得 AI 受管预览)")
+            } else {
+                format!("Opened {url} in default browser")
+            });
+        }
+    }
+
+    fn toggle_unzoo_pause(&mut self, pause: bool) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let res = if pause {
+            unterm_services::providers::pause(crate::unzoo_hub::UNZOO_PROVIDER_ID).map(|_| ())
+        } else {
+            unterm_services::providers::resume(crate::unzoo_hub::UNZOO_PROVIDER_ID).map(|_| ())
+        };
+        match res {
+            Ok(()) => {
+                self.show_notice(if is_zh {
+                    if pause {
+                        "⏸ 已暂停 Unzoo Browser 的 AI 操控租约".to_string()
+                    } else {
+                        "▶ 已恢复 Unzoo Browser 的 AI 操控租约".to_string()
+                    }
+                } else if pause {
+                    "⏸ Paused Unzoo Browser AI leases".to_string()
+                } else {
+                    "▶ Resumed Unzoo Browser AI leases".to_string()
+                });
+            }
+            Err(err) => self.show_notice(format!("Unzoo lease toggle: {err}")),
+        }
+    }
+
+    fn unbind_unzoo(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match unterm_services::providers::unbind(crate::unzoo_hub::UNZOO_PROVIDER_ID) {
+            Ok(revoked) => {
+                self.show_notice(if is_zh {
+                    format!("\u{2713} 已解除 Unzoo Browser 绑定（吊销 {revoked} 个租约）")
+                } else {
+                    format!("\u{2713} Unbound Unzoo Browser ({revoked} leases revoked)")
+                });
+            }
+            Err(err) => self.show_notice(format!("Unzoo unbind: {err}")),
+        }
+    }
+
     fn open_checkpoints(&mut self) {
         let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
         let Some(cwd) = self.current_directory() else {
@@ -11547,6 +12470,21 @@ impl App {
                 crate::keys::Action::SplitRight,
             ),
             diagnose_entry,
+            crate::palette::Entry {
+                label: if is_zh {
+                    "🦁 Unzoo Browser 联动与受管预览 (AI 浏览器)…".to_string()
+                } else {
+                    "🦁 Unzoo Browser Synergy & AI Preview…".to_string()
+                },
+                hint: match crate::unzoo_hub::detect_state() {
+                    crate::unzoo_hub::UnzooState::Running { .. } => "Online ●".to_string(),
+                    crate::unzoo_hub::UnzooState::Installed { .. } => "Ready".to_string(),
+                    crate::unzoo_hub::UnzooState::NotInstalled => {
+                        if is_zh { "推荐安装".to_string() } else { "Get Unzoo".to_string() }
+                    }
+                },
+                command: crate::palette::Command::OpenUnzooHub,
+            },
             proxy_entry,
             action(t("menu.dir_jump"), crate::keys::Action::DirJump),
             action(t("menu.tree_sidebar"), crate::keys::Action::TreeSidebar),
@@ -11885,18 +12823,39 @@ impl App {
         }
     }
 
+    fn start_flyout_anim(&mut self) {
+        let now = std::time::Instant::now();
+        self.window.flyout_opened_at = Some(now);
+        self.window.animate_until = Some(now + std::time::Duration::from_millis(115));
+    }
+
     fn open_palette(&mut self, entries: Vec<crate::palette::Entry>) {
         self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.start_flyout_anim();
         self.window.drawn_revision = None;
     }
 
     fn open_named_palette(&mut self, entries: Vec<crate::palette::Entry>, title: String) {
         self.window.palette = Some(crate::palette::Palette::new(entries).titled(title));
+        self.start_flyout_anim();
         self.window.drawn_revision = None;
     }
 
     fn open_shell_selector(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
         let mut entries = launcher_entries();
+        entries.insert(
+            0,
+            crate::palette::Entry {
+                label: if is_zh {
+                    "🌿 新建隔离 Git Worktree 并行会话 (Worktree Studio)…".to_string()
+                } else {
+                    "🌿 New Isolated Git Worktree Session (Worktree Studio)…".to_string()
+                },
+                hint: "git worktree".to_string(),
+                command: crate::palette::Command::OpenWorktreeStudio,
+            },
+        );
         // Where people look for "a PowerShell as administrator": the list of
         // shells to start. It opens a separate window, as it must -- see
         // `admin` -- and the row says so.
@@ -11908,6 +12867,7 @@ impl App {
             });
         }
         self.window.palette = Some(crate::palette::Palette::shells(entries));
+        self.start_flyout_anim();
         self.window.drawn_revision = None;
     }
 
@@ -12493,6 +13453,49 @@ impl App {
             crate::palette::Command::FixFailureWithAgent { agent } => {
                 self.fix_failure_with_agent(&agent)
             }
+            crate::palette::Command::OpenWorktreeStudio => self.open_worktree_studio(),
+            crate::palette::Command::CreateWorktreeSession { agent } => {
+                self.create_worktree_session(agent.as_deref())
+            }
+            crate::palette::Command::MergeWorktree {
+                main_repo,
+                worktree_path,
+                branch,
+            } => self.merge_worktree(&main_repo, &worktree_path, &branch),
+            crate::palette::Command::RemoveWorktree {
+                main_repo,
+                worktree_path,
+            } => self.remove_worktree(&main_repo, &worktree_path),
+            crate::palette::Command::OpenGitDiffReview => self.open_git_diff_review(),
+            crate::palette::Command::InspectGitFileDiff { repo, path, code } => {
+                self.inspect_git_file_diff(&repo, &path, &code)
+            }
+            crate::palette::Command::RevertGitFile { repo, path, code } => {
+                self.revert_git_file(&repo, &path, &code)
+            }
+            crate::palette::Command::SendFileDiffToAgent { repo, path, code } => {
+                self.send_file_diff_to_agent(&repo, &path, &code)
+            }
+            crate::palette::Command::OpenFileAtLine { path, line } => {
+                let loc = match line {
+                    Some(l) => format!("{path}:{l}"),
+                    None => path,
+                };
+                let _ = crate::links::open_file_location(&loc, None);
+            }
+            crate::palette::Command::OpenAgentTelemetry => self.open_agent_telemetry(),
+            crate::palette::Command::SendCompactToAgent { pane_id } => {
+                self.send_compact_to_agent(pane_id)
+            }
+            crate::palette::Command::OpenSshRoaming => self.open_ssh_roaming(),
+            crate::palette::Command::CloneSshSession { command } => {
+                self.clone_ssh_session(&command)
+            }
+            crate::palette::Command::OpenUnzooHub => self.open_unzoo_hub(),
+            crate::palette::Command::LaunchOrBindUnzoo => self.launch_or_bind_unzoo(),
+            crate::palette::Command::OpenUrlInUnzoo { url } => self.open_url_in_unzoo(&url),
+            crate::palette::Command::ToggleUnzooPause { pause } => self.toggle_unzoo_pause(pause),
+            crate::palette::Command::UnbindUnzoo => self.unbind_unzoo(),
             crate::palette::Command::ConfirmSafePaste { pane_id, text } => {
                 self.perform_paste_input(pane_id, &text)
             }
@@ -13279,9 +14282,20 @@ impl App {
     ) {
         let scale = self.window.scale.max(0.5);
         let radius = (8.0 * scale).round();
+        let ease = self
+            .window
+            .flyout_opened_at
+            .map(|at| {
+                let elapsed = at.elapsed().as_secs_f32() * 1000.0;
+                crate::ui_tokens::ease_out_cubic(elapsed, 110.0)
+            })
+            .unwrap_or(1.0);
+        let lift_y = -(1.0 - ease) * 4.0 * scale;
+        let top = top + lift_y;
+        let fade = 0.72 + 0.28 * ease;
         for step in (1..=6).rev() {
             let spread = step as f32 * 2.0 * scale;
-            let alpha = 0.035 * (7 - step) as f32 / 6.0 + 0.012;
+            let alpha = (0.035 * (7 - step) as f32 / 6.0 + 0.012) * ease;
             quads.backgrounds.extend(unterm_render::rounded::panel(
                 left - spread,
                 top - spread + 4.0 * scale,
@@ -13291,11 +14305,12 @@ impl App {
                 [0.0, 0.0, 0.0, alpha],
             ));
         }
-        let stroke = if crate::chrome::is_light_surface(self.window.colors.background) {
+        let mut stroke = if crate::chrome::is_light_surface(self.window.colors.background) {
             [0.0, 0.0, 0.0, 0.10]
         } else {
             mix(self.window.colors.background, self.window.colors.foreground, 0.18)
         };
+        stroke[3] *= fade;
         quads.backgrounds.extend(unterm_render::rounded::panel(
             left - 1.0,
             top - 1.0,
@@ -13304,8 +14319,10 @@ impl App {
             radius + 1.0,
             stroke,
         ));
+        let mut card_fill = fill;
+        card_fill[3] *= fade;
         quads.backgrounds.extend(unterm_render::rounded::panel(
-            left, top, width, height, radius, fill,
+            left, top, width, height, radius, card_fill,
         ));
     }
 
@@ -17668,6 +18685,51 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         command: crate::palette::Command::SelectCaptureRegion,
     });
     let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "🦁 Unzoo Browser 联动中心与本地受管预览 (Unzoo AI Browser Hub)".to_string()
+        } else {
+            "🦁 Unzoo Browser Synergy Hub & Managed Preview".to_string()
+        },
+        hint: "Zero-Config MCP · Localhost Preview · Lease Control".to_string(),
+        command: crate::palette::Command::OpenUnzooHub,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "🌿 Git Worktree 并行工作台 (Isolated Worktree Studio)".to_string()
+        } else {
+            "🌿 Git Worktree Parallel Studio".to_string()
+        },
+        hint: "Parallel AI Worktrees · Merge · Clean".to_string(),
+        command: crate::palette::Command::OpenWorktreeStudio,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "🔍 Git 变更内嵌 Diff 审查与单文件回滚 (Inline Diff & Revert)".to_string()
+        } else {
+            "🔍 Inline Git Diff Review & Single-File Revert".to_string()
+        },
+        hint: "Inspect hunks · Revert file · Send to Agent".to_string(),
+        command: crate::palette::Command::OpenGitDiffReview,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📊 AI 智能体 Token / 上下文水位与耗时看板 (Agent Telemetry HUD)".to_string()
+        } else {
+            "📊 AI Agent Telemetry, Context & Cost HUD".to_string()
+        },
+        hint: "Context % · /compact · Cost".to_string(),
+        command: crate::palette::Command::OpenAgentTelemetry,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "🌐 SSH 远端服务器漫游与同目录会话克隆 (SSH Remote Roaming)".to_string()
+        } else {
+            "🌐 SSH Remote Server Roaming & Session Clone".to_string()
+        },
+        hint: "Clone SSH in same remote CWD · Reconnect".to_string(),
+        command: crate::palette::Command::OpenSshRoaming,
+    });
     entries.push(crate::palette::Entry {
         label: if is_zh {
             "Git 自动检查点与一键回滚 (Checkpoints)".to_string()

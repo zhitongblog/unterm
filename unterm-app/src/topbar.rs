@@ -267,14 +267,12 @@ pub fn layout_with_proxy(
 
     for (action, icon, label_key) in ACTIONS.iter().rev() {
         let wanted = if quiet {
-            // Keep Command Palette, Project Files, Split Right, and Settings
-            // directly reachable as quiet borderless icons in the top bar.
+            // Keep Command Palette, Project Files, and Split Right
+            // directly reachable as quiet icons in the top bar. Settings
+            // lives in the sidebar footer and the chevron menu (Cmd+,).
             matches!(
                 action,
-                Action::CommandPalette
-                    | Action::TreeSidebar
-                    | Action::SplitRight
-                    | Action::Settings
+                Action::CommandPalette | Action::TreeSidebar | Action::SplitRight
             )
         } else {
             match action {

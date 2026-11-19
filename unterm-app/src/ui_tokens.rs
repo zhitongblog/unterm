@@ -132,9 +132,9 @@ pub const LEFT_TAB_BAR_MIN_WIDTH: f32 = 144.0;
 pub const LEFT_TAB_BAR_RAIL_WIDTH: f32 = 36.0;
 /// Windows narrower than this (logical px) start with the strip on its rail.
 pub const LEFT_TAB_BAR_RAIL_BELOW: f32 = 900.0;
-/// The mark beside the row in front: Fluent's selection pill, 3px by 18px.
-pub const SELECTION_PILL_WIDTH: f32 = 2.5;
-pub const SELECTION_PILL_HEIGHT: f32 = 14.0;
+/// The mark beside the row in front: Fluent's selection pill, 3pt by 16pt.
+pub const SELECTION_PILL_WIDTH: f32 = 3.0;
+pub const SELECTION_PILL_HEIGHT: f32 = 16.0;
 /// Max width as a fraction of the window width.
 pub const LEFT_TAB_BAR_MAX_RATIO: f32 = 0.30;
 /// Width of the resize grip on the bar's right edge.
@@ -154,9 +154,31 @@ pub const GIT_PANEL_MIN_WIDTH: f32 = 160.0;
 /// Max width as a fraction of the window width.
 pub const GIT_PANEL_MAX_RATIO: f32 = 0.32;
 
+/// Smooth cubic-bezier ease-out curve (`1 - (1 - t)^3`) for 110ms GPU
+/// micro-animations (flyout entrance lift, sidebar selection pill glide).
+/// Automatically snaps to `1.0` when the OS requests reduced motion.
+pub fn ease_out_cubic(elapsed_ms: f32, duration_ms: f32) -> f32 {
+    if reduce_motion() || duration_ms <= 0.0 || elapsed_ms >= duration_ms {
+        return 1.0;
+    }
+    if elapsed_ms <= 0.0 {
+        return 0.0;
+    }
+    let t = (elapsed_ms / duration_ms).clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ease_out_cubic_is_monotonic_and_clamped() {
+        assert_eq!(ease_out_cubic(110.0, 110.0), 1.0);
+        assert_eq!(ease_out_cubic(200.0, 110.0), 1.0);
+        let mid = ease_out_cubic(55.0, 110.0);
+        assert!(mid >= 0.85 && mid <= 1.0, "mid={mid}");
+    }
 
     #[test]
     fn chrome_density_scale_is_ordered() {
