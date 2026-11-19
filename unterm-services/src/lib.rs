@@ -11,6 +11,8 @@ pub mod audit_store;
 pub mod brain_tools;
 pub mod bridge_registry;
 pub mod clash_api;
+pub mod consequence;
+pub mod reviewer;
 pub mod cockpit;
 pub mod diagnostics;
 pub mod env_names;

@@ -447,6 +447,17 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/health") => Response::ok_json(json!({"ok": true})),
         ("GET", "/api/state") => api_state(handler),
         ("GET", "/api/shells") => api_shells(),
+        ("GET", "/api/tell-rules") => Response::ok_json(super::tell_rules::api_list()),
+        ("POST", "/api/tell-rules/forget") => {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            match body.get("kind").and_then(Value::as_str).filter(|k| !k.trim().is_empty()) {
+                Some(kind) => match super::tell_rules::forget(kind) {
+                    Ok(rules) => Response::ok_json(json!(rules)),
+                    Err(e) => Response::err(500, "Internal Server Error", &format!("{e:#}")),
+                },
+                None => Response::err(400, "Bad Request", "kind is required"),
+            }
+        }
         ("POST", "/api/shells/install") => api_shell_install(&req.body),
         ("POST", "/api/shells/default") => api_shell_default_set(&req.body),
         ("POST", "/api/proxy") => api_proxy(handler, &req.body),

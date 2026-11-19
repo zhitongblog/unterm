@@ -768,7 +768,7 @@ fn run_view(run: &Run, step: Option<&Step>) -> Value {
 fn turn_view(run: &Run, step: Option<&Step>) -> Value {
     let mut view = run_view(run, step);
     let detail = step.map(|s| &s.detail);
-    for key in ["prompt", "reply", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers", "handovers"] {
+    for key in ["prompt", "reply", "fold", "activity", "continued", "terminals", "tabs", "purpose", "saved_skills", "skill_error", "helpers", "handovers"] {
         view[key] = detail.and_then(|d| d.get(key)).cloned().unwrap_or(Value::Null);
     }
     for key in ["activity", "terminals", "tabs", "helpers"] {
@@ -1116,6 +1116,17 @@ fn latest_conversation(store: &TaskStore, task: &Task, agent: &str) -> Result<Op
     Ok(None)
 }
 
+/// What the task last told the person on its own, if its latest run was
+/// one that started on its own and said something.
+fn told_on_its_own(store: &TaskStore, task: &Task) -> Option<String> {
+    let run = store.runs(&task.id).ok()?.into_iter().last()?;
+    let step = store.steps(&run.id).ok()?.into_iter().find(|s| s.kind == STEP_KIND)?;
+    if !matches!(step.detail.get("trigger").and_then(Value::as_str), Some("schedule" | "watch")) {
+        return None;
+    }
+    step.detail.get("reply").and_then(Value::as_str).map(str::trim).filter(|r| !r.is_empty()).map(str::to_string)
+}
+
 fn watch_of(task: &Task) -> Option<Watch> {
     task.detail.get("watch").cloned().and_then(|w| serde_json::from_value(w).ok())
 }
@@ -1179,6 +1190,22 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| task_prompt(&task));
+    // What the person said, for the reviewer of a sending step: the message
+    // they typed, or the task they saved when it runs on its own. Work
+    // another agent handed over, and the app's own instructions, are not.
+    let person_words: Value = match trigger {
+        "delegate" => Value::Null,
+        _ if request.save_skill => Value::Null,
+        "schedule" | "watch" => json!(task_prompt(&task)),
+        _ => json!(prompt),
+    };
+    // A run that starts on its own decides whether it should interrupt the
+    // person, by the rules they taught it and the hour.
+    let agent_prompt = if matches!(trigger, "schedule" | "watch") {
+        format!("{prompt}\n\n{}", super::tell_rules::run_note(&super::tell_rules::load(), chrono::Local::now()))
+    } else {
+        prompt.clone()
+    };
     let mut settings = run_settings();
     if let Some(cap) = request.autonomy_cap {
         if autonomy_rank(cap) < autonomy_rank(settings.autonomy) {
@@ -1190,6 +1217,19 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
         settings.agent = agent.to_string();
     }
     let workdir = workdir_for(&store, &task, &settings)?;
+    // The person answering something a task told them on its own: read the
+    // answer for how they want to be told, in the background.
+    if matches!(trigger, "manual" | "continue") && !request.save_skill {
+        if let Some(reply) = request.prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            if let Some(told) = told_on_its_own(&store, &task) {
+                if let Ok(argv) = super::agent_run::session_command(&settings.agent, &json!({"hosted": false})) {
+                    let argv: Vec<String> = argv.iter().filter_map(|a| a.as_str().map(str::to_string)).collect();
+                    let adapter = super::agent_run::adapter_name(&settings.agent).to_string();
+                    super::tell_rules::learn_in_background(argv, adapter, told, reply.to_string());
+                }
+            }
+        }
+    }
     let continue_from = match &request.continue_from {
         Some(session) => Some(session.clone()),
         None if request.follow_up => latest_conversation(&store, &task, &settings.agent)?,
@@ -1261,12 +1301,13 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
                         "command": command,
                         "session_id": session,
                         "prompt": if record.as_ref().is_some_and(|r| r.governed) {
-                            prompt.clone()
+                            agent_prompt.clone()
                         } else {
-                            super::agent_run::with_deliverables_note(&prompt)
+                            super::agent_run::with_deliverables_note(&agent_prompt)
                         },
                         // Today's level, not the one the conversation began under.
                         "autonomy": settings.autonomy.as_str(),
+                        "person_words": person_words,
                         "task_id": console_task_id,
                         "run_id": console_run_id,
                         "step_id": step_id,
@@ -1294,11 +1335,12 @@ pub fn run(handler: &McpHandler, request: RunRequest, trigger: &str) -> Result<V
             let governed = settings.governed && super::agent_run::supports_governed(&settings.agent);
             let mut body = json!({
                 "agent": settings.agent,
-                "prompt": if governed { prompt.clone() } else { super::agent_run::with_deliverables_note(&prompt) },
+                "prompt": if governed { agent_prompt.clone() } else { super::agent_run::with_deliverables_note(&agent_prompt) },
                 "hosted": true,
                 "governed": governed,
                 "autonomy": settings.autonomy.as_str(),
                 "browser_profile": settings.browser_profile,
+                "person_words": person_words,
                 "task_id": console_task_id,
                 "run_id": console_run_id,
                 "step_id": step_id,
@@ -1452,6 +1494,13 @@ impl Turn {
                 self.waiting = false;
                 self.approval_resolved(event);
             }
+            "approval.reviewed" => {
+                let approval = &event["approval"];
+                let request = &approval["request_id"];
+                if let Some(entry) = self.activity.iter_mut().rev().find(|a| a.get("request_id") == Some(request)) {
+                    entry["review"] = approval["review"].clone();
+                }
+            }
             "turn.completed" | "session.closed" => {
                 self.ended = Some(event.get("state").and_then(Value::as_str).unwrap_or("finished").to_string());
             }
@@ -1514,6 +1563,11 @@ impl Turn {
                 if let Some(risk) = approval.get("risk") {
                     entry["risk"] = risk.clone();
                 }
+                for key in ["consequence", "commit", "repeat", "review"] {
+                    if let Some(value) = approval.get(key) {
+                        entry[key] = value.clone();
+                    }
+                }
             }
             None if room => {
                 let arguments = &approval["tool_call"]["arguments"];
@@ -1521,14 +1575,20 @@ impl Turn {
                 let risk = approval.get("risk").cloned().unwrap_or_else(|| {
                     json!(tool_risk::classify(&tool, arguments, self.cwd.as_deref()).map(|r| r.as_str()))
                 });
-                self.activity.push(json!({
+                let mut entry = json!({
                     "tool": tool,
                     "verb": verb,
                     "target": target,
                     "risk": risk,
                     "request_id": request,
                     "at": event.get("at").cloned().unwrap_or(Value::Null),
-                }));
+                });
+                for key in ["consequence", "commit", "repeat", "review"] {
+                    if let Some(value) = approval.get(key) {
+                        entry[key] = value.clone();
+                    }
+                }
+                self.activity.push(entry);
             }
             None => {}
         }
@@ -1546,6 +1606,9 @@ impl Turn {
             };
             entry["decided_by"] = json!(by);
             entry["decision"] = json!(if approval["decision"] == "deny" { "deny" } else { "allow" });
+            if let Some(reason) = approval.get("reason") {
+                entry["review"] = json!({"state": "allow", "reason": reason});
+            }
         }
     }
 
@@ -1833,6 +1896,12 @@ fn follow(task: TaskId, run: RunId, step: StepId, session: String, mut detail: V
     detail["waiting"] = json!(false);
     detail["summary"] = json!(turn.summary());
     detail["reply"] = json!(turn.reply());
+    if matches!(detail.get("trigger").and_then(Value::as_str), Some("schedule" | "watch")) {
+        if let Some((fold, reply)) = super::tell_rules::fold(&turn.reply()) {
+            detail["fold"] = json!(fold);
+            detail["reply"] = json!(reply);
+        }
+    }
     detail["activity"] = json!(turn.activity);
     detail["terminals"] = json!(turn.terminals);
     detail["tabs"] = json!(turn.tabs);

@@ -175,7 +175,11 @@ const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shel
 web fetching are switched off. Run every command through the unterm MCP \
 server: open a terminal with its session.create tool when you need one, run commands with \
 exec.run_wait and read their output from the result. For anything in a web browser use the \
-unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
+unzoo MCP tools. Prefer the terminal for work on this computer (files, documents, installed programs \
+through their command line or scripting), the browser for websites, and never drive the screen when \
+a command can do it. Sending, publishing, paying and deleting in a browser are checked against what \
+the user asked for and may be shown to them first; do each once, and if you are unsure whether it \
+went through, look before trying again. Calls that could do harm are shown to the user for approval first; when one is \
 refused, say what you needed it for instead of trying another way. When something needs the user \
 themselves (signing in, a captcha, a code sent to their phone, a password or card number), never \
 type it yourself and never ask for it in the chat: call the unterm MCP tool agent_session.handover \
@@ -446,6 +450,10 @@ pub(crate) fn agent_of(adapter: &str) -> Option<&'static str> {
     }
 }
 
+pub(crate) fn adapter_name(agent_id: &str) -> &'static str {
+    adapter_of(agent_id)
+}
+
 fn adapter_of(agent_id: &str) -> &'static str {
     match agent_id {
         "claude-code" => "claude",
@@ -518,6 +526,19 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
             return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
         }
         params.insert("cwd".into(), json!(cwd));
+    }
+    // What the person said, for the reviewer of a sending step: given by
+    // the console's task runner, else the prompt itself when the person
+    // started it here. A helper's prompt is another agent's words.
+    match body.get("person_words") {
+        Some(Value::String(words)) => {
+            params.insert("person_words".into(), json!(words));
+        }
+        Some(_) => {}
+        None if !helper => {
+            params.insert("person_words".into(), json!(prompt));
+        }
+        None => {}
     }
     // Carried onto every event and log line, so the console can thread them
     // back onto the task they belong to.
@@ -656,6 +677,8 @@ pub fn api_session_act(handler: &McpHandler, method: &str, body: &[u8]) -> Respo
     }
     if let Some(text) = string_field(&body, "text") {
         params.insert("text".into(), json!(text));
+        // Typed into the console or the phone: the person's own words.
+        params.insert("from_person".into(), json!(true));
     }
     if let Some(grace) = body.get("grace_ms").and_then(Value::as_u64) {
         params.insert("grace_ms".into(), json!(grace));

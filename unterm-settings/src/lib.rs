@@ -10,6 +10,7 @@ mod agent_run;
 mod browser;
 pub mod clients;
 mod console_tasks;
+pub mod tell_rules;
 pub use console_tasks::{run_settings, set_run_settings, RunSettings};
 mod console_watch;
 mod watch_calendar;
