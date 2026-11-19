@@ -234,6 +234,7 @@ pub fn learn_prompt(told: &str, reply: &str, rules: &Rules) -> String {
         .collect();
     let told: String = told.chars().take(3000).collect();
     let reply: String = reply.chars().take(2000).collect();
+    let language = language_of(&reply);
     format!(
         r#"An assistant sent the person a message on its own (from a schedule, or because mail or a page changed). The person then replied. Decide whether the reply says how they want to be told about this kind of thing.
 
@@ -254,8 +255,22 @@ Answer with one JSON object and nothing else:
 - "none": anything else: thanks, agreement, a question, a new request, a reply about the content itself.
 - wish: "now" = they want it sooner or right away; "later" = it can wait, keep it but do not interrupt; "silent" = do not tell them.
 - hours: only if they named a time ("after 21:00", "on weekends"); otherwise null. "Not at this hour" means "later" for that time of day, never "silent".
-- kind: a general category, not this one item ("vendor invoices", not "the AWS invoice"), written in the language of <reply>. Reuse one of these if it fits: {kinds:?}."#
+- kind: a general category, not this one item ("vendor invoices", not "the AWS invoice"), written in {language}. Reuse one of these if it fits: {kinds:?}."#
     )
+}
+
+/// The language to name a kind in: the person's, read from their reply.
+fn language_of(reply: &str) -> &'static str {
+    let has = |range: std::ops::RangeInclusive<char>| reply.chars().any(|c| range.contains(&c));
+    if has('\u{3040}'..='\u{30ff}') {
+        "Japanese"
+    } else if has('\u{ac00}'..='\u{d7af}') {
+        "Korean"
+    } else if has('\u{4e00}'..='\u{9fff}') {
+        "Chinese, as the reply is Chinese"
+    } else {
+        "the language of <reply>"
+    }
 }
 
 pub fn parse_learned(reply: &str) -> Option<Learned> {
@@ -400,6 +415,7 @@ mod tests {
         };
         let rule = ask("Your Uniqlo order is out for delivery.", "以后快递的事别提醒我了").unwrap();
         assert!(rule.rule && rule.wish == Wish::Silent, "{rule:?}");
+        assert!(rule.kind.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)), "named in Chinese: {rule:?}");
         let clue = ask("Reminder: the AWS invoice is due today.", "Today? It came in last week. I'd rather have heard when it arrived.").unwrap();
         assert!(!clue.rule && clue.wish == Wish::Now, "{clue:?}");
         assert!(ask("Standup moved to 10:00 tomorrow.", "thanks!").is_none());
