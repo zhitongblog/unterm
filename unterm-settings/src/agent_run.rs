@@ -144,11 +144,17 @@ pub(crate) fn api_client_browser() -> Response {
     let Some(script) = script else {
         return Response::err(404, "Not Found", "Unzoo Browser's setup (setup-mcp.ps1) was not found");
     };
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Silent")
-        .output();
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output();
     match output {
         Ok(out) if out.status.success() => Response::ok_json(json!({"ok": true})),
         Ok(out) => Response::err(

@@ -6,13 +6,7 @@
 //! live `+added -deleted` diff stats per worktree in the sidebar and palette,
 //! and supports 1-click squash-merge back to the base branch or clean removal.
 
-use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-
-const STAT_TTL: Duration = Duration::from_secs(3);
 
 /// One active Git worktree discovered via `git worktree list --porcelain`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,52 +43,27 @@ impl DiffStat {
     }
 }
 
-struct StatCache {
-    entries: HashMap<PathBuf, (Instant, DiffStat)>,
-    in_flight: HashSet<PathBuf>,
-}
-
-fn stat_cache() -> &'static Mutex<StatCache> {
-    static CACHE: OnceLock<Mutex<StatCache>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        Mutex::new(StatCache {
-            entries: HashMap::new(),
-            in_flight: HashSet::new(),
-        })
-    })
-}
-
 /// Non-blocking diff stat lookup for the UI thread (sidebar / topbar).
-/// Schedules a background `git diff --numstat HEAD` refresh when stale.
+/// Reads directly from the existing `git::cache()` dirty file count so the
+/// sidebar never spawns extra background `git diff` / `git ls-files` processes.
 pub fn cached_diff_stat(directory: &Path) -> Option<DiffStat> {
-    let mut cache = stat_cache().lock();
-    let existing = cache.entries.get(directory).copied();
-    let stale = existing
-        .map(|(at, _)| at.elapsed() >= STAT_TTL)
-        .unwrap_or(true);
-    if stale && cache.in_flight.insert(directory.to_path_buf()) {
-        let dir = directory.to_path_buf();
-        let spawned = std::thread::Builder::new()
-            .name("wt-diff-stat".into())
-            .spawn(move || {
-                let stat = compute_diff_stat(&dir);
-                let mut cache = stat_cache().lock();
-                cache.in_flight.remove(&dir);
-                cache.entries.insert(dir, (Instant::now(), stat));
-                crate::mcp_host::request_repaint();
-            });
-        if spawned.is_err() {
-            stat_cache().lock().in_flight.remove(directory);
-        }
+    let files = crate::git::cached_dirty_count(directory);
+    if files == 0 {
+        None
+    } else {
+        Some(DiffStat {
+            files,
+            added: 0,
+            deleted: 0,
+        })
     }
-    existing.map(|(_, stat)| stat).filter(|s| !s.is_clean())
 }
 
 /// Compute working-tree `+added -deleted` and untracked file count synchronously.
 pub fn compute_diff_stat(directory: &Path) -> DiffStat {
     let mut stat = DiffStat::default();
     if let Ok(out) = crate::git::hidden_command("git")
-        .args(["diff", "--numstat", "HEAD", "--"])
+        .args(["--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", "--"])
         .current_dir(directory)
         .output()
     {
@@ -103,7 +72,7 @@ pub fn compute_diff_stat(directory: &Path) -> DiffStat {
         }
     }
     if let Ok(out) = crate::git::hidden_command("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
+        .args(["--no-pager", "ls-files", "--others", "--exclude-standard"])
         .current_dir(directory)
         .output()
     {

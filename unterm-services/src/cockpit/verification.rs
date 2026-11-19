@@ -531,8 +531,11 @@ fn terminate_process_tree(child: &mut std::process::Child) {
 fn shell_command(command: &str) -> Command {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         let mut process = Command::new("cmd.exe");
-        process.args(["/D", "/S", "/C", command]);
+        process
+            .args(["/D", "/S", "/C", command])
+            .creation_flags(0x0800_0000);
         process
     }
     #[cfg(not(windows))]

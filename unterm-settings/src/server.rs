@@ -1306,9 +1306,14 @@ fn api_shell_install(body: &[u8]) -> Response {
             &format!("installer '{}' was not found", plan.program),
         );
     }
-    match std::process::Command::new(&plan.program)
-        .args(&plan.args)
-        .spawn()
+    let mut cmd = std::process::Command::new(&plan.program);
+    cmd.args(&plan.args).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    match cmd.spawn()
     {
         Ok(_) => Response::ok_json(json!({
             "ok": true,
@@ -1818,10 +1823,14 @@ fn program_exists(program: &str) -> bool {
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
-        .args(args)
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }

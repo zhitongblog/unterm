@@ -421,8 +421,14 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                     // exist" — a corrupt binary exists — and not a checksum,
                     // which says the bytes arrived and nothing about whether
                     // they run on this machine.
-                    let output = std::process::Command::new(path)
-                        .arg("--version")
+                    let mut cmd = std::process::Command::new(path);
+                    cmd.arg("--version").stdin(std::process::Stdio::null());
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        cmd.creation_flags(0x0800_0000);
+                    }
+                    let output = cmd
                         .output()
                         .map_err(|error| anyhow!("{} did not start: {error}", path.display()))?;
                     if !output.status.success() {

@@ -9919,12 +9919,13 @@ impl App {
         let _ = std::thread::Builder::new()
             .name("setup-ai-agents".to_string())
             .spawn(move || {
+                let cli_name = format!("unterm-cli{}", std::env::consts::EXE_SUFFIX);
                 let cli = std::env::current_exe()
                     .ok()
-                    .and_then(|exe| exe.parent().map(|dir| dir.join("unterm-cli")))
+                    .and_then(|exe| exe.parent().map(|dir| dir.join(&cli_name)))
                     .filter(|path| path.is_file())
-                    .unwrap_or_else(|| std::path::PathBuf::from("unterm-cli"));
-                match std::process::Command::new(&cli).arg("setup-ai").output() {
+                    .unwrap_or_else(|| std::path::PathBuf::from(cli_name));
+                match crate::git::hidden_command(&cli.to_string_lossy()).arg("setup-ai").output() {
                     Ok(out) if out.status.success() => {
                         crate::updates::notify(if is_zh {
                             "\u{2713} AI Agent MCP 自动配置已完成".to_string()
@@ -11801,7 +11802,7 @@ impl App {
         let git_status = cwd
             .as_deref()
             .and_then(|dir| {
-                std::process::Command::new("git")
+                crate::git::hidden_command("git")
                     .args(["status", "--short"])
                     .current_dir(dir)
                     .output()
@@ -11871,7 +11872,7 @@ impl App {
             })
             .unwrap_or_default();
         let cwd = self.focused_directory().unwrap_or_else(|| ".".to_string());
-        let git_status = std::process::Command::new("git")
+        let git_status = crate::git::hidden_command("git")
             .args(["status", "--short"])
             .current_dir(&cwd)
             .output()

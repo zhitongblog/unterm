@@ -203,7 +203,13 @@ fn empty_sample(worktree_health: WorktreeHealth) -> WorktreeSample {
 
 fn git(repo: &Path, args: &[&str]) -> std::io::Result<String> {
     let mut command = Command::new("git");
-    command.arg("-C").arg(repo).args(args);
+    command
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

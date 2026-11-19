@@ -107,8 +107,12 @@ fn parse_branch(header: &str, status: &mut Status) {
 /// program makes Windows pop one for it and take it away again. Opening the
 /// git panel did exactly that, and it is very visible. No-op elsewhere.
 pub fn hidden_command(program: &str) -> std::process::Command {
-    #[allow(unused_mut)]
     let mut command = std::process::Command::new(program);
+    command
+        .stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_OPTIONAL_LOCKS", "0");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -212,23 +216,26 @@ pub fn read_cached(directory: &std::path::Path) -> Panel {
 /// moment after its tab first appears and follows a checkout within seconds.
 pub fn branch_hint(directory: &std::path::Path) -> Option<String> {
     let known = cache().lock().get(directory).map(|(at, panel)| (at.elapsed(), panel.clone()));
-    let stale = known.as_ref().map_or(true, |(age, _)| *age >= CACHE_TTL * 5);
+    let stale = known.as_ref().map_or(true, |(age, _)| *age >= CACHE_TTL * 15);
     if stale {
         static REFRESHING: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashSet<std::path::PathBuf>>> =
             std::sync::OnceLock::new();
         let refreshing = REFRESHING.get_or_init(Default::default);
         if refreshing.lock().insert(directory.to_path_buf()) {
             let directory = directory.to_path_buf();
+            let prev_panel = known.as_ref().map(|(_, p)| p.clone());
             let spawned = std::thread::Builder::new()
                 .name("git-branch".into())
                 .spawn({
                     let directory = directory.clone();
                     move || {
-                        let _ = read_cached(&directory);
+                        let fresh = read_cached(&directory);
                         REFRESHING.get().map(|set| set.lock().remove(&directory));
-                        // The row that asked is drawn already; draw it again
-                        // now that there is a branch to show.
-                        crate::mcp_host::request_repaint();
+                        // Only request a repaint if the branch/status actually changed,
+                        // avoiding a self-perpetuating repaint -> spawn loop while idle.
+                        if prev_panel.as_ref() != Some(&fresh) {
+                            crate::mcp_host::request_repaint();
+                        }
                     }
                 });
             if spawned.is_err() {
@@ -241,6 +248,14 @@ pub fn branch_hint(directory: &std::path::Path) -> Option<String> {
         // once. Pre-cut to 28 characters here, it was cut a second time there.
         Panel::Status(status) if !status.branch.is_empty() => Some(status.branch.clone()),
         _ => None,
+    }
+}
+
+/// Number of dirty entries already cached for `directory` without spawning any git process.
+pub fn cached_dirty_count(directory: &std::path::Path) -> usize {
+    match cache().lock().get(directory).map(|(_, panel)| panel) {
+        Some(Panel::Status(status)) => status.entries.len(),
+        _ => 0,
     }
 }
 
@@ -328,7 +343,7 @@ pub fn file_diff(directory: &std::path::Path, path: &str, code: &str) -> (Vec<St
         }
     } else {
         if let Ok(out) = hidden_command("git")
-            .args(["diff", "HEAD", "--", path])
+            .args(["--no-pager", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", path])
             .current_dir(directory)
             .output()
         {
@@ -336,7 +351,7 @@ pub fn file_diff(directory: &std::path::Path, path: &str, code: &str) -> (Vec<St
         }
         if raw.trim().is_empty() {
             if let Ok(out) = hidden_command("git")
-                .args(["diff", "--", path])
+                .args(["--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--", path])
                 .current_dir(directory)
                 .output()
             {

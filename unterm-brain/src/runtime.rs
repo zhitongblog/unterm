@@ -482,11 +482,14 @@ impl Running {
         }
         #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
             let _ = grace;
             let _ = Command::new("taskkill")
                 .args(["/PID", &self.pid.to_string(), "/T", "/F"])
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .creation_flags(0x0800_0000)
                 .status();
         }
         // Reap it, so the interrupted brain does not linger as a zombie.

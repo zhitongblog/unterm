@@ -108,7 +108,12 @@ fn save_locked(fleets: &[Fleet]) {
 /// `git` with no console flash on Windows (same trick as git_panel).
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(args);
+    cmd.arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

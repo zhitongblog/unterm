@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.71.30 — 2026-11-19
+
+### Fixed
+
+- **Eliminated repeated background console/terminal window popups (`worktree.rs`, `git.rs`, `review.rs`, `window.rs`, `links.rs`, `remote.rs`, `server.rs`, `agent_run.rs`, `updater.rs`, `verification.rs`, `records.rs`, `gcloud.rs`, `runtime.rs`).**
+  - Replaced the sidebar's 3-second background `git diff --numstat` / `git ls-files` polling thread (`worktree::cached_diff_stat`) with a zero-process read from `git::cached_dirty_count`, and gated `git::branch_hint`'s `request_repaint()` on actual status changes so idle windows never enter a self-perpetuating repaint-and-spawn loop.
+  - Fixed a debounce gap in `cockpit::review::record_auto_checkpoint` where unchanged working trees (`sha == latest.sha`) returned early without updating the debounce timestamp, causing `statsbar` to spawn 6 `git` processes per second after the first 60 seconds.
+  - Added `CREATE_NO_WINDOW` (`0x0800_0000`), `Stdio::null()`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `GIT_OPTIONAL_LOCKS=0`, and `--no-pager --no-ext-diff --no-textconv` across all background subprocess invocations on Windows.
+
 ## v0.71.29 — 2026-11-19
 
 ### Added
