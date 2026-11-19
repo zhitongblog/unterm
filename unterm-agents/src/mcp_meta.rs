@@ -69,7 +69,7 @@ pub const MCP_METHODS: &[McpMethod] = &[
         summary: "Spawn a new tab; optionally specify cwd, shell command, argv, or profile.",
         params: &[
             Param { name: "cwd", kind: "string", required: false, summary: "Working directory." },
-            Param { name: "command", kind: "string", required: false, summary: "Shell command string; runs through the platform shell." },
+            Param { name: "command", kind: "string", required: false, summary: "Shell command string; runs through the platform shell (cmd /C on Windows, $SHELL -lc elsewhere). To pick a shell, pass argv instead." },
             Param { name: "argv", kind: "array", required: false, summary: "Program argv array; starts argv[0] directly without shell wrapping." },
             Param { name: "profile", kind: "string", required: false, summary: "Identity profile name." },
         ],

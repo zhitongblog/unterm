@@ -166,6 +166,29 @@ fn installed_product_name() -> Option<String> {
     .clone()
 }
 
+/// The terminal's name as programs inside it see it (`TERM_PROGRAM`): the
+/// person's choice in `compat.json` (some tools only recognise a few
+/// terminals), else the product's name as one word -- `Unterm`, or
+/// `UnzooOne` for Unzoo One.
+pub fn term_program() -> String {
+    state_path("compat.json")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("term_program").and_then(|v| v.as_str()).map(str::trim).map(str::to_string))
+        .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
+        .unwrap_or_else(default_term_program)
+}
+
+/// [`term_program`] when the person has not chosen one.
+pub fn default_term_program() -> String {
+    let name: String = product_name().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
+    if name.is_empty() {
+        "Unterm".into()
+    } else {
+        name
+    }
+}
+
 /// Whether this process is the standalone Unterm, not a product shipping it.
 pub fn is_standalone() -> bool {
     product_name() == "Unterm"

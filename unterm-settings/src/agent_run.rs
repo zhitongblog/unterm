@@ -205,7 +205,7 @@ const HELPERS_PROMPT: &str = "Another agent on this machine can take a self-cont
 /// browser profile chosen for it, and (unless it is a helper) that it may
 /// hand work on.
 fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
-    let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE}");
+    let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE} {}", super::server::shells_prompt());
     if let Some(profile) = browser_profile.map(str::trim).filter(|p| !p.is_empty()) {
         if unzoo_service_path().is_some() && profile != super::browser::RESERVED_PROFILE {
             prompt.push(' ');
