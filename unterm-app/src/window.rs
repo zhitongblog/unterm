@@ -483,6 +483,8 @@ struct PaneNotice {
     command_started_at: Option<std::time::Instant>,
     /// Exit code of the last finished command (`OSC 133;D`), if reported.
     last_exit_code: Option<i32>,
+    /// Elapsed wall-clock milliseconds of the last finished command (`OSC 133;C` -> `D`).
+    last_command_elapsed_ms: Option<u64>,
 }
 
 /// The chevron's open dropdown: its rows, and where it sits.
@@ -1079,6 +1081,7 @@ impl WindowState {
             pocket_qr: None,
             last_agent_states: Default::default(),
             ssh_targets: Default::default(),
+            pane_dev_urls: Default::default(),
             flyout_opened_at: None,
             sidebar_pill_anim: None,
         }
@@ -1389,6 +1392,7 @@ struct WindowState {
     last_agent_states:
         std::collections::HashMap<u64, unterm_services::cockpit::status::AgentState>,
     ssh_targets: std::collections::HashMap<usize, String>,
+    pane_dev_urls: std::collections::HashMap<usize, String>,
     flyout_opened_at: Option<std::time::Instant>,
     sidebar_pill_anim: Option<(f32, f32, std::time::Instant)>,
 }
@@ -7034,7 +7038,10 @@ impl App {
             let command_just_finished = marks.finished != notice.commands_seen;
             let command_elapsed = if command_just_finished {
                 notice.last_exit_code = marks.last_exit;
-                notice.command_started_at.take().map(|t| t.elapsed())
+                let elapsed = notice.command_started_at.take().map(|t| t.elapsed());
+                notice.last_command_elapsed_ms =
+                    elapsed.map(|d| d.as_millis().min(u64::MAX as u128) as u64);
+                elapsed
             } else {
                 None
             };
@@ -7096,6 +7103,9 @@ impl App {
             }
             notice.revision = pulse.revision;
             notice.progress = pulse.progress;
+            if let Some(dev_url) = crate::unzoo_hub::extract_dev_urls(&tail).into_iter().next() {
+                self.window.pane_dev_urls.insert(session.id, dev_url);
+            }
             unterm_services::cockpit::status::on_screen_tail(session.id as u64, &tail);
             unterm_services::cockpit::status::on_title_change(session.id as u64, &session.title);
         }
@@ -11301,6 +11311,15 @@ impl App {
                 hint: "Unzoo Preview".to_string(),
                 command: crate::palette::Command::OpenUrlInUnzoo { url: url.clone() },
             });
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("🔄 抓取 Unzoo Browser 页面报错并投喂给终端 AI Agent 自动修复: {url}")
+                } else {
+                    format!("🔄 Bridge Unzoo Browser Errors to Terminal AI Agent (Self-Heal): {url}")
+                },
+                hint: "Full-Stack Heal".to_string(),
+                command: crate::palette::Command::BridgeUnzooErrorsToAgent { url: url.clone() },
+            });
         }
 
         match state {
@@ -11538,6 +11557,25 @@ impl App {
             }
             Err(err) => self.show_notice(format!("Unzoo unbind: {err}")),
         }
+    }
+
+    fn bridge_unzoo_errors_to_agent(&mut self, url: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        // Ensure Unzoo Browser is open on the target URL if installed.
+        let _ = crate::unzoo_hub::launch_unzoo(Some(url));
+        let prompt = crate::unzoo_hub::build_frontend_heal_prompt(url, None, is_zh);
+        // Prefer an active AI agent pane in the current tab or window; fall back to focused pane.
+        let statuses = unterm_services::cockpit::status::snapshot();
+        let target_pane = statuses
+            .first()
+            .map(|s| s.pane_id as usize)
+            .unwrap_or_else(|| self.focused_session());
+        let _ = self.engine.write_input(target_pane, &prompt);
+        self.show_notice(if is_zh {
+            format!("🦁 已将 `{url}` 前端自愈指令发送至 AI 窗格 #{target_pane}")
+        } else {
+            format!("🦁 Sent `{url}` frontend self-healing prompt to pane #{target_pane}")
+        });
     }
 
     fn open_checkpoints(&mut self) {
@@ -11907,17 +11945,37 @@ impl App {
                 .map(|prog| (prog.to_string(), prog.to_string()))
                 .collect()
         };
-        let mut entries = vec![crate::palette::Entry {
-            label: if is_zh {
-                "\u{1F4CB} 复制结构化报错诊断包到剪贴板 (Markdown)".to_string()
-            } else {
-                "\u{1F4CB} Copy Structured Error Report to Clipboard (Markdown)".to_string()
+        let mut entries = vec![
+            crate::palette::Entry {
+                label: if is_zh {
+                    "\u{1F4CB} 一键复制上一条命令的纯净输出 (OSC 133 命令块提取)".to_string()
+                } else {
+                    "\u{1F4CB} Copy Last Command Clean Output (OSC 133 Command Block)".to_string()
+                },
+                hint: "Clean stdout/stderr".to_string(),
+                command: crate::palette::Command::CopyLastCommandOutput,
             },
-            hint: exit_code
-                .map(|c| format!("exit {c}"))
-                .unwrap_or_else(|| "40 lines + git status".to_string()),
-            command: crate::palette::Command::CopyFailureContext,
-        }];
+            crate::palette::Entry {
+                label: if is_zh {
+                    "\u{1F4E8} 将上一条命令及输出直接投喂给当前活跃 AI Agent 窗格".to_string()
+                } else {
+                    "\u{1F4E8} Send Last Command & Output to Active AI Agent Pane".to_string()
+                },
+                hint: "Feed to Agent".to_string(),
+                command: crate::palette::Command::SendLastCommandToAgent,
+            },
+            crate::palette::Entry {
+                label: if is_zh {
+                    "\u{1F4CB} 复制结构化报错诊断包到剪贴板 (Markdown)".to_string()
+                } else {
+                    "\u{1F4CB} Copy Structured Error Report to Clipboard (Markdown)".to_string()
+                },
+                hint: exit_code
+                    .map(|c| format!("exit {c}"))
+                    .unwrap_or_else(|| "40 lines + git status".to_string()),
+                command: crate::palette::Command::CopyFailureContext,
+            },
+        ];
         for (name, program) in candidates {
             entries.push(crate::palette::Entry {
                 label: if is_zh {
@@ -11951,6 +12009,74 @@ impl App {
             "\u{2713} 已复制报错上下文诊断包到剪贴板".to_string()
         } else {
             "\u{2713} Copied failure diagnosis report to clipboard".to_string()
+        });
+    }
+
+    fn extract_pane_last_command(&self, pane_id: usize) -> crate::command_block::CommandBlock {
+        let notice = self
+            .window
+            .pane_notices
+            .get(&pane_id)
+            .copied()
+            .unwrap_or_default();
+        let lines = self
+            .engine
+            .read_screen(pane_id)
+            .ok()
+            .map(|s| s.lines)
+            .unwrap_or_default();
+        crate::command_block::extract_last_command(
+            &lines,
+            notice.last_exit_code,
+            notice.last_command_elapsed_ms,
+        )
+    }
+
+    fn copy_last_command_output(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane = self.focused_session();
+        let block = self.extract_pane_last_command(pane);
+        let text = block.clean_output();
+        if text.trim().is_empty() {
+            self.show_notice(if is_zh {
+                "当前窗格暂无可提取的上一条命令输出".to_string()
+            } else {
+                "No recent command output found in focused pane".to_string()
+            });
+            return;
+        }
+        let line_count = block.output_lines.len();
+        self.copy_text(&text);
+        self.show_notice(if is_zh {
+            match block.command.as_deref() {
+                Some(cmd) => format!("\u{2713} 已复制 `{cmd}` 的纯净输出 ({line_count} 行)"),
+                None => format!("\u{2713} 已复制上一条命令输出 ({line_count} 行)"),
+            }
+        } else {
+            match block.command.as_deref() {
+                Some(cmd) => format!("\u{2713} Copied clean output of `{cmd}` ({line_count} lines)"),
+                None => format!("\u{2713} Copied last command output ({line_count} lines)"),
+            }
+        });
+    }
+
+    fn send_last_command_to_agent(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let source_pane = self.focused_session();
+        let block = self.extract_pane_last_command(source_pane);
+        let prompt = block.agent_fix_prompt(is_zh);
+        let statuses = unterm_services::cockpit::status::snapshot();
+        let target_pane = statuses
+            .iter()
+            .find(|s| s.pane_id as usize != source_pane)
+            .or_else(|| statuses.first())
+            .map(|s| s.pane_id as usize)
+            .unwrap_or(source_pane);
+        let _ = self.engine.write_input(target_pane, &prompt);
+        self.show_notice(if is_zh {
+            format!("\u{2713} 已将上一条命令及输出发送至窗格 #{target_pane}")
+        } else {
+            format!("\u{2713} Sent last command & output to pane #{target_pane}")
         });
     }
 
@@ -13497,6 +13623,11 @@ impl App {
             crate::palette::Command::OpenUrlInUnzoo { url } => self.open_url_in_unzoo(&url),
             crate::palette::Command::ToggleUnzooPause { pause } => self.toggle_unzoo_pause(pause),
             crate::palette::Command::UnbindUnzoo => self.unbind_unzoo(),
+            crate::palette::Command::BridgeUnzooErrorsToAgent { url } => {
+                self.bridge_unzoo_errors_to_agent(&url)
+            }
+            crate::palette::Command::CopyLastCommandOutput => self.copy_last_command_output(),
+            crate::palette::Command::SendLastCommandToAgent => self.send_last_command_to_agent(),
             crate::palette::Command::ConfirmSafePaste { pane_id, text } => {
                 self.perform_paste_input(pane_id, &text)
             }
@@ -15415,16 +15546,21 @@ impl App {
             if !notice.error && exit_code == 0 {
                 continue;
             }
+            let dur_suffix = notice
+                .last_command_elapsed_ms
+                .filter(|&ms| ms >= 500)
+                .map(|ms| format!(" · {}", crate::command_block::CommandBlock::duration_badge(ms)))
+                .unwrap_or_default();
             let label = if is_zh {
                 if exit_code != 0 {
-                    format!("●  AI 诊断 · exit {exit_code}")
+                    format!("●  AI 诊断 · exit {exit_code}{dur_suffix}")
                 } else {
-                    "●  AI 诊断".to_string()
+                    format!("●  AI 诊断{dur_suffix}")
                 }
             } else if exit_code != 0 {
-                format!("●  Diagnose · exit {exit_code}")
+                format!("●  Diagnose · exit {exit_code}{dur_suffix}")
             } else {
-                "●  Diagnose".to_string()
+                format!("●  Diagnose{dur_suffix}")
             };
             let text_w = self.chrome_width(&label);
             let pill_w = (text_w + 14.0 * pt).round();
@@ -15459,9 +15595,82 @@ impl App {
             .map(|(session_id, ..)| session_id)
     }
 
+    /// Quiet corner micro-pills for panes running a detected localhost dev server (`🦁 Unzoo :5173`).
+    fn pane_unzoo_pills(&mut self) -> Vec<(usize, f32, f32, f32, f32, String)> {
+        if self.window.pane_dev_urls.is_empty() {
+            return Vec::new();
+        }
+        let placements = self.placements();
+        if placements.is_empty() {
+            return Vec::new();
+        }
+        let metrics = self.window.font.metrics();
+        let pt = self.chrome_pt();
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let max_grid_right = placements
+            .iter()
+            .map(|placement| placement.origin.0 + placement.cols as f32 * metrics.width)
+            .fold(0.0_f32, f32::max);
+        let has_split = placements.len() > 1;
+        let active = self.focused_session();
+        let mut pills = Vec::new();
+        for placement in placements {
+            let Some(url) = self.window.pane_dev_urls.get(&placement.session_id) else {
+                continue;
+            };
+            let port_badge = crate::unzoo_hub::short_port_badge(url);
+            let label = if is_zh {
+                format!("🦁 Unzoo 预览 {port_badge}")
+            } else {
+                format!("🦁 Unzoo {port_badge}")
+            };
+            let text_w = self.chrome_width(&label);
+            let pill_w = (text_w + 14.0 * pt).round();
+            let pill_h = (self.window.chrome_font.metrics().height + 6.0 * pt)
+                .round()
+                .max(20.0 * pt);
+            let grid_right = placement.origin.0 + placement.cols as f32 * metrics.width;
+            let pane_right = if (grid_right - max_grid_right).abs() <= 0.5 {
+                self.terminal_left() + self.terminal_width()
+            } else {
+                grid_right
+            };
+            let right_inset = if has_split && placement.session_id == active {
+                metrics.width * 3.0 + 6.0 * pt
+            } else {
+                10.0 * pt
+            };
+            let notice = self
+                .window
+                .pane_notices
+                .get(&placement.session_id)
+                .copied()
+                .unwrap_or_default();
+            let has_err_pill = notice.error || notice.last_exit_code.unwrap_or(0) != 0;
+            let left = (pane_right - right_inset - pill_w).max(placement.origin.0 + 4.0 * pt);
+            let top = if has_err_pill {
+                placement.origin.1 + 6.0 * pt + pill_h + 4.0 * pt
+            } else {
+                placement.origin.1 + 6.0 * pt
+            };
+            pills.push((placement.session_id, left, top, pill_w, pill_h, label));
+        }
+        pills
+    }
+
+    fn pane_unzoo_pill_at(&mut self, x: f32, y: f32) -> Option<usize> {
+        self.pane_unzoo_pills()
+            .into_iter()
+            .find(|(_, left, top, width, height, _)| {
+                x >= *left && x < left + width && y >= *top && y < top + height
+            })
+            .map(|(session_id, ..)| session_id)
+    }
+
     fn append_pane_error_pills(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
         let pills = self.pane_error_pills();
-        if pills.is_empty() {
+        let unzoo_pills = self.pane_unzoo_pills();
+        if pills.is_empty() && unzoo_pills.is_empty() {
             return;
         }
         let pt = self.chrome_pt();
@@ -15497,6 +15706,41 @@ impl App {
                     + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
                     .max(0.0);
             self.append_chrome(&label, chrome.status_err, (text_left, text_top), quads);
+        }
+
+        let hovered_unzoo = self.pane_unzoo_pill_at(self.window.pointer.0, self.window.pointer.1);
+        for (session_id, left, top, width, height, label) in unzoo_pills {
+            let is_hovered = hovered_unzoo == Some(session_id);
+            let radius = height / 2.0;
+            let mut fill = chrome.selected_bg;
+            if is_hovered {
+                fill[3] = (fill[3] + 0.14).min(1.0);
+            }
+            let mut outline = chrome.focus_rail;
+            outline[3] = if is_hovered { 0.72 } else { 0.42 };
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left - 1.0,
+                top - 1.0,
+                width + 2.0,
+                height + 2.0,
+                radius + 1.0,
+                outline,
+            ));
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left,
+                top,
+                width,
+                height,
+                radius,
+                fill,
+            ));
+            let text_w = self.chrome_width(&label);
+            let text_left = left + ((width - text_w) / 2.0).max(4.0 * pt);
+            let text_top = top
+                + ((height - self.window.chrome_font.metrics().height) / 2.0
+                    + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+                    .max(0.0);
+            self.append_chrome(&label, chrome.focus_rail, (text_left, text_top), quads);
         }
     }
 
@@ -16896,6 +17140,14 @@ impl ApplicationHandler for App {
                     {
                         self.focus_session(session_id);
                         self.open_failure_diagnosis();
+                        self.window.drawn_revision = None;
+                        return;
+                    }
+                    if let Some(session_id) =
+                        self.pane_unzoo_pill_at(self.window.pointer.0, self.window.pointer.1)
+                    {
+                        self.focus_session(session_id);
+                        self.open_unzoo_hub();
                         self.window.drawn_revision = None;
                         return;
                     }
@@ -18686,6 +18938,24 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         command: crate::palette::Command::SelectCaptureRegion,
     });
     let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📋 一键复制上一条命令的纯净输出 (Copy Last Command Output)".to_string()
+        } else {
+            "📋 Copy Last Command Clean Output (OSC 133 Command Block)".to_string()
+        },
+        hint: "OSC 133 · Clean stdout/stderr".to_string(),
+        command: crate::palette::Command::CopyLastCommandOutput,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📨 将上一条命令及输出直接投喂给当前活跃 AI Agent 窗格".to_string()
+        } else {
+            "📨 Send Last Command & Output to Active AI Agent Pane".to_string()
+        },
+        hint: "Feed Command Block to Agent".to_string(),
+        command: crate::palette::Command::SendLastCommandToAgent,
+    });
     entries.push(crate::palette::Entry {
         label: if is_zh {
             "🦁 Unzoo Browser 联动中心与本地受管预览 (Unzoo AI Browser Hub)".to_string()

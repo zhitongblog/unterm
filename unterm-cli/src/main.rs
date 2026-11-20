@@ -38,6 +38,7 @@ mod session;
 mod sessions;
 mod settings;
 mod setup_ai;
+mod studio;
 mod theme;
 mod upload;
 mod workspace;
@@ -64,6 +65,7 @@ use session::SessionCommand;
 use sessions::SessionsCommand;
 use settings::SettingsCommand;
 use setup_ai::SetupAiCommand;
+use studio::{TelemetryCommand, UnzooCommand, WorktreeCommand};
 use theme::ThemeCommand;
 use upload::UploadCommand;
 use workspace::WorkspaceCommand;
@@ -202,6 +204,24 @@ enum SubCommand {
         about = "Inspect, merge, discard, or roll back agent-produced changes (Agent Cockpit)"
     )]
     Review(ReviewCommand),
+
+    #[command(
+        name = "worktree",
+        about = "Create, list, squash-merge, or remove isolated Git worktrees for parallel AI agents"
+    )]
+    Worktree(WorktreeCommand),
+
+    #[command(
+        name = "telemetry",
+        about = "Inspect live AI agent context window occupancy, token usage, and cost across panes"
+    )]
+    Telemetry(TelemetryCommand),
+
+    #[command(
+        name = "unzoo",
+        about = "Inspect Unzoo Browser synergy status, open localhost previews, or bridge frontend errors to terminal agents"
+    )]
+    Unzoo(UnzooCommand),
 
     #[command(
         name = "screenshot",
@@ -448,6 +468,9 @@ fn main() -> Result<()> {
         SubCommand::Agent(cmd) => run_agent(cmd, opts.json),
         SubCommand::Fleet(cmd) => run_fleet(cmd, opts.json),
         SubCommand::Review(cmd) => run_review(cmd, opts.json),
+        SubCommand::Worktree(cmd) => studio::run_worktree(cmd, opts.json),
+        SubCommand::Telemetry(cmd) => studio::run_telemetry(cmd, opts.json),
+        SubCommand::Unzoo(cmd) => studio::run_unzoo(cmd, opts.json),
         SubCommand::ShellCompletion { shell } => {
             use clap::CommandFactory;
             let mut cmd = Opt::command();

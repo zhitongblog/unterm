@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.71.31 — 2026-11-20
+
+### Added
+
+- **MCP Protocol & CLI Expansion for Worktree Studio, Agent Telemetry, Command Blocks, and Unzoo Synergy (165 MCP methods / 38 CLI commands).**
+  - Added 9 new MCP tools (`worktree.list`, `worktree.create`, `worktree.merge`, `worktree.remove`, `telemetry.status`, `screen.last_command`, `unzoo.status`, `unzoo.preview`, `unzoo.bridge_errors`) with full gateway risk-band classification in `unterm-gateway`.
+  - Added `unterm-cli worktree {list, create, merge, remove}`, `unterm-cli telemetry status`, and `unterm-cli unzoo {status, preview, bridge-errors}`.
+- **`OSC 133` Command Block Actions & Elapsed Duration Micro-Pills (`command_block.rs`, `window.rs`).**
+  - Extracts the most recent executed command and its clean stdout/stderr output between shell prompts (POSIX / Zsh / Starship / PowerShell) for 1-click **Copy Last Command Clean Output** and **Send Last Command & Output to Active AI Agent Pane**.
+  - Upgraded the corner failure diagnosis micro-pill to display command execution duration alongside exit status (`● AI 诊断 · exit 1 · 4.2s`).
+- **Unterm × Unzoo Full-Stack Self-Healing Workflow (`unzoo_hub.rs`, `window.rs`).**
+  - Live dev-server URL auto-sniffer surfaces a floating corner micro-pill (`🦁 Unzoo 预览 :5173`) whenever a pane starts a localhost server (`localhost`, `127.0.0.1`, `0.0.0.0`), opening the Unzoo Browser Synergy Hub on click.
+  - Added 1-click **Bridge Unzoo Browser Errors to Terminal AI Agent (Self-Heal)** to feed frontend console/network errors directly into the active terminal AI coding agent pane.
+
 ## v0.71.30 — 2026-11-19
 
 ### Fixed

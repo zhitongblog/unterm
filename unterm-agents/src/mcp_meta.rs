@@ -638,6 +638,40 @@ pub const MCP_METHODS: &[McpMethod] = &[
         Param { name: "command", kind: "array", required: false, summary: "Program and arguments to run instead of the configured shell." },
     ] },
     McpMethod { name: "instance.windows", namespace: "instance", summary: "Every window this front end is showing, with the ids instance.focus takes.", params: NO_PARAMS },
+    // ---- worktree / telemetry / unzoo / command-block ----
+    McpMethod { name: "worktree.list", namespace: "cockpit", summary: "List active Git worktrees for a repository with live diff stats (+added -deleted and dirty file count).", params: &[
+        Param { name: "cwd", kind: "string", required: false, summary: "Repository or worktree directory; defaults to the active pane's cwd." },
+    ] },
+    McpMethod { name: "worktree.create", namespace: "cockpit", summary: "Create an isolated Git worktree (<repo>.worktrees/<slug> on branch wt/<slug>) and optionally open a pane in it.", params: &[
+        Param { name: "cwd", kind: "string", required: false, summary: "Repository directory; defaults to the active pane's cwd." },
+        Param { name: "name", kind: "string", required: false, summary: "Slug hint for the branch/worktree folder (e.g. 'fix-auth' or 'claude')." },
+        Param { name: "open_session", kind: "bool", required: false, summary: "Also create a live Unterm terminal session in the new worktree directory." },
+    ] },
+    McpMethod { name: "worktree.merge", namespace: "cockpit", summary: "Auto-commit uncommitted changes in a secondary worktree, squash-merge its branch into main_repo, and clean up the worktree.", params: &[
+        Param { name: "main_repo", kind: "string", required: true, summary: "Path to the main Git repository worktree." },
+        Param { name: "worktree_path", kind: "string", required: true, summary: "Path to the secondary worktree to merge and remove." },
+        Param { name: "branch", kind: "string", required: true, summary: "Branch name of the secondary worktree (e.g. 'wt/fix-auth')." },
+    ] },
+    McpMethod { name: "worktree.remove", namespace: "cockpit", summary: "Remove an isolated Git worktree and prune stale worktree metadata.", params: &[
+        Param { name: "main_repo", kind: "string", required: true, summary: "Path to the main Git repository worktree." },
+        Param { name: "worktree_path", kind: "string", required: true, summary: "Path to the secondary worktree to remove." },
+    ] },
+    McpMethod { name: "telemetry.status", namespace: "cockpit", summary: "Extract live AI agent context window percentage, token count, session cost ($), and context pressure across panes.", params: &[
+        P_PANE_ID,
+    ] },
+    McpMethod { name: "screen.last_command", namespace: "screen", summary: "Extract the most recent shell command and its clean stdout/stderr output block from a pane.", params: &[
+        P_PANE_ID,
+    ] },
+    McpMethod { name: "unzoo.status", namespace: "provider", summary: "Detect Unzoo Browser installation/MCP binding status, active capability leases, and live localhost dev-server URLs across panes.", params: NO_PARAMS },
+    McpMethod { name: "unzoo.preview", namespace: "provider", summary: "Open a localhost dev-server URL (or auto-sniffed pane URL) inside Unzoo Browser's managed environment.", params: &[
+        Param { name: "url", kind: "string", required: false, summary: "Target URL to preview; omit to auto-sniff from pane_id or active panes." },
+        P_PANE_ID,
+    ] },
+    McpMethod { name: "unzoo.bridge_errors", namespace: "provider", summary: "Bridge frontend console/network errors from Unzoo Browser into a terminal AI agent pane for automatic self-healing.", params: &[
+        Param { name: "url", kind: "string", required: true, summary: "Localhost dev-server URL being debugged in Unzoo Browser." },
+        Param { name: "error", kind: "string", required: false, summary: "Optional frontend console/network error message captured by Unzoo Browser." },
+        P_PANE_ID,
+    ] },
 ];
 
 // CLI inventory. The MCP server runs in a different binary than the CLI,
@@ -675,6 +709,9 @@ pub const CLI_COMMANDS: &[CliCommand] = &[
     CliCommand { name: "agent", summary: "Install, authenticate, configure, launch, and run AI coding-agent CLIs headlessly.", subcommands: &["list", "show", "install", "update", "uninstall", "repair-path", "auth", "configure", "import", "plan", "launch", "run", "manifest", "status", "signal", "inbox", "enable-hooks", "whoami", "trusted", "trust", "untrust"] },
     CliCommand { name: "fleet", summary: "Run one task across N agents in N isolated git worktrees (Agent Cockpit).", subcommands: &["launch", "list", "clean", "retry"] },
     CliCommand { name: "review", summary: "Inspect, merge, discard, or roll back agent-produced changes (Agent Cockpit).", subcommands: &["list", "diff", "verify", "merge", "discard", "rollback", "open"] },
+    CliCommand { name: "worktree", summary: "Create, list, squash-merge, or remove isolated Git worktrees for parallel AI agents.", subcommands: &["list", "create", "merge", "remove"] },
+    CliCommand { name: "telemetry", summary: "Inspect live AI agent context window occupancy, token usage, and cost across panes.", subcommands: &["status"] },
+    CliCommand { name: "unzoo", summary: "Inspect Unzoo Browser synergy status, open localhost previews, or bridge frontend errors to terminal agents.", subcommands: &["status", "preview", "bridge-errors"] },
     CliCommand { name: "lang", summary: "List, set, or print the active interface locale.", subcommands: &["list", "set", "current"] },
     CliCommand { name: "show-keys", summary: "Show key assignments (effective from config).", subcommands: &[] },
     CliCommand { name: "ls-fonts", summary: "Display information about fonts.", subcommands: &[] },
@@ -708,7 +745,7 @@ mod tests {
         // that is the whole mechanism. A surface that grows without anyone
         // noticing is one where a method ships undocumented, unclassified and
         // untested, and the count is the only thing that makes a person look.
-        assert_eq!(MCP_METHODS.len(), 156);
+        assert_eq!(MCP_METHODS.len(), 165);
         let namespaces: std::collections::HashSet<_> = MCP_METHODS
             .iter()
             .filter_map(|method| method.name.split('.').next())

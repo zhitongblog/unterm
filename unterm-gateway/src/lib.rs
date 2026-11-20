@@ -339,6 +339,8 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         // handed out; neither can be undone by re-issuing them.
         "provider.unbind",
         "provider.revoke_lease",
+        "worktree.merge",
+        "worktree.remove",
         // Deleting evidence. The bytes go, and no later apology brings them
         // back.
         "artifact.forget",
@@ -448,6 +450,7 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         // The envelope runs whatever it carries; the method inside is judged
         // on its own terms as well.
         "terminal.invoke",
+        "unzoo.bridge_errors",
     ];
     if EXEC_PREFIXES
         .iter()
@@ -501,6 +504,8 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         // surface's own methods because they are not the same door and an
         // audit trail should not have to guess which one wrote the file.
         "brain.write",
+        "worktree.create",
+        "unzoo.preview",
     ];
     if MUTATING_PREFIXES
         .iter()
@@ -534,6 +539,9 @@ pub fn risk_of(method: &str) -> Option<Risk> {
         "review.list",
         "review.diff",
         "review.verify",
+        "worktree.list",
+        "telemetry.status",
+        "unzoo.status",
         "workspace.list",
         "agent.list",
         "agent.status",

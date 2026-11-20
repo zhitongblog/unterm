@@ -161,6 +161,51 @@ pub fn extract_dev_urls(lines: &[String]) -> Vec<String> {
     urls
 }
 
+/// Extract a compact `:port` badge (e.g. `:5173`) from a localhost URL for corner pills.
+pub fn short_port_badge(url: &str) -> String {
+    let without_scheme = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
+    if let Some((_, port)) = host_port.rsplit_once(':') {
+        let digits: String = port.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() {
+            return format!(":{digits}");
+        }
+    }
+    url.to_string()
+}
+
+/// Construct a full-stack self-healing prompt to feed into the active terminal AI agent
+/// so it inspects and fixes frontend runtime/console errors on `url` via Unzoo Browser.
+pub fn build_frontend_heal_prompt(url: &str, console_error: Option<&str>, is_zh: bool) -> String {
+    match console_error.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(err) => {
+            if is_zh {
+                format!(
+                    "Unzoo Browser 在预览 `{url}` 时捕获到前端控制台/网络报错：`{err}`。请定位并修复对应源码，确保页面无报错。\r"
+                )
+            } else {
+                format!(
+                    "Unzoo Browser captured a frontend console/network error on `{url}`: `{err}`. Please locate and fix the root cause in the source code.\r"
+                )
+            }
+        }
+        None => {
+            if is_zh {
+                format!(
+                    "请通过 Unzoo Browser 检查本地开发服 `{url}` 的页面 DOM 与控制台报错，验证前端渲染并自动修复发现的任何异常。\r"
+                )
+            } else {
+                format!(
+                    "Please inspect `{url}` in Unzoo Browser for console/network errors or DOM rendering issues, and automatically fix any problems found.\r"
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +225,7 @@ mod tests {
                 "http://localhost:5173/".to_string(),
             ]
         );
+        assert_eq!(short_port_badge("http://localhost:5173/"), ":5173");
+        assert_eq!(short_port_badge("http://127.0.0.1:3000/dashboard"), ":3000");
     }
 }

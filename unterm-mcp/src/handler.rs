@@ -251,6 +251,11 @@ fn method_is_mutating(method: &str) -> bool {
             | "terminal.invoke"
             | "terminal.accept_lease"
             | "terminal.cancel"
+            | "worktree.create"
+            | "worktree.merge"
+            | "worktree.remove"
+            | "unzoo.preview"
+            | "unzoo.bridge_errors"
     )
 }
 
@@ -328,6 +333,10 @@ fn method_is_read_only(method: &str) -> bool {
             | "review.list"
             | "review.diff"
             | "ghost.debug"
+            | "worktree.list"
+            | "telemetry.status"
+            | "screen.last_command"
+            | "unzoo.status"
     )
 }
 
@@ -5996,6 +6005,14 @@ impl McpHandler {
             "review.rollback" => self.review_rollback(params),
             "review.merge" => self.review_merge(params),
             "review.discard" => self.review_discard(params),
+            "worktree.list" => self.worktree_list(params),
+            "worktree.create" => self.worktree_create(params),
+            "worktree.merge" => self.worktree_merge(params),
+            "worktree.remove" => self.worktree_remove(params),
+            "telemetry.status" => self.telemetry_status(params),
+            "unzoo.status" => self.unzoo_status(params),
+            "unzoo.preview" => self.unzoo_preview(params),
+            "unzoo.bridge_errors" => self.unzoo_bridge_errors(params),
             "ghost.debug" => self.ghost_debug(params),
             // Suggest API — agents propose text; the user decides
             // whether it reaches the PTY (Tab/Esc in the suggest UI).
@@ -6038,6 +6055,7 @@ impl McpHandler {
             "screen.cursor" => self.screen_cursor(params),
             "screen.scroll" => self.screen_scroll(params),
             "screen.clear" => self.screen_clear(params),
+            "screen.last_command" => self.screen_last_command(params),
             "screen.search" => self.screen_search(params),
             "screen.detect_errors" => self.screen_detect_errors(params),
             // Signal
@@ -8338,6 +8356,710 @@ impl McpHandler {
             &format!("fleet={fleet_id} member={member}"),
         );
         Ok(out)
+    }
+
+    fn hidden_git(dir: &std::path::Path, args: &[&str]) -> Result<std::process::Output> {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["--no-pager"])
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .env("GIT_OPTIONAL_LOCKS", "0");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        cmd.output().with_context(|| format!("run git {args:?}"))
+    }
+
+    fn resolve_target_cwd(&self, params: &Value) -> Result<std::path::PathBuf> {
+        if let Some(s) = params
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(std::path::PathBuf::from(s));
+        }
+        let engine = self.engine();
+        if let Ok(active_id) =
+            Self::resolve_active_pane_id(&*engine, PaneResolutionOptions::ACTIVE_EXISTING)
+        {
+            if let Ok(snap) = engine.get_session(active_id) {
+                if let Some(cwd) = snap.shell.cwd.as_deref() {
+                    return Ok(std::path::PathBuf::from(cwd));
+                }
+            }
+        }
+        if let Ok(sessions) = engine.list_sessions() {
+            if let Some(first) = sessions.first() {
+                if let Some(cwd) = first.shell.cwd.as_deref() {
+                    return Ok(std::path::PathBuf::from(cwd));
+                }
+            }
+        }
+        std::env::current_dir().context("resolve current working directory")
+    }
+
+    fn worktree_list(&self, params: &Value) -> Result<Value> {
+        let cwd = self.resolve_target_cwd(params)?;
+        let out = Self::hidden_git(&cwd, &["worktree", "list", "--porcelain"])?;
+        if !out.status.success() {
+            return Err(anyhow!(
+                "git worktree list failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let raw = String::from_utf8_lossy(&out.stdout);
+        let mut worktrees = Vec::new();
+        let mut cur_path: Option<std::path::PathBuf> = None;
+        let mut cur_head = String::new();
+        let mut cur_branch: Option<String> = None;
+
+        let flush = |list: &mut Vec<Value>,
+                     p: &mut Option<std::path::PathBuf>,
+                     h: &mut String,
+                     b: &mut Option<String>| {
+            if let Some(wt_path) = p.take() {
+                let is_main = list.is_empty();
+                let mut files = 0usize;
+                let mut added = 0usize;
+                let mut deleted = 0usize;
+                if let Ok(numstat) = Self::hidden_git(
+                    &wt_path,
+                    &["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", "--"],
+                ) {
+                    if numstat.status.success() {
+                        for line in String::from_utf8_lossy(&numstat.stdout).lines() {
+                            let mut parts = line.split('\t');
+                            if let (Some(a), Some(d), Some(f)) =
+                                (parts.next(), parts.next(), parts.next())
+                            {
+                                if !f.trim().is_empty() {
+                                    files += 1;
+                                    added += a.trim().parse::<usize>().unwrap_or(0);
+                                    deleted += d.trim().parse::<usize>().unwrap_or(0);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Ok(untracked) = Self::hidden_git(
+                    &wt_path,
+                    &["ls-files", "--others", "--exclude-standard"],
+                ) {
+                    if untracked.status.success() {
+                        files += String::from_utf8_lossy(&untracked.stdout)
+                            .lines()
+                            .filter(|l| !l.trim().is_empty())
+                            .count();
+                    }
+                }
+                list.push(json!({
+                    "path": wt_path.display().to_string(),
+                    "head": std::mem::take(h),
+                    "branch": b.take(),
+                    "is_main": is_main,
+                    "files_changed": files,
+                    "added": added,
+                    "deleted": deleted,
+                }));
+            }
+        };
+
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                flush(&mut worktrees, &mut cur_path, &mut cur_head, &mut cur_branch);
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("worktree ") {
+                flush(&mut worktrees, &mut cur_path, &mut cur_head, &mut cur_branch);
+                cur_path = Some(std::path::PathBuf::from(rest.trim()));
+            } else if let Some(rest) = trimmed.strip_prefix("HEAD ") {
+                cur_head = rest.trim().to_string();
+            } else if let Some(rest) = trimmed.strip_prefix("branch ") {
+                cur_branch = Some(
+                    rest.trim()
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(rest.trim())
+                        .to_string(),
+                );
+            }
+        }
+        flush(&mut worktrees, &mut cur_path, &mut cur_head, &mut cur_branch);
+        Ok(json!({ "worktrees": worktrees }))
+    }
+
+    fn worktree_create(&self, params: &Value) -> Result<Value> {
+        let cwd = self.resolve_target_cwd(params)?;
+        let name_hint = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("session");
+        let open_session = params
+            .get("open_session")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let root_out = Self::hidden_git(&cwd, &["rev-parse", "--show-toplevel"])?;
+        if !root_out.status.success() {
+            return Err(anyhow!("Not inside a Git repository: {}", cwd.display()));
+        }
+        let root = std::path::PathBuf::from(String::from_utf8_lossy(&root_out.stdout).trim());
+        let repo_name = root
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("repo");
+        let parent = root.parent().unwrap_or(&root);
+        let slug: String = name_hint
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .collect::<String>()
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("-");
+        let slug = if slug.is_empty() {
+            "agent".to_string()
+        } else {
+            slug.chars().take(28).collect()
+        };
+        let container = parent.join(format!("{repo_name}.worktrees"));
+        std::fs::create_dir_all(&container)?;
+        let mut candidate = slug.clone();
+        let mut suffix = 2usize;
+        while container.join(&candidate).exists() {
+            candidate = format!("{slug}-{suffix}");
+            suffix += 1;
+        }
+        let wt_path = container.join(&candidate);
+        let mut branch = format!("wt/{candidate}");
+        let out = Self::hidden_git(
+            &root,
+            &["worktree", "add", "-b", &branch, &wt_path.to_string_lossy(), "HEAD"],
+        )?;
+        if !out.status.success() {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() % 1000)
+                .unwrap_or(1);
+            branch = format!("wt/{candidate}-{stamp}");
+            let retry = Self::hidden_git(
+                &root,
+                &["worktree", "add", "-b", &branch, &wt_path.to_string_lossy(), "HEAD"],
+            )?;
+            if !retry.status.success() {
+                return Err(anyhow!(
+                    "git worktree add failed: {}",
+                    String::from_utf8_lossy(&retry.stderr).trim()
+                ));
+            }
+        }
+        let wt_str = wt_path.display().to_string();
+        let pane_id = if open_session {
+            let env = unterm_services::launch_env::read_unterm_proxy_env().unwrap_or_default();
+            let launch_policy = launch_policy_for_env(&env, &[], None);
+            self.engine()
+                .create_session(CreateSessionRequest {
+                    cols: 120,
+                    rows: 32,
+                    command_dir: Some(wt_str.clone()),
+                    command: None,
+                    env,
+                    launch_policy,
+                })
+                .ok()
+                .map(|snap| snap.id as u64)
+        } else {
+            None
+        };
+        let pane_id_str = pane_id.map(|id| id.to_string());
+        self.audit(
+            "worktree.create",
+            pane_id_str.as_deref(),
+            &format!("path={wt_str} branch={branch}"),
+        );
+        Ok(json!({
+            "path": wt_str,
+            "branch": branch,
+            "main_repo": root.display().to_string(),
+            "pane_id": pane_id,
+        }))
+    }
+
+    fn worktree_merge(&self, params: &Value) -> Result<Value> {
+        let main_repo = params
+            .get("main_repo")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'main_repo'"))?;
+        let worktree_path = params
+            .get("worktree_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'worktree_path'"))?;
+        let branch = params
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'branch'"))?;
+
+        let main_dir = std::path::Path::new(main_repo);
+        let wt_dir = std::path::Path::new(worktree_path);
+        if wt_dir.exists() {
+            let status_out = Self::hidden_git(wt_dir, &["status", "--porcelain"])?;
+            if !String::from_utf8_lossy(&status_out.stdout).trim().is_empty() {
+                let _ = Self::hidden_git(wt_dir, &["add", "-A"]);
+                let _ = Self::hidden_git(
+                    wt_dir,
+                    &["commit", "-m", &format!("unterm worktree snapshot ({branch})")],
+                );
+            }
+        }
+        let merge_out = Self::hidden_git(main_dir, &["merge", "--squash", branch])?;
+        if !merge_out.status.success() {
+            return Err(anyhow!(
+                "git merge --squash failed: {}",
+                String::from_utf8_lossy(&merge_out.stderr).trim()
+            ));
+        }
+        let _ = Self::hidden_git(main_dir, &["worktree", "remove", "--force", worktree_path]);
+        let _ = Self::hidden_git(main_dir, &["worktree", "prune"]);
+        self.audit(
+            "worktree.merge",
+            None,
+            &format!("main={main_repo} worktree={worktree_path} branch={branch}"),
+        );
+        Ok(json!({
+            "merged": true,
+            "branch": branch,
+            "main_repo": main_repo,
+            "removed_worktree": worktree_path,
+        }))
+    }
+
+    fn worktree_remove(&self, params: &Value) -> Result<Value> {
+        let main_repo = params
+            .get("main_repo")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'main_repo'"))?;
+        let worktree_path = params
+            .get("worktree_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'worktree_path'"))?;
+        let main_dir = std::path::Path::new(main_repo);
+        let out = Self::hidden_git(main_dir, &["worktree", "remove", "--force", worktree_path])?;
+        let _ = Self::hidden_git(main_dir, &["worktree", "prune"]);
+        if !out.status.success() {
+            return Err(anyhow!(
+                "git worktree remove failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        self.audit(
+            "worktree.remove",
+            None,
+            &format!("main={main_repo} worktree={worktree_path}"),
+        );
+        Ok(json!({
+            "removed": true,
+            "worktree_path": worktree_path,
+        }))
+    }
+
+    fn telemetry_status(&self, params: &Value) -> Result<Value> {
+        let filter_pane = Self::pane_id_param(params)?;
+        let sessions = self.engine().list_sessions()?;
+        let statuses = unterm_services::cockpit::status::snapshot();
+        let mut panes = Vec::new();
+        for session in sessions {
+            if let Some(target) = filter_pane {
+                if session.id != target {
+                    continue;
+                }
+            }
+            let lines = self
+                .engine()
+                .read_screen(session.id)
+                .map(|s| s.lines)
+                .unwrap_or_default();
+            let mut context_pct: Option<u8> = None;
+            let mut tokens: Option<String> = None;
+            let mut cost_usd: Option<String> = None;
+
+            for line in lines.iter().rev().take(24) {
+                let lower = line.to_ascii_lowercase();
+                if context_pct.is_none() {
+                    for (idx, _) in lower.match_indices('%') {
+                        let before = lower[..idx].trim_end();
+                        let after = lower[idx + 1..].trim_start();
+                        let digits: String = before
+                            .chars()
+                            .rev()
+                            .take_while(|c| c.is_ascii_digit())
+                            .collect::<String>()
+                            .chars()
+                            .rev()
+                            .collect();
+                        if let Ok(val) = digits.parse::<u8>() {
+                            if val <= 100 {
+                                let prefix = before[..before.len() - digits.len()].trim_end();
+                                if after.starts_with("context left")
+                                    || after.starts_with("ctx left")
+                                    || after.starts_with("remaining")
+                                {
+                                    context_pct = Some(100u8.saturating_sub(val));
+                                    break;
+                                }
+                                if prefix.ends_with("ctx")
+                                    || prefix.ends_with("ctx:")
+                                    || prefix.ends_with("context")
+                                    || prefix.ends_with("context:")
+                                    || after.starts_with("context")
+                                    || after.starts_with("ctx")
+                                {
+                                    context_pct = Some(val);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if cost_usd.is_none() {
+                    for word in line.split_whitespace() {
+                        let clean = word.trim_matches(|c: char| {
+                            matches!(c, '(' | ')' | '[' | ']' | ',' | ';' | '|')
+                        });
+                        if let Some(rest) = clean.strip_prefix('$') {
+                            if rest.contains('.')
+                                && rest.chars().all(|c| c.is_ascii_digit() || c == '.')
+                            {
+                                cost_usd = Some(format!("${rest}"));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if tokens.is_none() {
+                    let words: Vec<&str> = lower.split_whitespace().collect();
+                    for i in 0..words.len() {
+                        let w = words[i].trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.');
+                        let has_tok_next = i + 1 < words.len()
+                            && (words[i + 1].starts_with("tok") || words[i + 1].starts_with("in"));
+                        if (w.ends_with('k') || w.ends_with('m')) && w.len() >= 2 {
+                            let num = &w[..w.len() - 1];
+                            if num.chars().all(|c| c.is_ascii_digit() || c == '.') && has_tok_next {
+                                tokens = Some(w.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            let pressure = match context_pct {
+                Some(p) if p >= 85 => "critical",
+                Some(p) if p >= 70 => "elevated",
+                _ => "normal",
+            };
+            let st = statuses.iter().find(|s| s.pane_id == session.id as u64);
+            panes.push(json!({
+                "pane_id": session.id,
+                "title": session.title,
+                "cwd": session.shell.cwd,
+                "process_name": session.shell.process_name,
+                "agent": st.map(|s| s.agent.clone()),
+                "state": st.map(|s| s.state.as_str()),
+                "context_pct": context_pct,
+                "tokens": tokens,
+                "cost_usd": cost_usd,
+                "pressure": pressure,
+                "compact_recommended": pressure == "critical",
+            }));
+        }
+        Ok(json!({ "panes": panes }))
+    }
+
+    fn screen_last_command(&self, params: &Value) -> Result<Value> {
+        let engine = self.engine();
+        let pane_id = self.resolve_pane_id(
+            &*engine,
+            params,
+            PaneResolutionOptions::ACTIVE_REQUIRED,
+        )?;
+        let screen = engine.read_screen(pane_id)?;
+        let lines = screen.lines;
+        let mut end = lines.len();
+        while end > 0 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        let parse_prompt = |line: &str| -> Option<Option<String>> {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Some(rest) = trimmed.strip_prefix("PS ") {
+                if let Some((_, after)) = rest.split_once('>') {
+                    let cmd = after.trim();
+                    return Some((!cmd.is_empty()).then(|| cmd.to_string()));
+                }
+            }
+            for marker in [" ❯ ", " ➜ ", "$ ", "% ", "# "] {
+                if let Some((prefix, after)) = trimmed.split_once(marker) {
+                    if prefix.len() <= 80
+                        && !prefix.contains("http://")
+                        && !prefix.contains("https://")
+                    {
+                        let cmd = after.trim();
+                        return Some((!cmd.is_empty()).then(|| cmd.to_string()));
+                    }
+                }
+            }
+            if matches!(trimmed, "❯" | "➜" | "$" | "%" | ">")
+                || ((trimmed.ends_with(" $")
+                    || trimmed.ends_with(" %")
+                    || trimmed.ends_with(" ❯")
+                    || trimmed.ends_with(" #"))
+                    && trimmed.len() <= 80)
+            {
+                return Some(None);
+            }
+            None
+        };
+        if end > 1 && matches!(parse_prompt(&lines[end - 1]), Some(None)) {
+            end -= 1;
+            while end > 0 && lines[end - 1].trim().is_empty() {
+                end -= 1;
+            }
+        }
+        let floor = end.saturating_sub(160);
+        let mut prompt_idx = None;
+        let mut command = None;
+        for idx in (floor..end).rev() {
+            if let Some(Some(cmd)) = parse_prompt(&lines[idx]) {
+                prompt_idx = Some(idx);
+                command = Some(cmd);
+                break;
+            }
+        }
+        let start = prompt_idx.map(|i| i + 1).unwrap_or_else(|| end.saturating_sub(40));
+        let output_lines: Vec<String> = if start <= end {
+            lines[start..end]
+                .iter()
+                .map(|l| l.trim_end().to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(json!({
+            "pane_id": pane_id,
+            "command": command,
+            "output": output_lines.join("\n"),
+            "lines": output_lines,
+        }))
+    }
+
+    fn sniff_pane_dev_urls(&self, filter_pane: Option<usize>) -> Vec<(usize, String)> {
+        let mut found = Vec::new();
+        let Ok(sessions) = self.engine().list_sessions() else {
+            return found;
+        };
+        for session in sessions {
+            if let Some(target) = filter_pane {
+                if session.id != target {
+                    continue;
+                }
+            }
+            let Ok(screen) = self.engine().read_screen(session.id) else {
+                continue;
+            };
+            for line in screen.lines.iter().rev().take(40) {
+                for word in line.split_whitespace() {
+                    let clean = word
+                        .trim_matches(|c: char| {
+                            matches!(
+                                c,
+                                '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';'
+                            )
+                        })
+                        .trim_end_matches('.');
+                    for prefix in [
+                        "http://localhost:",
+                        "https://localhost:",
+                        "http://127.0.0.1:",
+                        "https://127.0.0.1:",
+                        "http://0.0.0.0:",
+                        "http://[::1]:",
+                    ] {
+                        if let Some(idx) = clean.find(prefix) {
+                            let normalized = clean[idx..]
+                                .replace("http://0.0.0.0:", "http://localhost:");
+                            if !normalized.ends_with("/mcp")
+                                && !found.iter().any(|(_, u)| u == &normalized)
+                            {
+                                found.push((session.id, normalized));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    fn unzoo_installed_path() -> Option<std::path::PathBuf> {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .ok()
+            .map(std::path::PathBuf::from);
+        let mut candidates = Vec::new();
+        if cfg!(target_os = "macos") {
+            candidates.push(std::path::PathBuf::from("/Applications/Unzoo Browser.app"));
+            candidates.push(std::path::PathBuf::from("/Applications/Unzoo.app"));
+            if let Some(h) = &home {
+                candidates.push(h.join("Applications/Unzoo Browser.app"));
+                candidates.push(h.join("Applications/Unzoo.app"));
+            }
+        } else if cfg!(target_os = "windows") {
+            for key in ["LOCALAPPDATA", "ProgramFiles", "ProgramW6432"] {
+                if let Ok(base) = std::env::var(key).map(std::path::PathBuf::from) {
+                    candidates.push(base.join("Programs/Unzoo Browser/Unzoo Browser.exe"));
+                    candidates.push(base.join("Unzoo Browser/Unzoo Browser.exe"));
+                }
+            }
+        } else {
+            candidates.push(std::path::PathBuf::from("/usr/bin/unzoo-browser"));
+            candidates.push(std::path::PathBuf::from("/usr/local/bin/unzoo-browser"));
+            if let Some(h) = &home {
+                candidates.push(h.join(".local/bin/unzoo-browser"));
+            }
+        }
+        candidates.into_iter().find(|p| p.exists())
+    }
+
+    fn unzoo_status(&self, _params: &Value) -> Result<Value> {
+        let statuses = unterm_services::providers::statuses();
+        let provider = statuses.into_iter().find(|s| s.id == "unzoo");
+        let installed_path = Self::unzoo_installed_path();
+        let dev_servers: Vec<Value> = self
+            .sniff_pane_dev_urls(None)
+            .into_iter()
+            .map(|(pane_id, url)| json!({ "pane_id": pane_id, "url": url }))
+            .collect();
+        let state = match &provider {
+            Some(p) if p.state != "offline" => p.state.as_str(),
+            _ if installed_path.is_some() => "installed",
+            _ => "not_installed",
+        };
+        Ok(json!({
+            "state": state,
+            "installed": installed_path.is_some() || provider.as_ref().is_some_and(|p| p.state != "offline"),
+            "installed_path": installed_path.map(|p| p.display().to_string()),
+            "endpoint": provider.as_ref().map(|p| p.endpoint.clone()),
+            "active_leases": provider.as_ref().map(|p| p.live_leases).unwrap_or(0),
+            "download_url": "https://unzoo.com",
+            "dev_servers": dev_servers,
+        }))
+    }
+
+    fn unzoo_preview(&self, params: &Value) -> Result<Value> {
+        let filter_pane = Self::pane_id_param(params)?;
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.sniff_pane_dev_urls(filter_pane)
+                    .into_iter()
+                    .next()
+                    .map(|(_, u)| u)
+            })
+            .ok_or_else(|| {
+                anyhow!("No 'url' provided and no localhost dev-server URL sniffed from active panes")
+            })?;
+
+        let installed = Self::unzoo_installed_path();
+        let mut launched_in_unzoo = false;
+        #[cfg(target_os = "macos")]
+        if let Some(app) = &installed {
+            let mut cmd = std::process::Command::new("open");
+            cmd.arg("-a")
+                .arg(app)
+                .arg(&url)
+                .stdin(std::process::Stdio::null());
+            launched_in_unzoo = cmd.status().is_ok_and(|s| s.success());
+        }
+        #[cfg(not(target_os = "macos"))]
+        if let Some(bin) = &installed {
+            let mut cmd = std::process::Command::new(bin);
+            cmd.arg(&url).stdin(std::process::Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000);
+            }
+            launched_in_unzoo = cmd.spawn().is_ok();
+        }
+
+        self.audit("unzoo.preview", None, &format!("url={url} unzoo={launched_in_unzoo}"));
+        Ok(json!({
+            "url": url,
+            "opened_in_unzoo": launched_in_unzoo,
+            "download_url": "https://unzoo.com",
+        }))
+    }
+
+    fn unzoo_bridge_errors(&self, params: &Value) -> Result<Value> {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("Missing 'url'"))?;
+        let error_msg = params
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let engine = self.engine();
+        let pane_id = match Self::pane_id_param(params)? {
+            Some(id) => id,
+            None => {
+                let statuses = unterm_services::cockpit::status::snapshot();
+                if let Some(first) = statuses.first() {
+                    first.pane_id as usize
+                } else {
+                    self.resolve_pane_id(
+                        &*engine,
+                        params,
+                        PaneResolutionOptions::ACTIVE_REQUIRED,
+                    )?
+                }
+            }
+        };
+        let prompt = match error_msg {
+            Some(err) => format!(
+                "Unzoo Browser captured a frontend error on `{url}`: `{err}`. Please locate and fix the root cause in the source code.\r"
+            ),
+            None => format!(
+                "Please inspect `{url}` in Unzoo Browser for console/network errors or DOM rendering issues, and automatically fix any problems found.\r"
+            ),
+        };
+        engine.write_input(pane_id, &prompt)?;
+        let pane_id_str = pane_id.to_string();
+        self.audit(
+            "unzoo.bridge_errors",
+            Some(&pane_id_str),
+            &format!("url={url}"),
+        );
+        Ok(json!({
+            "bridged": true,
+            "pane_id": pane_id,
+            "url": url,
+        }))
     }
 
     /// Called by the TCP server when a client connection drops so
