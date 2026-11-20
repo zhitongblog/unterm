@@ -457,6 +457,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/plugins/restart") => super::plugins::api_restart(&parse_json_body(&req.body)),
         ("POST", "/api/plugins/remove") => super::plugins::api_remove(&parse_json_body(&req.body)),
         ("POST", "/api/plugins/bind") => super::plugins::api_bind(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/settings") => super::plugins::api_settings(&parse_json_body(&req.body)),
         ("GET", "/api/tell-rules") => Response::ok_json(super::tell_rules::api_list()),
         ("POST", "/api/tell-rules/forget") => {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);

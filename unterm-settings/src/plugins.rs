@@ -63,7 +63,129 @@ pub struct Manifest {
     pub page: Option<String>,
     pub mcp: Option<McpSpec>,
     pub roles: Vec<Role>,
+    /// What the person can set before turning it on: how often, how many,
+    /// when. Unzoo One shows them and passes the values in.
+    pub settings: Vec<Setting>,
     pub domains: Vec<String>,
+}
+
+/// One thing the person can set. `key` is the plugin's own name for it
+/// (Xtools uses a dotted path into its settings file).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Setting {
+    pub key: String,
+    pub group: String,
+    pub label: String,
+    pub kind: String,
+    pub default: Value,
+    pub help: String,
+    /// (value, label) for a choice.
+    pub choices: Vec<(String, String)>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+/// The kinds of setting: on/off, a number, a line of text, a paragraph, one
+/// of a few choices, a list of lines, and a from-to pair of numbers.
+pub const SETTING_KINDS: &[&str] = &["bool", "number", "text", "textarea", "choice", "list", "range"];
+
+fn number_in(n: f64, s: &Setting) -> Result<f64, String> {
+    if s.min.is_some_and(|min| n < min) || s.max.is_some_and(|max| n > max) {
+        let bound = |b: Option<f64>| b.map(|m| m.to_string()).unwrap_or_else(|| "…".into());
+        return Err(format!("{} must be between {} and {}", s.label, bound(s.min), bound(s.max)));
+    }
+    Ok(n)
+}
+
+/// A value for this setting, tidied, or why it does not fit.
+pub fn check_setting(s: &Setting, value: &Value) -> Result<Value, String> {
+    let wrong = || format!("{} takes {}", s.label, s.kind);
+    match s.kind.as_str() {
+        "bool" => value.as_bool().map(Value::Bool).ok_or_else(wrong),
+        "number" => Ok(json!(number_in(value.as_f64().ok_or_else(wrong)?, s)?)),
+        "text" | "textarea" => value.as_str().map(|t| json!(t)).ok_or_else(wrong),
+        "choice" => {
+            let v = value.as_str().ok_or_else(wrong)?;
+            if s.choices.iter().any(|(c, _)| c == v) {
+                Ok(json!(v))
+            } else {
+                let all: Vec<&str> = s.choices.iter().map(|(c, _)| c.as_str()).collect();
+                Err(format!("{} must be one of {}", s.label, all.join(", ")))
+            }
+        }
+        "list" => {
+            let list = value.as_array().ok_or_else(wrong)?;
+            let mut out = Vec::new();
+            for item in list {
+                let item = item.as_str().ok_or_else(wrong)?.trim();
+                if !item.is_empty() {
+                    out.push(json!(item));
+                }
+            }
+            Ok(Value::Array(out))
+        }
+        "range" => {
+            let pair = value.as_array().filter(|a| a.len() == 2).ok_or_else(wrong)?;
+            let (a, b) = (pair[0].as_f64().ok_or_else(wrong)?, pair[1].as_f64().ok_or_else(wrong)?);
+            if a > b {
+                return Err(format!("{}: the first number must not be above the second", s.label));
+            }
+            Ok(json!([number_in(a, s)?, number_in(b, s)?]))
+        }
+        _ => Err(wrong()),
+    }
+}
+
+fn choice_of(c: &Value) -> Option<(String, String)> {
+    match c {
+        Value::String(v) => Some((v.clone(), v.clone())),
+        Value::Array(pair) => {
+            let value = pair.first()?.as_str()?.to_string();
+            let label = pair.get(1).and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| value.clone());
+            Some((value, label))
+        }
+        _ => None,
+    }
+}
+
+fn parse_settings(raw: Option<&Value>) -> Result<Vec<Setting>, String> {
+    let Some(raw) = raw.filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let list = raw.as_array().ok_or("settings must be a list")?;
+    let mut out: Vec<Setting> = Vec::new();
+    for (i, item) in list.iter().enumerate() {
+        let text = |key: &str| item.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+        let key = text("key");
+        if key.is_empty() {
+            return Err(format!("settings[{i}].key is required"));
+        }
+        if out.iter().any(|s| s.key == key) {
+            return Err(format!("settings: {key} appears twice"));
+        }
+        let kind = text("type");
+        if !SETTING_KINDS.contains(&kind.as_str()) {
+            return Err(format!("settings.{key}.type must be one of {}", SETTING_KINDS.join(", ")));
+        }
+        let choices: Vec<(String, String)> =
+            item.get("choices").and_then(Value::as_array).map(|l| l.iter().filter_map(choice_of).collect()).unwrap_or_default();
+        if kind == "choice" && choices.is_empty() {
+            return Err(format!("settings.{key} is a choice without choices"));
+        }
+        let mut setting = Setting {
+            label: Some(text("label")).filter(|l| !l.is_empty()).unwrap_or_else(|| key.clone()),
+            key: key.clone(),
+            group: text("group"),
+            kind,
+            default: Value::Null,
+            help: text("help"),
+            choices,
+            min: item.get("min").and_then(Value::as_f64),
+            max: item.get("max").and_then(Value::as_f64),
+        };
+        let default = item.get("default").cloned().unwrap_or(Value::Null);
+        setting.default = check_setting(&setting, &default).map_err(|e| format!("settings.{key}.default: {e}"))?;
+        out.push(setting);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +291,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
             });
         }
     }
+    let settings = parse_settings(raw.get("settings"))?;
     let domains = raw
         .pointer("/permissions/domains")
         .and_then(Value::as_array)
@@ -183,6 +306,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         page,
         mcp,
         roles,
+        settings,
         domains,
     })
 }
@@ -218,6 +342,8 @@ struct Entry {
     dir: PathBuf,
     enabled: bool,
     bindings: Map<String, Value>,
+    /// Only what the person changed; the rest is the manifest's default.
+    settings: Map<String, Value>,
 }
 
 fn registry_path() -> Option<PathBuf> {
@@ -247,6 +373,7 @@ fn load() -> Vec<Entry> {
                         dir: PathBuf::from(e.get("dir")?.as_str()?),
                         enabled: e.get("enabled").and_then(Value::as_bool).unwrap_or(false),
                         bindings: e.get("bindings").and_then(Value::as_object).cloned().unwrap_or_default(),
+                        settings: e.get("settings").and_then(Value::as_object).cloned().unwrap_or_default(),
                     })
                 })
                 .collect()
@@ -261,7 +388,7 @@ fn save(entries: &[Entry]) -> Result<(), String> {
     }
     let list: Vec<Value> = entries
         .iter()
-        .map(|e| json!({"id": e.id, "dir": e.dir.display().to_string(), "enabled": e.enabled, "bindings": e.bindings}))
+        .map(|e| json!({"id": e.id, "dir": e.dir.display().to_string(), "enabled": e.enabled, "bindings": e.bindings, "settings": e.settings}))
         .collect();
     std::fs::write(&path, serde_json::to_string_pretty(&json!({"plugins": list})).unwrap()).map_err(|e| e.to_string())?;
     write_tool_risks(entries);
@@ -327,6 +454,17 @@ fn roles_env(manifest: &Manifest, bindings: &Map<String, Value>) -> Value {
     Value::Object(out)
 }
 
+/// Every declared setting's value as the program reads it: what the person
+/// set if it still fits, else the default.
+fn settings_env(manifest: &Manifest, chosen: &Map<String, Value>) -> Value {
+    let mut out = Map::new();
+    for s in &manifest.settings {
+        let value = chosen.get(&s.key).and_then(|v| check_setting(s, v).ok()).unwrap_or_else(|| s.default.clone());
+        out.insert(s.key.clone(), value);
+    }
+    Value::Object(out)
+}
+
 fn start(entry: &Entry) -> Result<(), String> {
     let manifest = read_manifest(&entry.dir)?;
     let Some(run) = manifest.run.clone() else {
@@ -352,6 +490,7 @@ fn start(entry: &Entry) -> Result<(), String> {
         .env("UNZOO_PLUGIN_PORT", port.to_string())
         .env("PORT", port.to_string())
         .env("UNZOO_PLUGIN_ROLES", roles_env(&manifest, &entry.bindings).to_string())
+        .env("UNZOO_PLUGIN_SETTINGS", settings_env(&manifest, &entry.settings).to_string())
         // Python programs print UTF-8 to the log whatever the console's code page.
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
@@ -516,6 +655,7 @@ pub fn mcp_servers() -> Vec<McpMount> {
             ("UNZOO_PLUGIN_DIR".to_string(), entry.dir.display().to_string()),
             ("UNZOO_PLUGIN_DATA".to_string(), data.display().to_string()),
             ("UNZOO_PLUGIN_ROLES".to_string(), roles_env(&manifest, &entry.bindings).to_string()),
+            ("UNZOO_PLUGIN_SETTINGS".to_string(), settings_env(&manifest, &entry.settings).to_string()),
             ("PYTHONUTF8".to_string(), "1".to_string()),
             ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ];
@@ -583,6 +723,26 @@ fn view(entry: &Entry) -> Value {
                     })
                 })
                 .collect();
+            let current = settings_env(&m, &entry.settings);
+            let settings: Vec<Value> = m
+                .settings
+                .iter()
+                .map(|s| {
+                    json!({
+                        "key": s.key,
+                        "group": s.group,
+                        "label": s.label,
+                        "type": s.kind,
+                        "default": s.default,
+                        "help": s.help,
+                        "choices": s.choices.iter().map(|(v, l)| json!({"value": v, "label": l})).collect::<Vec<_>>(),
+                        "min": s.min,
+                        "max": s.max,
+                        "value": current[&s.key],
+                        "changed": entry.settings.contains_key(&s.key),
+                    })
+                })
+                .collect();
             let runs = m.run.is_some();
             json!({
                 "id": m.id,
@@ -602,6 +762,7 @@ fn view(entry: &Entry) -> Value {
                 "mcp_server": m.mcp.as_ref().map(|_| server_name(&m.id)),
                 "tools": tools,
                 "roles": roles,
+                "settings": settings,
                 "domains": m.domains,
             })
         }
@@ -638,7 +799,13 @@ pub fn api_add(body: &Value) -> Response {
         }
     } else {
         // Added stopped: the person looks at what it asks for, then turns it on.
-        entries.push(Entry { id: manifest.id.clone(), dir: dir.clone(), enabled: false, bindings: Map::new() });
+        entries.push(Entry {
+            id: manifest.id.clone(),
+            dir: dir.clone(),
+            enabled: false,
+            bindings: Map::new(),
+            settings: Map::new(),
+        });
     }
     if let Err(error) = save(&entries) {
         return Response::err(500, "Internal Error", &error);
@@ -762,6 +929,11 @@ pub fn api_bind(body: &Value) -> Response {
         }
         Ok(())
     });
+    restart_if_running(result)
+}
+
+/// A running program is restarted to read what changed.
+fn restart_if_running(result: Result<Entry, Response>) -> Response {
     match result {
         Err(response) => response,
         Ok(entry) => {
@@ -775,6 +947,38 @@ pub fn api_bind(body: &Value) -> Response {
             Response::ok_json(view(&entry))
         }
     }
+}
+
+/// Change settings: `{"id", "values": {key: value}}`; a null value goes back
+/// to the default. All or nothing: one value that does not fit changes none.
+pub fn api_settings(body: &Value) -> Response {
+    let Some(values) = body.get("values").and_then(Value::as_object).cloned() else {
+        return Response::err(400, "Bad Request", "values is required: {setting: value}");
+    };
+    let result = with_entry(body, |entry| {
+        let manifest = read_manifest(&entry.dir)?;
+        let mut next = entry.settings.clone();
+        for (key, value) in &values {
+            let spec = manifest
+                .settings
+                .iter()
+                .find(|s| &s.key == key)
+                .ok_or(format!("{} has no setting {key}", manifest.name))?;
+            if value.is_null() {
+                next.remove(key);
+                continue;
+            }
+            let value = check_setting(spec, value)?;
+            if value == spec.default {
+                next.remove(key);
+            } else {
+                next.insert(key.clone(), value);
+            }
+        }
+        entry.settings = next;
+        Ok(())
+    });
+    restart_if_running(result)
 }
 
 /// The end of a plugin's log: `?id=...`.
@@ -808,6 +1012,12 @@ mod tests {
             "account": {"kind": "browser", "label": "X account"},
             "writer": {"kind": "agent", "label": "Writing", "default": {"agent": "claude-code", "model": "sonnet"}}
         },
+        "settings": [
+            {"key": "mode", "group": "Pace", "label": "Mode", "type": "choice", "choices": [["semi", "Drafts"], "auto"], "default": "semi"},
+            {"key": "caps.reply", "label": "Replies a day", "type": "number", "min": 0, "max": 100, "default": 30},
+            {"key": "hours", "label": "Active hours", "type": "range", "min": 0, "max": 24, "default": [9, 21]},
+            {"key": "windows", "label": "Sessions", "type": "list", "default": ["09:00", " ", "14:00"]}
+        ],
         "permissions": {"domains": ["x.com"]}
     }"#;
 
@@ -863,5 +1073,39 @@ mod tests {
         assert_eq!(env["account"]["value"]["profile"], "work");
         assert_eq!(env["writer"]["kind"], "agent");
         assert_eq!(env["writer"]["value"]["model"], "sonnet");
+    }
+
+    #[test]
+    fn settings_are_declared_checked_and_passed_in() {
+        let m = parse_manifest(FULL).unwrap();
+        assert_eq!(m.settings.len(), 4);
+        assert_eq!(m.settings[0].choices[1], ("auto".to_string(), "auto".to_string()));
+        // A default is tidied like any value.
+        assert_eq!(m.settings[3].default, json!(["09:00", "14:00"]));
+        let caps = &m.settings[1];
+        assert_eq!(check_setting(caps, &json!(12)).unwrap(), json!(12.0));
+        assert!(check_setting(caps, &json!(500)).unwrap_err().contains("between"));
+        assert!(check_setting(caps, &json!("12")).is_err());
+        assert!(check_setting(&m.settings[0], &json!("wild")).unwrap_err().contains("one of"));
+        assert!(check_setting(&m.settings[2], &json!([20, 8])).is_err());
+        let mut chosen = Map::new();
+        chosen.insert("mode".into(), json!("auto"));
+        chosen.insert("caps.reply".into(), json!(9000)); // no longer fits: the default
+        let env = settings_env(&m, &chosen);
+        assert_eq!(env["mode"], "auto");
+        assert_eq!(env["caps.reply"], json!(30.0));
+        assert_eq!(env["hours"], json!([9.0, 21.0]));
+    }
+
+    #[test]
+    fn bad_settings_say_what_is_wrong() {
+        let with = |s: &str| parse_manifest(&format!(r#"{{"id": "a", "settings": [{s}]}}"#));
+        assert!(with(r#"{"type": "bool"}"#).unwrap_err().contains("key"));
+        assert!(with(r#"{"key": "k", "type": "slider"}"#).unwrap_err().contains("type"));
+        assert!(with(r#"{"key": "k", "type": "choice"}"#).unwrap_err().contains("without choices"));
+        assert!(with(r#"{"key": "k", "type": "number", "max": 5, "default": 9}"#).unwrap_err().contains("default"));
+        assert!(with(r#"{"key": "k", "type": "bool", "default": true}, {"key": "k", "type": "bool", "default": true}"#)
+            .unwrap_err()
+            .contains("twice"));
     }
 }
