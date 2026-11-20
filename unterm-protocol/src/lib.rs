@@ -146,6 +146,15 @@ pub fn product_name() -> String {
         .unwrap_or_else(|| "Unterm".to_string())
 }
 
+/// Whether this install updates itself from Unterm's releases. Only a
+/// standalone Unterm does: a product that ships the runtime as one of its
+/// features brings its own installer and updates, and Unterm's releases are
+/// a different product -- installing one there would put a second program
+/// on the person's computer, downloaded and run in the background.
+pub fn self_updating() -> bool {
+    product_name() == "Unterm"
+}
+
 /// The file beside the programs that names the product they were installed
 /// as, for the processes nobody hands `UNTERM_PRODUCT_NAME` to: the MCP
 /// bridge an AI client starts, the terminal opened from a shortcut.

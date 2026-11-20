@@ -727,6 +727,9 @@ pub fn update(
     relaunch: bool,
     progress: impl FnMut(u64, u64),
 ) -> Result<Outcome> {
+    if !unterm_protocol::self_updating() {
+        bail!("{} is updated by its own installer", unterm_protocol::product_name());
+    }
     let release = latest()?;
     let latest_version = release.tag.trim_start_matches('v').to_string();
     if !force && !is_newer(&release.tag, current) {

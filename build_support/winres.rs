@@ -15,6 +15,21 @@ fn emit_version_resource(binary: &str, description: &str, icon: Option<&std::pat
     use std::io::Write;
 
     let version = std::env::var("CARGO_PKG_VERSION").unwrap();
+    // The product these programs ship in. A standalone build is Unterm; a
+    // product that bundles the runtime (Unzoo One) builds it with
+    // UNTERM_BRAND_PRODUCT set, so Task Manager, the file's Properties and
+    // antivirus reputation see one product from one publisher, not an
+    // installer for one name full of programs called another.
+    println!("cargo:rerun-if-env-changed=UNTERM_BRAND_PRODUCT");
+    let product = std::env::var("UNTERM_BRAND_PRODUCT")
+        .ok()
+        .map(|name| name.trim().replace(['"', '\\'], ""))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Unterm".to_string());
+    let description = match description.strip_prefix("Unterm") {
+        Some(rest) => format!("{product}{rest}"),
+        None => description.to_string(),
+    };
     let mut parts: Vec<&str> = version.split('.').collect();
     while parts.len() < 4 {
         parts.push("0");
@@ -49,9 +64,9 @@ BEGIN
             VALUE "FileDescription",  "{description}\0"
             VALUE "FileVersion",      "{version}\0"
             VALUE "LegalCopyright",   "Unzoo, MIT licensed\0"
-            VALUE "InternalName",     "Unterm\0"
+            VALUE "InternalName",     "{product}\0"
             VALUE "OriginalFilename", "{binary}.exe\0"
-            VALUE "ProductName",      "Unterm\0"
+            VALUE "ProductName",      "{product}\0"
             VALUE "ProductVersion",   "{version}\0"
         END
     END

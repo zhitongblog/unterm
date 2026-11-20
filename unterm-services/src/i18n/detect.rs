@@ -117,32 +117,19 @@ fn detect_macos() -> Option<&'static str> {
 
 #[cfg(target_os = "windows")]
 fn detect_windows() -> Option<&'static str> {
-    use std::os::windows::process::CommandExt;
-    // CREATE_NO_WINDOW: this runs at GUI startup; without it `reg.exe`
-    // flashes a console window on every launch.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // Read HKCU\Control Panel\International:LocaleName via `reg query`.
-    let output = std::process::Command::new("reg")
-        .args([
-            "query",
-            "HKCU\\Control Panel\\International",
-            "/v",
-            "LocaleName",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        if let Some(idx) = line.to_ascii_lowercase().find("reg_sz") {
-            let value = line[idx + "reg_sz".len()..].trim();
-            if let Some(code) = map_to_canonical(value) {
-                return Some(code);
-            }
-        }
-    }
-    None
+    map_to_canonical(&windows_locale_name()?)
+}
+
+/// The user's display locale (`HKCU\Control Panel\International`,
+/// `LocaleName`), read from the registry directly. It used to be `reg query`
+/// in a hidden console at every start -- a program quietly running `reg.exe`
+/// is one of the things antivirus engines score as suspicious.
+#[cfg(target_os = "windows")]
+pub fn windows_locale_name() -> Option<String> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    winreg::RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Control Panel\International")
+        .ok()?
+        .get_value::<String, _>("LocaleName")
+        .ok()
 }

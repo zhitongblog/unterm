@@ -12476,77 +12476,12 @@ fn clipboard_read_win32() -> Result<Value> {
 }
 
 #[cfg(windows)]
-fn ps_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-#[cfg(windows)]
-fn run_powershell_json(script: &str) -> Result<Value> {
-    let script = format!(
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n$OutputEncoding = [Console]::OutputEncoding\n{}",
-        script
-    );
-    let mut bytes = Vec::with_capacity(script.len() * 2);
-    for unit in script.encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let mut command = std::process::Command::new("powershell.exe");
-    command.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        &encoded,
-    ]);
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let output = command.output().context("run PowerShell capture helper")?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "PowerShell helper failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let value: Value =
-        serde_json::from_str(stdout.trim()).context("parse PowerShell helper JSON output")?;
-    Ok(value)
-}
-
-#[cfg(windows)]
 pub fn capture_screen_image(include_base64: bool) -> Result<Value> {
     let path = capture_output_dir()?.join(format!(
         "screen_{}.png",
         chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
     ));
-    let path = path.display().to_string();
-    let qpath = ps_single_quote(&path);
-    let script = format!(
-        r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-$bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
-$gfx.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
-$bmp.Save({qpath}, [System.Drawing.Imaging.ImageFormat]::Png)
-$gfx.Dispose()
-$bmp.Dispose()
-[pscustomobject]@{{
-  path = {qpath}
-  width = $bounds.Width
-  height = $bounds.Height
-  left = $bounds.Left
-  top = $bounds.Top
-}} | ConvertTo-Json -Compress
-"#
-    );
-    append_base64_if_requested(run_powershell_json(&script)?, include_base64)
+    append_base64_if_requested(crate::win_capture::capture_screen(&path)?, include_base64)
 }
 
 #[cfg(windows)]
@@ -12559,109 +12494,11 @@ pub fn capture_window_image(
         "window_{}.png",
         chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
     ));
-    let path = path.display().to_string();
-    let qpath = ps_single_quote(&path);
-    let title = title_filter
-        .map(ps_single_quote)
-        .unwrap_or_else(|| "$null".to_string());
     let pid = pid_filter.unwrap_or_else(std::process::id);
-    let script = format!(
-        r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class UntermCapture {{
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint flags);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-}}
-public struct RECT {{ public int Left; public int Top; public int Right; public int Bottom; }}
-"@
-$pidFilter = {pid}
-$titleFilter = {title}
-if ($titleFilter -ne $null) {{
-  $proc = Get-Process | Where-Object {{ $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*$titleFilter*" }} | Select-Object -First 1
-}} else {{
-  $proc = Get-Process -Id $pidFilter -ErrorAction Stop
-}}
-if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {{ throw "No matching window found" }}
-$hwnd = $proc.MainWindowHandle
-if ([UntermCapture]::IsIconic($hwnd)) {{
-  [UntermCapture]::ShowWindowAsync($hwnd, 9) | Out-Null
-  Start-Sleep -Milliseconds 120
-}}
-$rect = New-Object RECT
-# PrintWindow renders against the real HWND dimensions. DWM's extended frame
-# bounds can be several pixels shorter and causes GPU-backed windows to return
-# a false/blank frame when that smaller bitmap is supplied.
-if (-not [UntermCapture]::GetWindowRect($hwnd, [ref]$rect)) {{ throw "GetWindowRect failed" }}
-$width = $rect.Right - $rect.Left
-$height = $rect.Bottom - $rect.Top
-if ($width -le 0 -or $height -le 0) {{ throw "Invalid window bounds" }}
-$bmp = New-Object System.Drawing.Bitmap $width, $height
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
-$hdc = $gfx.GetHdc()
-try {{
-  # PW_RENDERFULLCONTENT asks DWM/composited windows for their complete client
-  # surface even when another application covers them.
-  $printed = [UntermCapture]::PrintWindow($hwnd, $hdc, 2)
-}} finally {{
-  $gfx.ReleaseHdc($hdc)
-}}
-$mode = 'print_window'
-
-# Some GPU drivers return success but leave a uniformly black bitmap. Sample
-# a small grid so that such a frame cannot masquerade as a valid self-capture.
-$samples = New-Object 'System.Collections.Generic.HashSet[int]'
-foreach ($xf in @(0.1, 0.3, 0.5, 0.7, 0.9)) {{
-  foreach ($yf in @(0.1, 0.3, 0.5, 0.7, 0.9)) {{
-    $x = [Math]::Min($width - 1, [Math]::Max(0, [int]($width * $xf)))
-    $y = [Math]::Min($height - 1, [Math]::Max(0, [int]($height * $yf)))
-    [void]$samples.Add($bmp.GetPixel($x, $y).ToArgb())
-  }}
-}}
-if (-not $printed -or $samples.Count -lt 2) {{
-  # GPU surfaces may not implement PrintWindow. Recreate the GDI objects
-  # before screen capture (the old Graphics has handed out an HDC), briefly
-  # focus the exact target, then restore the user's previous foreground app.
-  $gfx.Dispose()
-  $bmp.Dispose()
-  $bmp = New-Object System.Drawing.Bitmap $width, $height
-  $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-  $previousForeground = [UntermCapture]::GetForegroundWindow()
-  [UntermCapture]::ShowWindowAsync($hwnd, 5) | Out-Null
-  [UntermCapture]::SetForegroundWindow($hwnd) | Out-Null
-  Start-Sleep -Milliseconds 220
-  try {{
-    $gfx.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
-  }} finally {{
-    if ($previousForeground -ne [IntPtr]::Zero -and $previousForeground -ne $hwnd) {{
-      [UntermCapture]::SetForegroundWindow($previousForeground) | Out-Null
-    }}
-  }}
-  $mode = 'focused_screen'
-}}
-$bmp.Save({qpath}, [System.Drawing.Imaging.ImageFormat]::Png)
-$gfx.Dispose()
-$bmp.Dispose()
-[pscustomobject]@{{
-  path = {qpath}
-  width = $width
-  height = $height
-  left = $rect.Left
-  top = $rect.Top
-  pid = $proc.Id
-  title = $proc.MainWindowTitle
-  mode = $mode
-}} | ConvertTo-Json -Compress
-"#
-    );
-    append_base64_if_requested(run_powershell_json(&script)?, include_base64)
+    append_base64_if_requested(
+        crate::win_capture::capture_window(&path, title_filter, pid)?,
+        include_base64,
+    )
 }
 
 // ---------------------------------------------------------------------------
