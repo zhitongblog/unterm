@@ -450,6 +450,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/state") => api_state(handler),
         ("GET", "/api/shells") => api_shells(),
         ("GET", "/api/plugins") => super::plugins::api_list(),
+        ("GET", "/api/agents/models") => super::agent_models::api_models(&req.query),
         ("GET", "/api/plugins/log") => super::plugins::api_log(&req.query),
         ("POST", "/api/plugins/add") => super::plugins::api_add(&parse_json_body(&req.body)),
         ("POST", "/api/plugins/enable") => super::plugins::api_enable(&parse_json_body(&req.body)),

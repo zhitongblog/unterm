@@ -20,6 +20,7 @@ mod local_agents;
 mod mobile_one;
 mod skills;
 pub mod plugins;
+mod agent_models;
 
 /// Whether the console has work that needs this process to stay: a task run
 /// in progress, or a scheduled task that is not paused. A Core started by a
