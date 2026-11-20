@@ -289,7 +289,12 @@ pub fn detect_network_addresses() -> Vec<RemoteAddress> {
     // 3. Parse `ipconfig` on Windows or `ifconfig`/`ip` on Unix to catch extra interfaces (e.g. Tailscale)
     #[cfg(windows)]
     {
-        if let Ok(out) = std::process::Command::new("ipconfig").output() {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = std::process::Command::new("ipconfig");
+        cmd.stdin(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW);
+        if let Ok(out) = cmd.output() {
             let text = String::from_utf8_lossy(&out.stdout);
             for token in text.split(|c: char| !c.is_ascii_digit() && c != '.') {
                 if token.split('.').count() == 4 {

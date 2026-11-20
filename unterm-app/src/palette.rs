@@ -166,6 +166,74 @@ pub enum Command {
     CopyFailureContext,
     /// Open a split pane with `agent` to diagnose and fix the focused pane's failure.
     FixFailureWithAgent { agent: String },
+    /// Open the Native Git Worktree Studio (parallel isolated agent workspaces).
+    OpenWorktreeStudio,
+    /// Create a new isolated Git worktree and open a tab in it (optionally starting `agent`).
+    CreateWorktreeSession {
+        agent: Option<String>,
+    },
+    /// Squash-merge a secondary worktree branch into the main repository and remove the worktree.
+    MergeWorktree {
+        main_repo: String,
+        worktree_path: String,
+        branch: String,
+    },
+    /// Remove/clean an isolated Git worktree.
+    RemoveWorktree {
+        main_repo: String,
+        worktree_path: String,
+    },
+    /// Open the interactive inline diff & review drawer for a changed file (or all changed files).
+    OpenGitDiffReview,
+    /// Inspect the unified diff of a specific file and offer 1-click Revert / Send to Agent / Open in Editor.
+    InspectGitFileDiff {
+        repo: String,
+        path: String,
+        code: String,
+    },
+    /// Revert a single modified or untracked file back to HEAD (creating a safety checkpoint first).
+    RevertGitFile {
+        repo: String,
+        path: String,
+        code: String,
+    },
+    /// Send a file's diff to the active AI agent (or launch one) to review/revise it.
+    SendFileDiffToAgent {
+        repo: String,
+        path: String,
+        code: String,
+    },
+    /// Open a file in the system editor at an optional line number.
+    OpenFileAtLine {
+        path: String,
+        line: Option<usize>,
+    },
+    /// Open the AI Agent Telemetry, Context Pressure & Token/Cost HUD.
+    OpenAgentTelemetry,
+    /// Send `/compact` to an AI agent pane to compress its context window.
+    SendCompactToAgent {
+        pane_id: usize,
+    },
+    /// Open the SSH Remote Agent Roaming center.
+    OpenSshRoaming,
+    /// Clone an active SSH session into a new tab at the same remote host and directory.
+    CloneSshSession {
+        command: String,
+    },
+    /// Open the Unzoo Browser Native Hub (AI browser synergy, localhost preview & guided download).
+    OpenUnzooHub,
+    /// Launch or bind Unzoo Browser over local MCP.
+    LaunchOrBindUnzoo,
+    /// Open a local dev-server or target URL directly inside Unzoo Browser.
+    OpenUrlInUnzoo {
+        url: String,
+    },
+    /// Pause or resume AI agent capability leases on Unzoo Browser.
+    ToggleUnzooPause {
+        pause: bool,
+    },
+    /// Unbind Unzoo Browser and revoke active leases.
+    UnbindUnzoo,
     /// A row that is information rather than a verb. The Insights card is a
     /// list to read, not a list to run, and pressing a line of it should do
     /// nothing rather than whatever a guess would be.

@@ -364,7 +364,7 @@ pub(crate) fn open_file_location(raw_loc: &str, cwd: Option<&str>) -> std::io::R
         ("code", Some("--goto")),
         ("zed", None),
     ] {
-        let mut cmd = std::process::Command::new(bin);
+        let mut cmd = crate::git::hidden_command(bin);
         if let Some(f) = flag {
             cmd.arg(f);
         }

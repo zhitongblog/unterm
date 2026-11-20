@@ -74,7 +74,12 @@ fn git(repo: &Path, args: &[&str]) -> Result<String> {
 
 fn git_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(repo).args(args);
+    cmd.arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -135,7 +140,29 @@ pub fn snapshot_worktree(repo: &Path) -> Result<String> {
 
 /// Record an automatic checkpoint for a repo (debounced).
 pub fn record_auto_checkpoint(repo: &Path, agent: &str, pane_id: u64) -> Result<Option<String>> {
+    static LAST_ATTEMPT: OnceLock<Mutex<HashMap<PathBuf, std::time::Instant>>> = OnceLock::new();
+    let debounce_dur = std::time::Duration::from_secs(DEBOUNCE_SECS as u64);
+    {
+        let mut attempts = LAST_ATTEMPT.get_or_init(Default::default).lock();
+        if let Some(last) = attempts.get(repo) {
+            if last.elapsed() < debounce_dur {
+                return Ok(None);
+            }
+        }
+        attempts.insert(repo.to_path_buf(), std::time::Instant::now());
+    }
     let root = repo_root(repo)?;
+    {
+        let mut attempts = LAST_ATTEMPT.get_or_init(Default::default).lock();
+        if root != repo {
+            if let Some(last) = attempts.get(&root) {
+                if last.elapsed() < debounce_dur {
+                    return Ok(None);
+                }
+            }
+            attempts.insert(root.clone(), std::time::Instant::now());
+        }
+    }
     let key = root.to_string_lossy().to_string();
     {
         let s = store().lock();
@@ -199,7 +226,12 @@ pub fn diff(repo: &Path, from: &str) -> Result<Value> {
         files.push(json!({ "path": f, "added": "?", "deleted": "0", "untracked": true }));
         // git diff --no-index exits 1 when files differ; ignore status.
         let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&root).args(["diff", "--no-index", "--"]);
+        cmd.arg("-C")
+            .arg(&root)
+            .args(["diff", "--no-index", "--"])
+            .stdin(std::process::Stdio::null())
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never");
         #[cfg(not(windows))]
         cmd.args(["/dev/null", f]);
         #[cfg(windows)]

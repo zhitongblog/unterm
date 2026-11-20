@@ -35,16 +35,21 @@ pub fn sniff() -> Result<Vec<Candidate>> {
     if which_gcloud().is_none() {
         return Ok(Vec::new());
     }
-    let output = match Command::new("gcloud")
-        .args([
-            "config",
-            "configurations",
-            "list",
-            "--format=json",
-            "--quiet",
-        ])
-        .output()
+    let mut cmd = Command::new("gcloud");
+    cmd.args([
+        "config",
+        "configurations",
+        "list",
+        "--format=json",
+        "--quiet",
+    ])
+    .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = match cmd.output() {
         Ok(o) => o,
         Err(_) => return Ok(Vec::new()),
     };

@@ -107,8 +107,12 @@ fn parse_branch(header: &str, status: &mut Status) {
 /// program makes Windows pop one for it and take it away again. Opening the
 /// git panel did exactly that, and it is very visible. No-op elsewhere.
 pub fn hidden_command(program: &str) -> std::process::Command {
-    #[allow(unused_mut)]
     let mut command = std::process::Command::new(program);
+    command
+        .stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_OPTIONAL_LOCKS", "0");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -212,23 +216,26 @@ pub fn read_cached(directory: &std::path::Path) -> Panel {
 /// moment after its tab first appears and follows a checkout within seconds.
 pub fn branch_hint(directory: &std::path::Path) -> Option<String> {
     let known = cache().lock().get(directory).map(|(at, panel)| (at.elapsed(), panel.clone()));
-    let stale = known.as_ref().map_or(true, |(age, _)| *age >= CACHE_TTL * 5);
+    let stale = known.as_ref().map_or(true, |(age, _)| *age >= CACHE_TTL * 15);
     if stale {
         static REFRESHING: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashSet<std::path::PathBuf>>> =
             std::sync::OnceLock::new();
         let refreshing = REFRESHING.get_or_init(Default::default);
         if refreshing.lock().insert(directory.to_path_buf()) {
             let directory = directory.to_path_buf();
+            let prev_panel = known.as_ref().map(|(_, p)| p.clone());
             let spawned = std::thread::Builder::new()
                 .name("git-branch".into())
                 .spawn({
                     let directory = directory.clone();
                     move || {
-                        let _ = read_cached(&directory);
+                        let fresh = read_cached(&directory);
                         REFRESHING.get().map(|set| set.lock().remove(&directory));
-                        // The row that asked is drawn already; draw it again
-                        // now that there is a branch to show.
-                        crate::mcp_host::request_repaint();
+                        // Only request a repaint if the branch/status actually changed,
+                        // avoiding a self-perpetuating repaint -> spawn loop while idle.
+                        if prev_panel.as_ref() != Some(&fresh) {
+                            crate::mcp_host::request_repaint();
+                        }
                     }
                 });
             if spawned.is_err() {
@@ -241,6 +248,14 @@ pub fn branch_hint(directory: &std::path::Path) -> Option<String> {
         // once. Pre-cut to 28 characters here, it was cut a second time there.
         Panel::Status(status) if !status.branch.is_empty() => Some(status.branch.clone()),
         _ => None,
+    }
+}
+
+/// Number of dirty entries already cached for `directory` without spawning any git process.
+pub fn cached_dirty_count(directory: &std::path::Path) -> usize {
+    match cache().lock().get(directory).map(|(_, panel)| panel) {
+        Some(Panel::Status(status)) => status.entries.len(),
+        _ => 0,
     }
 }
 
@@ -309,6 +324,96 @@ pub fn render_segment(panel: &Panel) -> String {
         out.push_str(&format!(" -{}", status.behind));
     }
     out
+}
+
+/// Read the unified diff for a single file (`path`) inside `directory`,
+/// returning `(diff_lines, first_changed_line_number)`.
+/// Works for both tracked modified files and untracked (`??`) files.
+pub fn file_diff(directory: &std::path::Path, path: &str, code: &str) -> (Vec<String>, Option<usize>) {
+    let mut raw = String::new();
+    if code == "??" {
+        let full = directory.join(path);
+        if let Ok(content) = std::fs::read_to_string(&full) {
+            raw.push_str(&format!("--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{} @@\n", content.lines().count()));
+            for line in content.lines().take(120) {
+                raw.push('+');
+                raw.push_str(line);
+                raw.push('\n');
+            }
+        }
+    } else {
+        if let Ok(out) = hidden_command("git")
+            .args(["--no-pager", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", path])
+            .current_dir(directory)
+            .output()
+        {
+            raw = String::from_utf8_lossy(&out.stdout).to_string();
+        }
+        if raw.trim().is_empty() {
+            if let Ok(out) = hidden_command("git")
+                .args(["--no-pager", "diff", "--no-ext-diff", "--no-textconv", "--", path])
+                .current_dir(directory)
+                .output()
+            {
+                raw = String::from_utf8_lossy(&out.stdout).to_string();
+            }
+        }
+    }
+    let first_line = parse_first_hunk_line(&raw);
+    let lines: Vec<String> = raw
+        .lines()
+        .filter(|l| {
+            !l.starts_with("diff --git")
+                && !l.starts_with("index ")
+                && !l.starts_with("--- ")
+                && !l.starts_with("+++ ")
+        })
+        .take(140)
+        .map(str::to_string)
+        .collect();
+    (lines, first_line)
+}
+
+/// Extract the starting new-file line number from the first `@@ -a,b +c,d @@` hunk header.
+pub fn parse_first_hunk_line(diff_text: &str) -> Option<usize> {
+    for line in diff_text.lines() {
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            let plus_part = rest.split_whitespace().find(|w| w.starts_with('+'))?;
+            let line_str = plus_part
+                .trim_start_matches('+')
+                .split(',')
+                .next()
+                .unwrap_or("");
+            if let Ok(n) = line_str.parse::<usize>() {
+                return Some(n.max(1));
+            }
+        }
+    }
+    None
+}
+
+/// Revert a single file in `directory` back to `HEAD` (or remove it if untracked `??`).
+pub fn revert_file(directory: &std::path::Path, path: &str, code: &str) -> Result<(), String> {
+    if code == "??" {
+        let target = directory.join(path);
+        if target.is_dir() {
+            std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+        } else if target.exists() {
+            std::fs::remove_file(&target).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    let out = hidden_command("git")
+        .args(["checkout", "HEAD", "--", path])
+        .current_dir(directory)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    // Clear cache so the Git panel updates immediately.
+    cache().lock().remove(directory);
+    Ok(())
 }
 
 #[cfg(test)]

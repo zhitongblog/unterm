@@ -361,10 +361,14 @@ pub fn schedule(install: &Install, file: &Path, wait_for: &[u32], relaunch: bool
 }
 
 fn run(program: &str, args: &[&str]) -> Result<std::process::Output> {
-    let output = std::process::Command::new(program)
-        .args(args)
-        .output()
-        .with_context(|| format!("run {program}"))?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd.output().with_context(|| format!("run {program}"))?;
     Ok(output)
 }
 

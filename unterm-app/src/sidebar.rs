@@ -371,6 +371,21 @@ pub fn agent_icon(lower_title: &str) -> Option<char> {
     })
 }
 
+/// Whether `ch` is one of the AI agent leading icons (specific or generic).
+pub fn is_agent_icon(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{273B}'
+            | '\u{F02D8}'
+            | '\u{2726}'
+            | '\u{270E}'
+            | '\u{25C7}'
+            | '\u{263E}'
+            | '\u{27A4}'
+            | ROBOT
+    )
+}
+
 /// How wide one icon-only control in the strip's footer is.
 ///
 /// Narrower than the row is tall: three controls share that row, and

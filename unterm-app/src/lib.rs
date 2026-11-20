@@ -63,6 +63,10 @@ mod window;
 mod win_chrome;
 mod window_buttons;
 mod workspaces;
+mod worktree;
+mod telemetry;
+mod ssh_roam;
+mod unzoo_hub;
 mod updates;
 mod crash_report;
 

@@ -57,17 +57,18 @@ pub fn chrome(background: [f32; 4], foreground: [f32; 4]) -> Chrome {
     let is_warm = foreground[0] > foreground[2] + 0.008;
 
     // Linear-light mixing is visually stronger than the numeric amount
-    // suggests, so dark schemes need only a very small lift.
-    let surface = mix(background, foreground, if is_light { 0.030 } else { 0.020 });
+    // suggests, so dark schemes need a measured lift to separate the chrome
+    // frame from the terminal canvas without turning into a heavy slab.
+    let surface = mix(background, foreground, if is_light { 0.032 } else { 0.028 });
     let hover_bg = if is_light {
-        mix(background, foreground, 0.062)
+        mix(background, foreground, 0.065)
     } else {
-        mix(surface, foreground, 0.032)
+        mix(surface, foreground, 0.036)
     };
     let selected_bg = if is_light {
-        mix(background, foreground, 0.092)
+        mix(background, foreground, 0.098)
     } else {
-        mix(surface, foreground, 0.060)
+        mix(surface, foreground, 0.075)
     };
 
     // Theme-harmonized focus accent: warm themes (Agent Inbox, Notion Dark,
@@ -112,12 +113,12 @@ pub fn chrome(background: [f32; 4], foreground: [f32; 4]) -> Chrome {
         // with the terminal cut out of it. Strong enough to find, still
         // far too quiet to be a border.
         outer_edge: with_alpha(foreground, if is_light { 0.20 } else { 0.16 }),
-        inner_highlight: with_alpha(foreground, if is_light { 0.055 } else { 0.04 }),
-        selected_outline: with_alpha(foreground, if is_light { 0.12 } else { 0.09 }),
+        inner_highlight: with_alpha(foreground, if is_light { 0.06 } else { 0.05 }),
+        selected_outline: with_alpha(foreground, if is_light { 0.14 } else { 0.12 }),
         dim_text: with_alpha(foreground, if is_light { 0.72 } else { 0.74 }),
         hover_bg,
         selected_bg,
-        group_bg: mix(surface, foreground, if is_light { 0.018 } else { 0.016 }),
+        group_bg: mix(surface, foreground, if is_light { 0.020 } else { 0.020 }),
         footer_bg: surface,
         focus_rail,
         status_ok,
