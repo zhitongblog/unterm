@@ -490,9 +490,20 @@ fn watch_once() {
 
 // ---- what agents see -------------------------------------------------------
 
+/// One plugin MCP server as the agent's CLI starts it.
+pub struct McpMount {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    /// What the plugin's program is given too: the CLI starts this server
+    /// itself, and without them the tools would keep their own data apart
+    /// from the page's and know nothing of the roles.
+    pub env: Vec<(String, String)>,
+}
+
 /// The enabled plugins' MCP servers, mounted for governed agents beside the
-/// terminal and the browser: `(server name, command, args)`.
-pub fn mcp_servers() -> Vec<(String, String, Vec<String>)> {
+/// terminal and the browser.
+pub fn mcp_servers() -> Vec<McpMount> {
     let mut out = Vec::new();
     for entry in load().into_iter().filter(|e| e.enabled) {
         let Ok(manifest) = read_manifest(&entry.dir) else { continue };
@@ -500,7 +511,18 @@ pub fn mcp_servers() -> Vec<(String, String, Vec<String>)> {
         let Some(data) = data_dir(&manifest.id) else { continue };
         let port = with_state(|s| s.running.get(&manifest.id).and_then(|r| r.port));
         let words: Vec<String> = mcp.command.iter().map(|w| fill(w, &entry.dir, port, &data)).collect();
-        out.push((server_name(&manifest.id), words[0].clone(), words[1..].to_vec()));
+        let mut env = vec![
+            ("UNZOO_PLUGIN_ID".to_string(), manifest.id.clone()),
+            ("UNZOO_PLUGIN_DIR".to_string(), entry.dir.display().to_string()),
+            ("UNZOO_PLUGIN_DATA".to_string(), data.display().to_string()),
+            ("UNZOO_PLUGIN_ROLES".to_string(), roles_env(&manifest, &entry.bindings).to_string()),
+            ("PYTHONUTF8".to_string(), "1".to_string()),
+            ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
+        ];
+        if let Some(port) = port {
+            env.push(("UNZOO_PLUGIN_PORT".to_string(), port.to_string()));
+        }
+        out.push(McpMount { name: server_name(&manifest.id), command: words[0].clone(), args: words[1..].to_vec(), env });
     }
     out
 }

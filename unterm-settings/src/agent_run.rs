@@ -266,18 +266,24 @@ it continues its own conversation and its report comes back to you.",
 /// [`AGENT_BROWSER_TOOLS`]): every tool listed is described to the model on
 /// every request, and all of them together came to some 50,000 tokens.
 /// A helper is not given `agent_session.delegate`: it does not hand on.
-fn governed_servers(helper: bool) -> Result<Vec<(String, String, Vec<String>)>, String> {
+fn governed_servers(helper: bool) -> Result<Vec<super::plugins::McpMount>, String> {
     let cli = unterm_cli_path()
         .ok_or("governed mode needs unterm-cli next to this Unterm (or UNTERM_CLI) to mount Unterm's MCP")?;
     let cli = cli.display().to_string();
     let terminal: Vec<&str> =
         AGENT_TERMINAL_TOOLS.iter().copied().filter(|tool| !helper || *tool != "agent_session.delegate").collect();
-    let mut servers = vec![("unterm".to_string(), cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
+    let mount = |name: &str, command: String, args: Vec<String>| super::plugins::McpMount {
+        name: name.to_string(),
+        command,
+        args,
+        env: Vec::new(),
+    };
+    let mut servers = vec![mount("unterm", cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
     if let Some(unzoo) = unzoo_service_path() {
         let mut args = vec!["mcp-trim".to_string(), "--keep".to_string(), AGENT_BROWSER_TOOLS.join(","), "--".to_string()];
         args.push(unzoo.display().to_string());
         args.extend(["--mcp", "stdio", "--client", super::browser::CLIENT].map(str::to_string));
-        servers.push(("unzoo".to_string(), cli, args));
+        servers.push(mount("unzoo", cli, args));
     }
     // The plugins the person turned on, with their own tools.
     servers.extend(super::plugins::mcp_servers());
@@ -347,8 +353,12 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
     match agent_id {
         "claude-code" => {
             let mut mounted = serde_json::Map::new();
-            for (name, command, args) in &servers {
-                mounted.insert(name.clone(), json!({"type": "stdio", "command": command, "args": args}));
+            for server in &servers {
+                let mut spec = json!({"type": "stdio", "command": server.command, "args": server.args});
+                if !server.env.is_empty() {
+                    spec["env"] = Value::Object(server.env.iter().map(|(k, v)| (k.clone(), json!(v))).collect());
+                }
+                mounted.insert(server.name.clone(), spec);
             }
             Ok(vec![
                 "-p".into(),
@@ -362,10 +372,16 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
         }
         "codex-cli" => {
             let mut out = Vec::new();
-            for (name, command, args) in &servers {
-                out.extend(["-c".to_string(), format!("mcp_servers.{name}.command={}", toml_string(command))]);
-                out.extend(["-c".to_string(), format!("mcp_servers.{name}.args={}", json!(args))]);
+            for server in &servers {
+                let name = &server.name;
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.command={}", toml_string(&server.command))]);
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.args={}", json!(server.args))]);
                 out.extend(["-c".to_string(), format!("mcp_servers.{name}.env_vars={}", json!(CODEX_PASSES_ON))]);
+                if !server.env.is_empty() {
+                    // A TOML inline table: key = "value", each value a JSON string literal.
+                    let table: Vec<String> = server.env.iter().map(|(k, v)| format!("{k} = {}", toml_string(v))).collect();
+                    out.extend(["-c".to_string(), format!("mcp_servers.{name}.env={{{}}}", table.join(", "))]);
+                }
             }
             for tool in CODEX_OWN_TOOLS {
                 out.extend(["--disable".to_string(), tool.to_string()]);
@@ -386,11 +402,15 @@ fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Valu
     // in Unterm's terminal would never reach the inbox: ask for every tool
     // of the mounted servers, and the host judges each by its risk.
     let mut permission = serde_json::Map::new();
-    for (name, command, args) in governed_servers(helper)? {
-        let mut words = vec![command];
-        words.extend(args);
-        mcp.insert(name.clone(), json!({"type": "local", "command": words, "enabled": true}));
-        permission.insert(format!("{name}_*"), json!("ask"));
+    for server in governed_servers(helper)? {
+        let mut words = vec![server.command.clone()];
+        words.extend(server.args.iter().cloned());
+        let mut spec = json!({"type": "local", "command": words, "enabled": true});
+        if !server.env.is_empty() {
+            spec["environment"] = Value::Object(server.env.iter().map(|(k, v)| (k.clone(), json!(v))).collect());
+        }
+        mcp.insert(server.name.clone(), spec);
+        permission.insert(format!("{}_*", server.name), json!("ask"));
     }
     let file = unterm_protocol::state_path(format!(
         "governed/opencode-{}.md",
@@ -928,9 +948,13 @@ mod tests {
         let mounted = &config["mcpServers"]["plugin_notes"];
         assert_eq!(mounted["command"], "python");
         assert_eq!(mounted["args"][0], format!("{}/mcp_server.py", plugin.display()));
+        // The tools see the same data folder and roles as the plugin's own program.
+        assert_eq!(mounted["env"]["UNZOO_PLUGIN_ID"], "notes");
+        assert!(mounted["env"]["UNZOO_PLUGIN_DATA"].as_str().unwrap().replace('\\', "/").ends_with("plugins/notes/data"));
         assert!(at("--append-system-prompt").unwrap().contains("Notes (tools plugin_notes__*): keeps notes"));
         let codex = governed_args("codex-cli", None, false).unwrap();
         assert!(codex.iter().any(|a| a.starts_with("mcp_servers.plugin_notes.command=")));
+        assert!(codex.iter().any(|a| a.starts_with("mcp_servers.plugin_notes.env={UNZOO_PLUGIN_ID = \"notes\"")));
 
         // Turned off, it is gone.
         let registry = json!({"plugins": [{"id": "notes", "dir": plugin.display().to_string(), "enabled": false}]});
