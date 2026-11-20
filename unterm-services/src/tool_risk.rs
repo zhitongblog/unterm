@@ -121,8 +121,58 @@ pub fn mcp_parts(tool: &str) -> Option<(&str, &str)> {
     })
 }
 
+/// Where the Core writes what each enabled plugin's tools do, in the state
+/// folder: `{"servers": {"plugin_x": {"tools": {"t": "read"}, "default": "send"}}}`.
+pub const PLUGIN_RISKS_FILE: &str = "plugins/tool-risks.json";
+
+/// A plugin's word for what a tool does, as a risk.
+pub fn plugin_word_risk(word: &str) -> Risk {
+    match word {
+        "read" => Risk::Read,
+        "change" => Risk::LocalMutation,
+        "run" => Risk::Exec,
+        "pay" => Risk::Financial,
+        "delete" => Risk::Destructive,
+        // "send", and anything a plugin did not say: it may leave the machine.
+        _ => Risk::ExternalSideEffect,
+    }
+}
+
+/// A plugin tool's risk, as its manifest declared it. Plugin servers are
+/// named `plugin_<id>`; CLIs call their tools `mcp__plugin_<id>__<tool>`
+/// (Claude Code) or `plugin_<id>_<tool>` (OpenCode). `None` when the tool is
+/// not a plugin's.
+pub fn plugin_risk(tool: &str) -> Option<Risk> {
+    let rest = tool.strip_prefix("mcp__").unwrap_or(tool);
+    if !rest.starts_with("plugin_") {
+        return None;
+    }
+    let path = unterm_protocol::state_path(PLUGIN_RISKS_FILE)?;
+    let table: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let servers = table.get("servers")?.as_object()?;
+    // The longest server name that prefixes the call: plugin_x and plugin_x_y
+    // may both exist.
+    let (server, spec) = servers
+        .iter()
+        .filter(|(name, _)| {
+            rest.strip_prefix(name.as_str())
+                .is_some_and(|after| after.starts_with("__") || after.starts_with('_') || after.starts_with('.'))
+        })
+        .max_by_key(|(name, _)| name.len())?;
+    let name = rest[server.len()..].trim_start_matches(['_', '.']);
+    let word = spec
+        .pointer(&format!("/tools/{name}"))
+        .or_else(|| spec.get("default"))
+        .and_then(Value::as_str)
+        .unwrap_or("send");
+    Some(plugin_word_risk(word))
+}
+
 /// The risk of one tool call, or `None` for a tool this does not know.
 pub fn classify(tool: &str, input: &Value, cwd: Option<&str>) -> Option<Risk> {
+    if let Some(risk) = plugin_risk(tool) {
+        return Some(risk);
+    }
     if tool.starts_with("mcp__") || mcp_parts(tool).is_some() {
         let (server, name) = mcp_parts(tool)?;
         return match server {
@@ -552,6 +602,31 @@ fn clip(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_plugins_tools_carry_the_risk_its_manifest_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+        std::fs::write(
+            dir.path().join(PLUGIN_RISKS_FILE),
+            r#"{"servers": {"plugin_xtools": {"tools": {"drafts": "read", "publish": "send"}, "default": "send"},
+                            "plugin_xtools_lab": {"tools": {"wipe": "delete"}}}}"#,
+        )
+        .unwrap();
+        let none = serde_json::json!({});
+        // Claude Code's names and OpenCode's.
+        assert_eq!(classify("mcp__plugin_xtools__drafts", &none, None), Some(Risk::Read));
+        assert_eq!(classify("plugin_xtools_publish", &none, None), Some(Risk::ExternalSideEffect));
+        // A tool it did not describe may leave the machine.
+        assert_eq!(classify("mcp__plugin_xtools__whatever", &none, None), Some(Risk::ExternalSideEffect));
+        // The longer server name wins.
+        assert_eq!(classify("mcp__plugin_xtools_lab__wipe", &none, None), Some(Risk::Destructive));
+        // Not a plugin, not known: still None.
+        assert_eq!(classify("mcp__plugin_gone__x", &none, None), None);
+        assert_eq!(classify("mcp__other__x", &none, None), None);
+        std::env::remove_var("UNTERM_STATE_DIR");
+    }
     use super::*;
 
     #[test]

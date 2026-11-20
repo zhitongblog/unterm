@@ -61,6 +61,8 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     let handler = Arc::new(McpHandler::new());
     // Console tasks run on schedule whether or not a console page is open.
     crate::console_tasks::start_scheduler(Arc::clone(&handler));
+    // The plugins the person turned on run beside it.
+    crate::plugins::start_supervisor();
     // The agents it runs may hand work to other agents on this machine.
     unterm_mcp::records::set_delegator(crate::helpers::delegate);
     // In a product built on this console (one that names itself), the
@@ -447,6 +449,13 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/health") => Response::ok_json(json!({"ok": true})),
         ("GET", "/api/state") => api_state(handler),
         ("GET", "/api/shells") => api_shells(),
+        ("GET", "/api/plugins") => super::plugins::api_list(),
+        ("GET", "/api/plugins/log") => super::plugins::api_log(&req.query),
+        ("POST", "/api/plugins/add") => super::plugins::api_add(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/enable") => super::plugins::api_enable(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/restart") => super::plugins::api_restart(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/remove") => super::plugins::api_remove(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/bind") => super::plugins::api_bind(&parse_json_body(&req.body)),
         ("GET", "/api/tell-rules") => Response::ok_json(super::tell_rules::api_list()),
         ("POST", "/api/tell-rules/forget") => {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);

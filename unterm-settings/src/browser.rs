@@ -89,6 +89,12 @@ fn snapshot() -> Result<(Vec<Value>, Value)> {
     Ok((profiles, license))
 }
 
+/// The browser identities a plugin role can be bound to; empty when Unzoo
+/// is not running.
+pub(crate) fn profile_list() -> Vec<Value> {
+    snapshot().map(|(profiles, _)| profiles).unwrap_or_default()
+}
+
 /// Make the agents' own profile if it is not there and the plan has room.
 /// Ok(true) when it exists afterwards.
 pub fn ensure_reserved() -> Result<bool> {

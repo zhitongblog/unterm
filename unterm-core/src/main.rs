@@ -206,6 +206,9 @@ fn main() -> Result<()> {
     // However `run` ended -- `core.shutdown`, a finished drain, the orphan
     // watchdog -- the sessions end with it, the ordinary way.
     unterm_core::destroy_all_sessions();
+    // The plugins' programs too: the job is disarmed below, and they would
+    // otherwise outlive the Core.
+    unterm_settings::plugins::stop_all();
     let _ = clear_discovery();
     // An orderly exit: every session has been closed. What is left in the job
     // is what the user launched from a shell to keep (an editor window), and

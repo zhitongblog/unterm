@@ -222,6 +222,11 @@ fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
             prompt.push_str(&super::browser::profile_instructions(profile));
         }
     }
+    let plugins = super::plugins::prompt();
+    if !plugins.is_empty() {
+        prompt.push(' ');
+        prompt.push_str(&plugins);
+    }
     if !helper {
         prompt.push(' ');
         prompt.push_str(HELPERS_PROMPT);
@@ -261,19 +266,21 @@ it continues its own conversation and its report comes back to you.",
 /// [`AGENT_BROWSER_TOOLS`]): every tool listed is described to the model on
 /// every request, and all of them together came to some 50,000 tokens.
 /// A helper is not given `agent_session.delegate`: it does not hand on.
-fn governed_servers(helper: bool) -> Result<Vec<(&'static str, String, Vec<String>)>, String> {
+fn governed_servers(helper: bool) -> Result<Vec<(String, String, Vec<String>)>, String> {
     let cli = unterm_cli_path()
         .ok_or("governed mode needs unterm-cli next to this Unterm (or UNTERM_CLI) to mount Unterm's MCP")?;
     let cli = cli.display().to_string();
     let terminal: Vec<&str> =
         AGENT_TERMINAL_TOOLS.iter().copied().filter(|tool| !helper || *tool != "agent_session.delegate").collect();
-    let mut servers = vec![("unterm", cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
+    let mut servers = vec![("unterm".to_string(), cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
     if let Some(unzoo) = unzoo_service_path() {
         let mut args = vec!["mcp-trim".to_string(), "--keep".to_string(), AGENT_BROWSER_TOOLS.join(","), "--".to_string()];
         args.push(unzoo.display().to_string());
         args.extend(["--mcp", "stdio", "--client", super::browser::CLIENT].map(str::to_string));
-        servers.push(("unzoo", cli, args));
+        servers.push(("unzoo".to_string(), cli, args));
     }
+    // The plugins the person turned on, with their own tools.
+    servers.extend(super::plugins::mcp_servers());
     Ok(servers)
 }
 
@@ -341,7 +348,7 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
         "claude-code" => {
             let mut mounted = serde_json::Map::new();
             for (name, command, args) in &servers {
-                mounted.insert((*name).into(), json!({"type": "stdio", "command": command, "args": args}));
+                mounted.insert(name.clone(), json!({"type": "stdio", "command": command, "args": args}));
             }
             Ok(vec![
                 "-p".into(),
@@ -382,7 +389,7 @@ fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Valu
     for (name, command, args) in governed_servers(helper)? {
         let mut words = vec![command];
         words.extend(args);
-        mcp.insert(name.into(), json!({"type": "local", "command": words, "enabled": true}));
+        mcp.insert(name.clone(), json!({"type": "local", "command": words, "enabled": true}));
         permission.insert(format!("{name}_*"), json!("ask"));
     }
     let file = unterm_protocol::state_path(format!(
@@ -894,6 +901,43 @@ mod tests {
         }
         assert!(!supports_governed("agy"));
         assert!(governed_args("agy", None, false).is_err());
+    }
+
+    #[test]
+    fn an_enabled_plugins_tools_are_mounted_and_named_in_the_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        std::fs::write(&cli, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let plugin = dir.path().join("notes");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("unzoo-plugin.json"),
+            r#"{"id": "notes", "name": "Notes", "description": "keeps notes",
+                "mcp": {"command": ["python", "{dir}/mcp_server.py"], "tools": {"list_notes": "read"}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+        let registry = json!({"plugins": [{"id": "notes", "dir": plugin.display().to_string(), "enabled": true}]});
+        std::fs::write(dir.path().join("plugins/registry.json"), registry.to_string()).unwrap();
+
+        let args = governed_args("claude-code", None, false).unwrap();
+        let at = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        let config: Value = serde_json::from_str(&at("--mcp-config").unwrap()).unwrap();
+        let mounted = &config["mcpServers"]["plugin_notes"];
+        assert_eq!(mounted["command"], "python");
+        assert_eq!(mounted["args"][0], format!("{}/mcp_server.py", plugin.display()));
+        assert!(at("--append-system-prompt").unwrap().contains("Notes (tools plugin_notes__*): keeps notes"));
+        let codex = governed_args("codex-cli", None, false).unwrap();
+        assert!(codex.iter().any(|a| a.starts_with("mcp_servers.plugin_notes.command=")));
+
+        // Turned off, it is gone.
+        let registry = json!({"plugins": [{"id": "notes", "dir": plugin.display().to_string(), "enabled": false}]});
+        std::fs::write(dir.path().join("plugins/registry.json"), registry.to_string()).unwrap();
+        let args = governed_args("claude-code", None, false).unwrap();
+        assert!(!args.iter().any(|a| a.contains("plugin_notes")));
+        std::env::remove_var("UNTERM_STATE_DIR");
     }
 
     #[test]
