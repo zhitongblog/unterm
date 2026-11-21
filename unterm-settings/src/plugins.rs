@@ -428,6 +428,9 @@ struct State {
     restarts: HashMap<String, Vec<Instant>>,
     /// Why a plugin is not running, when it should be.
     errors: HashMap<String, String>,
+    /// The port each plugin last ran on, kept across restarts so its page
+    /// (open in Unzoo One) and its MCP server (told the port once) still reach it.
+    ports: HashMap<String, u16>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -439,6 +442,16 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
 
 fn free_port() -> Option<u16> {
     std::net::TcpListener::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
+}
+
+/// The plugin's port from its last run when that is free again, else a new one.
+fn port_for(id: &str) -> Option<u16> {
+    if let Some(last) = with_state(|s| s.ports.get(id).copied()) {
+        if std::net::TcpListener::bind(("127.0.0.1", last)).is_ok() {
+            return Some(last);
+        }
+    }
+    free_port()
 }
 
 /// The roles as the program reads them: each role's binding, or its default.
@@ -472,7 +485,7 @@ fn start(entry: &Entry) -> Result<(), String> {
     };
     let data = data_dir(&manifest.id).ok_or("there is no state folder")?;
     std::fs::create_dir_all(&data).map_err(|e| e.to_string())?;
-    let port = free_port().ok_or("no free port")?;
+    let port = port_for(&manifest.id).ok_or("no free port")?;
     let words: Vec<String> = run.command.iter().map(|w| fill(w, &entry.dir, Some(port), &data)).collect();
     let log = log_path(&manifest.id).ok_or("there is no state folder")?;
     let out = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
@@ -508,6 +521,7 @@ fn start(entry: &Entry) -> Result<(), String> {
     let child = command.spawn().map_err(|e| format!("could not start {}: {e}", words[0]))?;
     with_state(|s| {
         s.errors.remove(&manifest.id);
+        s.ports.insert(manifest.id.clone(), port);
         s.running.insert(manifest.id.clone(), Running { child, port: Some(port), started: Instant::now(), healthy: run.health.is_none() });
     });
     if let Some(health) = run.health {
@@ -1073,6 +1087,17 @@ mod tests {
         assert_eq!(env["account"]["value"]["profile"], "work");
         assert_eq!(env["writer"]["kind"], "agent");
         assert_eq!(env["writer"]["value"]["model"], "sonnet");
+    }
+
+    #[test]
+    fn a_restarted_plugin_keeps_its_port_while_it_is_free() {
+        let last = free_port().unwrap();
+        with_state(|s| s.ports.insert("port-test".into(), last));
+        assert_eq!(port_for("port-test"), Some(last));
+        let _held = std::net::TcpListener::bind(("127.0.0.1", last)).unwrap();
+        let other = port_for("port-test").unwrap();
+        assert_ne!(other, last, "a port someone else holds is not reused");
+        assert_ne!(port_for("never-ran"), None);
     }
 
     #[test]
