@@ -246,6 +246,30 @@ fn segment_risk(words: &[String], piped: bool) -> Risk {
         "aws" | "gcloud" | "az" if words.iter().any(|w| w.contains("://")) || has(words, &["create", "deploy", "put-object", "cp", "sync", "mv", "update", "set"]) => {
             Risk::ExternalSideEffect
         }
+        // Programs for the whole machine (or the person's account), not the
+        // work in a folder: installing one is asked about, removing one is
+        // not undone by the next command. A project's own packages
+        // (`npm install`, `pip install` in a venv) stay ordinary work.
+        "winget" | "choco" | "scoop" | "brew" | "apt" | "apt-get" | "dnf" | "yum" | "pacman" | "zypper" | "snap"
+        | "flatpak"
+            if has(words, &["uninstall", "remove", "purge", "autoremove"]) =>
+        {
+            Risk::Destructive
+        }
+        "winget" | "choco" | "scoop" | "brew" | "apt" | "apt-get" | "dnf" | "yum" | "pacman" | "zypper" | "snap"
+        | "flatpak"
+            if has(words, &["install", "upgrade", "reinstall", "update"]) =>
+        {
+            Risk::ExternalSideEffect
+        }
+        "pacman" if words.iter().skip(1).any(|w| w.starts_with("-r")) => Risk::Destructive,
+        "pacman" if words.iter().skip(1).any(|w| w.starts_with("-s") || w.starts_with("-u")) => Risk::ExternalSideEffect,
+        "msiexec" if has(words, &["/x", "/uninstall"]) => Risk::Destructive,
+        "msiexec" => Risk::ExternalSideEffect,
+        "wsl" if has(words, &["--unregister"]) => Risk::Destructive,
+        "wsl" if has(words, &["--install", "--update", "--import"]) => Risk::ExternalSideEffect,
+        "install-module" | "install-package" | "install-script" | "add-appxpackage" => Risk::ExternalSideEffect,
+        "uninstall-module" | "uninstall-package" | "remove-appxpackage" => Risk::Destructive,
         _ => Risk::Exec,
     }
 }
@@ -306,6 +330,28 @@ mod tests {
 
     fn risk(command: &str) -> Risk {
         command_risk(command)
+    }
+
+    #[test]
+    fn installing_programs_is_asked_and_removing_them_is_destructive() {
+        for command in [
+            "winget install --id Git.Git -e --source winget",
+            "winget upgrade --all",
+            "choco install nodejs -y",
+            "scoop install nu",
+            "brew install fish",
+            "msiexec /i setup.msi /qn",
+            "wsl --install",
+            "Install-Module PSReadLine -Scope CurrentUser",
+        ] {
+            assert_eq!(risk(command), Risk::ExternalSideEffect, "{command}");
+        }
+        for command in ["winget uninstall Git.Git", "brew uninstall fish", "msiexec /x {GUID} /qn", "wsl --unregister Ubuntu"] {
+            assert_eq!(risk(command), Risk::Destructive, "{command}");
+        }
+        for command in ["winget list", "winget search powershell", "brew list", "scoop list", "wsl --list --verbose"] {
+            assert_eq!(risk(command), Risk::Exec, "{command}");
+        }
     }
 
     #[test]

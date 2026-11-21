@@ -36,7 +36,7 @@ fn state_path() -> Option<PathBuf> {
 /// Spawn the background poller. Idempotent — multiple calls are no-ops
 /// after the first. Call from app startup, after the GUI is up.
 pub fn start_background_poller() {
-    if STARTED.swap(true, Ordering::SeqCst) {
+    if !unterm_protocol::self_updating() || STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::Builder::new()
@@ -56,6 +56,9 @@ pub fn start_background_poller() {
 /// One round of "ask GitHub, compare, write result". Public so the
 /// /api/updates POST handler can fire a manual recheck.
 pub fn check_once() -> anyhow::Result<()> {
+    if !unterm_protocol::self_updating() {
+        anyhow::bail!("{} is updated by its own installer", unterm_protocol::product_name());
+    }
     let current = unterm_services::VERSION.to_string();
     let latest = fetch_latest_tag()?;
     // Strip leading 'v' on both sides — our tags are vX.Y.Z, the binary

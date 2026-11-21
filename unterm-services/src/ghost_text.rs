@@ -105,8 +105,7 @@ fn user_home_dir() -> Option<std::path::PathBuf> {
 }
 
 fn ghost_history_file_path() -> Option<std::path::PathBuf> {
-    let home = user_home_dir()?;
-    Some(home.join(".unterm").join("ghost_history"))
+    unterm_protocol::state_path("ghost_history").or_else(|| Some(user_home_dir()?.join(".unterm").join("ghost_history")))
 }
 
 #[cfg(not(test))]

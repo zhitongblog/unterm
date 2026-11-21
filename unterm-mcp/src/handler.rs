@@ -4488,6 +4488,28 @@ fn write_risk(method_risk: unterm_gateway::Risk, input: &str) -> unterm_gateway:
     method_risk.max(unterm_gateway::command_risk(input))
 }
 
+/// What the person is asked about a call [`McpHandler::gate_risky`] stops:
+/// the method, what it would act on, and why it needs a yes.
+fn risky_preview(method: &str, risk: unterm_gateway::Risk, params: &Value) -> String {
+    use unterm_gateway::Risk;
+    let why = match risk {
+        Risk::ExternalSideEffect => "sends something off this machine",
+        Risk::CredentialAccess => "reaches a secret",
+        Risk::Financial => "spends money",
+        _ => "cannot be undone",
+    };
+    // The argument that says what it acts on, when there is one.
+    let on = ["path", "url", "name", "id", "session_id", "profile"]
+        .iter()
+        .find_map(|key| params.get(*key).and_then(Value::as_str))
+        .map(|value| {
+            let value: String = value.chars().take(120).collect();
+            format!(" {value}")
+        })
+        .unwrap_or_default();
+    format!("{method}{on} ({why})")
+}
+
 /// Whether a console has asked recently enough to be answering.
 pub fn console_watching() -> bool {
     let seen = CONSOLE_SEEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -5972,7 +5994,7 @@ impl McpHandler {
         //
         // Central on purpose: a per-method check is one somebody forgets to
         // add to the next destructive method, and the failure is silent.
-        if let Err(refusal) = self.gate_destructive(method) {
+        if let Err(refusal) = self.gate_risky(method, params) {
             return Err(refusal);
         }
         let result = match method {
@@ -7176,15 +7198,28 @@ impl McpHandler {
     }
 
 
-    /// Ask before something that cannot be taken back.
+    /// Ask before something whose cost lands where the user cannot reach
+    /// to undo it: sending something off the machine, reaching a secret,
+    /// spending money, or what cannot be taken back.
     ///
-    /// Only for actions the gateway classifies as destructive; everything
-    /// else returns immediately, so this costs a registry lookup on the hot
-    /// path and nothing more. A trusted agent — by config or by a standing
-    /// grant at this risk — passes straight through, which is what makes
-    /// "always allow" worth clicking.
-    fn gate_destructive(&self, method: &str) -> Result<()> {
-        if unterm_gateway::risk_of(method) != Some(unterm_gateway::Risk::Destructive) {
+    /// Only for actions the gateway puts at `ExternalSideEffect` or above;
+    /// everything else returns immediately, so this costs a registry lookup
+    /// on the hot path and nothing more. (Writes to a terminal are judged by
+    /// their command, in `gate_pty_write`.) A trusted agent — by config or
+    /// by a standing grant at this risk — passes straight through, which is
+    /// what makes "always allow" worth clicking; so does whatever the
+    /// product's autonomy setting lets agents do unasked (never deleting,
+    /// secrets or money).
+    fn gate_risky(&self, method: &str, params: &Value) -> Result<()> {
+        let Some(risk) = unterm_gateway::risk_of(method) else { return Ok(()) };
+        if risk < unterm_gateway::Risk::ExternalSideEffect {
+            return Ok(());
+        }
+        let destructive = risk == unterm_gateway::Risk::Destructive;
+        // A hosted session's host put this very call to a person or a rule
+        // before the agent could make it. Irreversible ones are asked again
+        // here, as they always were; the rest would be the same question twice.
+        if !destructive && Self::hosted_session().is_some() {
             return Ok(());
         }
         let cfg = unterm_services::settings::current();
@@ -7211,22 +7246,31 @@ impl McpHandler {
             return Ok(());
         }
         if cfg.mcp_trusted_agents.iter().any(|n| n == &agent)
-            || agent_is_granted(&agent, method, "destructive")
+            || agent_is_granted(&agent, method, risk.as_str())
         {
             return Ok(());
         }
+        if let Some(level) = client_autonomy().filter(|level| level.allows(risk)) {
+            self.audit(
+                "mcp.confirm.autonomy",
+                None,
+                &format!("agent={agent} method={method} risk={} autonomy={}", risk.as_str(), level.as_str()),
+            );
+            return Ok(());
+        }
+        let preview = risky_preview(method, risk, params);
 
-        // Nobody to ask means no. An irreversible action performed because
-        // there was no window to raise the question is the exact outcome this
-        // gate exists to prevent.
+        // Nobody to ask means no. An action performed because there was no
+        // window to raise the question is the exact outcome this gate exists
+        // to prevent.
         if !someone_can_answer() {
             self.audit(
                 "mcp.confirm.headless_block",
                 None,
-                &format!("agent={agent} method={method} (no window to approve a destructive action)"),
+                &format!("agent={agent} {preview} (no window to approve it)"),
             );
             return Err(anyhow!(
-                "blocked: {method} cannot be undone and no {product} window or console is open to approve it. \
+                "blocked: {preview}, and no {product} window or console is open to approve it. \
                  Ask the user to open {product} and try again, or to trust this agent there.",
                 product = unterm_protocol::product_name()
             ));
@@ -7246,8 +7290,8 @@ impl McpHandler {
                     method: method.to_string(),
                     pane_id: 0,
                     window_id: None,
-                    input_preview: format!("{method} (cannot be undone)"),
-                    risk: "destructive".to_string(),
+                    input_preview: preview.clone(),
+                    risk: risk.as_str().to_string(),
                     timeout_ms,
                     state: "pending".to_string(),
                     requested_at: chrono::Local::now().to_rfc3339(),
@@ -7261,9 +7305,9 @@ impl McpHandler {
                     "agent": agent,
                     "method": method,
                     "pane_id": 0,
-                    "input_preview": format!("{method} (cannot be undone)"),
+                    "input_preview": preview,
                     "timeout_ms": timeout_ms,
-                    "risk": "destructive",
+                    "risk": risk.as_str(),
                 }))
             .ok();
         let window_id = reply
@@ -7378,17 +7422,33 @@ impl McpHandler {
         // -- and headless, a refusal of something already approved. The
         // grant is re-checked on every write, so a closed session's
         // connection stops passing at once.
+        //
+        // Unless the host never saw the command: OpenCode asks before it has
+        // its arguments, so its host said yes to "a write" and left the
+        // command to be judged here, as it arrives -- under the session's
+        // own autonomy level, and put to a person when that is not enough.
+        let mut session_ceiling = None;
         if let Some(session) = Self::hosted_session() {
-            self.audit(
-                "mcp.confirm.hosted",
-                Some(&pane_id.to_string()),
-                &format!("agent={agent} {preview} (approved by the host of session {session})"),
-            );
-            return Ok(GateOutcome::Allow);
+            match unterm_services::agent_session::standing(&session).filter(|standing| standing.terminal_judges) {
+                Some(standing) => session_ceiling = Some(standing.autonomy),
+                None => {
+                    self.audit(
+                        "mcp.confirm.hosted",
+                        Some(&pane_id.to_string()),
+                        &format!("agent={agent} {preview} (approved by the host of session {session})"),
+                    );
+                    return Ok(GateOutcome::Allow);
+                }
+            }
         }
 
         let policy = cfg.mcp_input_confirmation;
-        let ceiling = client_autonomy();
+        // A session the host left this to: its own level (without one, the
+        // usual confirmation rules) -- never the external clients' setting.
+        let ceiling = match session_ceiling {
+            Some(level) => level,
+            None => client_autonomy(),
+        };
         // With a ceiling, a write is as risky as its command says; without
         // one, as its method says, as before.
         let risk = match ceiling {
@@ -7554,8 +7614,9 @@ impl McpHandler {
                     &format!("agent={} id=cfm_{} {}", agent, confirm_id, preview),
                 );
                 Ok(GateOutcome::Block(format!(
-                    "refused: the user declined this write in the Unterm window \
-                     (request_id=cfm_{confirm_id}, pane_id={pane_id})"
+                    "refused: the user declined this write in {product} \
+                     (request_id=cfm_{confirm_id}, pane_id={pane_id})",
+                    product = unterm_protocol::product_name()
                 )))
             }
             Err(_) => {
@@ -13137,77 +13198,12 @@ fn clipboard_read_win32() -> Result<Value> {
 }
 
 #[cfg(windows)]
-fn ps_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-#[cfg(windows)]
-fn run_powershell_json(script: &str) -> Result<Value> {
-    let script = format!(
-        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n$OutputEncoding = [Console]::OutputEncoding\n{}",
-        script
-    );
-    let mut bytes = Vec::with_capacity(script.len() * 2);
-    for unit in script.encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let mut command = std::process::Command::new("powershell.exe");
-    command.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        &encoded,
-    ]);
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let output = command.output().context("run PowerShell capture helper")?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "PowerShell helper failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let value: Value =
-        serde_json::from_str(stdout.trim()).context("parse PowerShell helper JSON output")?;
-    Ok(value)
-}
-
-#[cfg(windows)]
 pub fn capture_screen_image(include_base64: bool) -> Result<Value> {
     let path = capture_output_dir()?.join(format!(
         "screen_{}.png",
         chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
     ));
-    let path = path.display().to_string();
-    let qpath = ps_single_quote(&path);
-    let script = format!(
-        r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-$bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
-$gfx.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bmp.Size)
-$bmp.Save({qpath}, [System.Drawing.Imaging.ImageFormat]::Png)
-$gfx.Dispose()
-$bmp.Dispose()
-[pscustomobject]@{{
-  path = {qpath}
-  width = $bounds.Width
-  height = $bounds.Height
-  left = $bounds.Left
-  top = $bounds.Top
-}} | ConvertTo-Json -Compress
-"#
-    );
-    append_base64_if_requested(run_powershell_json(&script)?, include_base64)
+    append_base64_if_requested(crate::win_capture::capture_screen(&path)?, include_base64)
 }
 
 #[cfg(windows)]
@@ -13220,109 +13216,11 @@ pub fn capture_window_image(
         "window_{}.png",
         chrono::Local::now().format("%Y%m%d_%H%M%S_%3f")
     ));
-    let path = path.display().to_string();
-    let qpath = ps_single_quote(&path);
-    let title = title_filter
-        .map(ps_single_quote)
-        .unwrap_or_else(|| "$null".to_string());
     let pid = pid_filter.unwrap_or_else(std::process::id);
-    let script = format!(
-        r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class UntermCapture {{
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint flags);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-}}
-public struct RECT {{ public int Left; public int Top; public int Right; public int Bottom; }}
-"@
-$pidFilter = {pid}
-$titleFilter = {title}
-if ($titleFilter -ne $null) {{
-  $proc = Get-Process | Where-Object {{ $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*$titleFilter*" }} | Select-Object -First 1
-}} else {{
-  $proc = Get-Process -Id $pidFilter -ErrorAction Stop
-}}
-if ($null -eq $proc -or $proc.MainWindowHandle -eq 0) {{ throw "No matching window found" }}
-$hwnd = $proc.MainWindowHandle
-if ([UntermCapture]::IsIconic($hwnd)) {{
-  [UntermCapture]::ShowWindowAsync($hwnd, 9) | Out-Null
-  Start-Sleep -Milliseconds 120
-}}
-$rect = New-Object RECT
-# PrintWindow renders against the real HWND dimensions. DWM's extended frame
-# bounds can be several pixels shorter and causes GPU-backed windows to return
-# a false/blank frame when that smaller bitmap is supplied.
-if (-not [UntermCapture]::GetWindowRect($hwnd, [ref]$rect)) {{ throw "GetWindowRect failed" }}
-$width = $rect.Right - $rect.Left
-$height = $rect.Bottom - $rect.Top
-if ($width -le 0 -or $height -le 0) {{ throw "Invalid window bounds" }}
-$bmp = New-Object System.Drawing.Bitmap $width, $height
-$gfx = [System.Drawing.Graphics]::FromImage($bmp)
-$hdc = $gfx.GetHdc()
-try {{
-  # PW_RENDERFULLCONTENT asks DWM/composited windows for their complete client
-  # surface even when another application covers them.
-  $printed = [UntermCapture]::PrintWindow($hwnd, $hdc, 2)
-}} finally {{
-  $gfx.ReleaseHdc($hdc)
-}}
-$mode = 'print_window'
-
-# Some GPU drivers return success but leave a uniformly black bitmap. Sample
-# a small grid so that such a frame cannot masquerade as a valid self-capture.
-$samples = New-Object 'System.Collections.Generic.HashSet[int]'
-foreach ($xf in @(0.1, 0.3, 0.5, 0.7, 0.9)) {{
-  foreach ($yf in @(0.1, 0.3, 0.5, 0.7, 0.9)) {{
-    $x = [Math]::Min($width - 1, [Math]::Max(0, [int]($width * $xf)))
-    $y = [Math]::Min($height - 1, [Math]::Max(0, [int]($height * $yf)))
-    [void]$samples.Add($bmp.GetPixel($x, $y).ToArgb())
-  }}
-}}
-if (-not $printed -or $samples.Count -lt 2) {{
-  # GPU surfaces may not implement PrintWindow. Recreate the GDI objects
-  # before screen capture (the old Graphics has handed out an HDC), briefly
-  # focus the exact target, then restore the user's previous foreground app.
-  $gfx.Dispose()
-  $bmp.Dispose()
-  $bmp = New-Object System.Drawing.Bitmap $width, $height
-  $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-  $previousForeground = [UntermCapture]::GetForegroundWindow()
-  [UntermCapture]::ShowWindowAsync($hwnd, 5) | Out-Null
-  [UntermCapture]::SetForegroundWindow($hwnd) | Out-Null
-  Start-Sleep -Milliseconds 220
-  try {{
-    $gfx.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
-  }} finally {{
-    if ($previousForeground -ne [IntPtr]::Zero -and $previousForeground -ne $hwnd) {{
-      [UntermCapture]::SetForegroundWindow($previousForeground) | Out-Null
-    }}
-  }}
-  $mode = 'focused_screen'
-}}
-$bmp.Save({qpath}, [System.Drawing.Imaging.ImageFormat]::Png)
-$gfx.Dispose()
-$bmp.Dispose()
-[pscustomobject]@{{
-  path = {qpath}
-  width = $width
-  height = $height
-  left = $rect.Left
-  top = $rect.Top
-  pid = $proc.Id
-  title = $proc.MainWindowTitle
-  mode = $mode
-}} | ConvertTo-Json -Compress
-"#
-    );
-    append_base64_if_requested(run_powershell_json(&script)?, include_base64)
+    append_base64_if_requested(
+        crate::win_capture::capture_window(&path, title_filter, pid)?,
+        include_base64,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -13820,5 +13718,25 @@ mod console_confirmation_tests {
         }
         assert!(!Autonomy::Balanced.allows(write_risk(run, "git push")));
         assert!(Autonomy::Autonomous.allows(write_risk(run, "git push")));
+    }
+
+    /// Uploading a file is asked about like a push, and the question says
+    /// which file and why.
+    #[test]
+    fn an_upload_is_asked_about_and_says_what_leaves() {
+        use unterm_gateway::Risk;
+        use unterm_services::tool_risk::Autonomy;
+        let upload = unterm_gateway::risk_of("upload.file").unwrap();
+        assert_eq!(upload, Risk::ExternalSideEffect);
+        assert!(!Autonomy::Balanced.allows(upload));
+        assert!(Autonomy::Autonomous.allows(upload));
+        assert_eq!(
+            risky_preview("upload.file", upload, &json!({"path": "C:/work/report.pdf"})),
+            "upload.file C:/work/report.pdf (sends something off this machine)"
+        );
+        assert_eq!(
+            risky_preview("session.destroy", Risk::Destructive, &json!({})),
+            "session.destroy (cannot be undone)"
+        );
     }
 }

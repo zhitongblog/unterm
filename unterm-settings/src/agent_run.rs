@@ -181,7 +181,11 @@ const GOVERNED_PROMPT: &str = "This session runs inside Unzoo One. Your own shel
 web fetching are switched off. Run every command through the unterm MCP \
 server: open a terminal with its session.create tool when you need one, run commands with \
 exec.run_wait and read their output from the result. For anything in a web browser use the \
-unzoo MCP tools. Calls that could do harm are shown to the user for approval first; when one is \
+unzoo MCP tools. Prefer the terminal for work on this computer (files, documents, installed programs \
+through their command line or scripting), the browser for websites, and never drive the screen when \
+a command can do it. Sending, publishing, paying and deleting in a browser are checked against what \
+the user asked for and may be shown to them first; do each once, and if you are unsure whether it \
+went through, look before trying again. Calls that could do harm are shown to the user for approval first; when one is \
 refused, say what you needed it for instead of trying another way. When something needs the user \
 themselves (signing in, a captcha, a code sent to their phone, a password or card number), never \
 type it yourself and never ask for it in the chat: call the unterm MCP tool agent_session.handover \
@@ -211,18 +215,44 @@ const HELPERS_PROMPT: &str = "Another agent on this machine can take a self-cont
 /// browser profile chosen for it, and (unless it is a helper) that it may
 /// hand work on.
 fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
-    let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE}");
+    let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE} {}", super::server::shells_prompt());
     if let Some(profile) = browser_profile.map(str::trim).filter(|p| !p.is_empty()) {
         if unzoo_service_path().is_some() && profile != super::browser::RESERVED_PROFILE {
             prompt.push(' ');
             prompt.push_str(&super::browser::profile_instructions(profile));
         }
     }
+    let plugins = super::plugins::prompt();
+    if !plugins.is_empty() {
+        prompt.push(' ');
+        prompt.push_str(&plugins);
+    }
     if !helper {
         prompt.push(' ');
         prompt.push_str(HELPERS_PROMPT);
+        let standing = super::console_tasks::standing_helpers().unwrap_or_default();
+        if !standing.is_empty() {
+            prompt.push(' ');
+            prompt.push_str(&standing_prompt(&standing));
+        }
     }
     prompt
+}
+
+/// The standing helpers a hub may hand work to: tasks that keep their own
+/// conversation, so the helper remembers what it did there before.
+fn standing_prompt(helpers: &[super::console_tasks::StandingHelper]) -> String {
+    let listed: Vec<String> = helpers
+        .iter()
+        .take(20)
+        .map(|h| format!("{:?} (helper: {:?}, agent {})", h.title.chars().take(80).collect::<String>(), h.id, h.agent))
+        .collect();
+    format!(
+        "Standing helpers also work here, each looking after one job and remembering its earlier work: {}. \
+When the work belongs to one of them, hand it over with agent_session.delegate and helper (instead of agent) set to its id; \
+it continues its own conversation and its report comes back to you.",
+        listed.join("; ")
+    )
 }
 
 /// What a governed agent is given in place of its own shell: Unterm's MCP
@@ -236,19 +266,27 @@ fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
 /// [`AGENT_BROWSER_TOOLS`]): every tool listed is described to the model on
 /// every request, and all of them together came to some 50,000 tokens.
 /// A helper is not given `agent_session.delegate`: it does not hand on.
-fn governed_servers(helper: bool) -> Result<Vec<(&'static str, String, Vec<String>)>, String> {
+fn governed_servers(helper: bool) -> Result<Vec<super::plugins::McpMount>, String> {
     let cli = unterm_cli_path()
         .ok_or("governed mode needs unterm-cli next to this Unterm (or UNTERM_CLI) to mount Unterm's MCP")?;
     let cli = cli.display().to_string();
     let terminal: Vec<&str> =
         AGENT_TERMINAL_TOOLS.iter().copied().filter(|tool| !helper || *tool != "agent_session.delegate").collect();
-    let mut servers = vec![("unterm", cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
+    let mount = |name: &str, command: String, args: Vec<String>| super::plugins::McpMount {
+        name: name.to_string(),
+        command,
+        args,
+        env: Vec::new(),
+    };
+    let mut servers = vec![mount("unterm", cli.clone(), vec!["mcp-stdio".to_string(), "--tools".to_string(), terminal.join(",")])];
     if let Some(unzoo) = unzoo_service_path() {
         let mut args = vec!["mcp-trim".to_string(), "--keep".to_string(), AGENT_BROWSER_TOOLS.join(","), "--".to_string()];
         args.push(unzoo.display().to_string());
         args.extend(["--mcp", "stdio", "--client", super::browser::CLIENT].map(str::to_string));
-        servers.push(("unzoo", cli, args));
+        servers.push(mount("unzoo", cli, args));
     }
+    // The plugins the person turned on, with their own tools.
+    servers.extend(super::plugins::mcp_servers());
     Ok(servers)
 }
 
@@ -315,8 +353,12 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
     match agent_id {
         "claude-code" => {
             let mut mounted = serde_json::Map::new();
-            for (name, command, args) in &servers {
-                mounted.insert((*name).into(), json!({"type": "stdio", "command": command, "args": args}));
+            for server in &servers {
+                let mut spec = json!({"type": "stdio", "command": server.command, "args": server.args});
+                if !server.env.is_empty() {
+                    spec["env"] = Value::Object(server.env.iter().map(|(k, v)| (k.clone(), json!(v))).collect());
+                }
+                mounted.insert(server.name.clone(), spec);
             }
             Ok(vec![
                 "-p".into(),
@@ -330,10 +372,16 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
         }
         "codex-cli" => {
             let mut out = Vec::new();
-            for (name, command, args) in &servers {
-                out.extend(["-c".to_string(), format!("mcp_servers.{name}.command={}", toml_string(command))]);
-                out.extend(["-c".to_string(), format!("mcp_servers.{name}.args={}", json!(args))]);
+            for server in &servers {
+                let name = &server.name;
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.command={}", toml_string(&server.command))]);
+                out.extend(["-c".to_string(), format!("mcp_servers.{name}.args={}", json!(server.args))]);
                 out.extend(["-c".to_string(), format!("mcp_servers.{name}.env_vars={}", json!(CODEX_PASSES_ON))]);
+                if !server.env.is_empty() {
+                    // A TOML inline table: key = "value", each value a JSON string literal.
+                    let table: Vec<String> = server.env.iter().map(|(k, v)| format!("{k} = {}", toml_string(v))).collect();
+                    out.extend(["-c".to_string(), format!("mcp_servers.{name}.env={{{}}}", table.join(", "))]);
+                }
             }
             for tool in CODEX_OWN_TOOLS {
                 out.extend(["--disable".to_string(), tool.to_string()]);
@@ -350,10 +398,19 @@ fn governed_args(agent_id: &str, browser_profile: Option<&str>, helper: bool) ->
 /// instructions file (OpenCode takes instructions only from files).
 fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Value, String> {
     let mut mcp = serde_json::Map::new();
-    for (name, command, args) in governed_servers(helper)? {
-        let mut words = vec![command];
-        words.extend(args);
-        mcp.insert(name.into(), json!({"type": "local", "command": words, "enabled": true}));
+    // OpenCode runs MCP tools without asking unless told to, so a command
+    // in Unterm's terminal would never reach the inbox: ask for every tool
+    // of the mounted servers, and the host judges each by its risk.
+    let mut permission = serde_json::Map::new();
+    for server in governed_servers(helper)? {
+        let mut words = vec![server.command.clone()];
+        words.extend(server.args.iter().cloned());
+        let mut spec = json!({"type": "local", "command": words, "enabled": true});
+        if !server.env.is_empty() {
+            spec["environment"] = Value::Object(server.env.iter().map(|(k, v)| (k.clone(), json!(v))).collect());
+        }
+        mcp.insert(server.name.clone(), spec);
+        permission.insert(format!("{}_*", server.name), json!("ask"));
     }
     let file = unterm_protocol::state_path(format!(
         "governed/opencode-{}.md",
@@ -367,6 +424,7 @@ fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Valu
     Ok(json!({
         "mcp": mcp,
         "tools": {"bash": false, "webfetch": false},
+        "permission": permission,
         "instructions": [file.display().to_string()],
     }))
 }
@@ -423,6 +481,10 @@ pub(crate) fn agent_of(adapter: &str) -> Option<&'static str> {
         "agy" => Some("agy"),
         _ => None,
     }
+}
+
+pub(crate) fn adapter_name(agent_id: &str) -> &'static str {
+    adapter_of(agent_id)
 }
 
 fn adapter_of(agent_id: &str) -> &'static str {
@@ -497,6 +559,19 @@ pub(crate) fn start_session(handler: &McpHandler, body: &Value) -> Result<Value,
             return Err((400, "Bad Request", format!("cwd is not a directory: {cwd}")));
         }
         params.insert("cwd".into(), json!(cwd));
+    }
+    // What the person said, for the reviewer of a sending step: given by
+    // the console's task runner, else the prompt itself when the person
+    // started it here. A helper's prompt is another agent's words.
+    match body.get("person_words") {
+        Some(Value::String(words)) => {
+            params.insert("person_words".into(), json!(words));
+        }
+        Some(_) => {}
+        None if !helper => {
+            params.insert("person_words".into(), json!(prompt));
+        }
+        None => {}
     }
     // Carried onto every event and log line, so the console can thread them
     // back onto the task they belong to.
@@ -635,6 +710,8 @@ pub fn api_session_act(handler: &McpHandler, method: &str, body: &[u8]) -> Respo
     }
     if let Some(text) = string_field(&body, "text") {
         params.insert("text".into(), json!(text));
+        // Typed into the console or the phone: the person's own words.
+        params.insert("from_person".into(), json!(true));
     }
     if let Some(grace) = body.get("grace_ms").and_then(Value::as_u64) {
         params.insert("grace_ms".into(), json!(grace));
@@ -847,6 +924,47 @@ mod tests {
     }
 
     #[test]
+    fn an_enabled_plugins_tools_are_mounted_and_named_in_the_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
+        std::fs::write(&cli, b"").unwrap();
+        std::env::set_var("UNTERM_CLI", &cli);
+        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let plugin = dir.path().join("notes");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("unzoo-plugin.json"),
+            r#"{"id": "notes", "name": "Notes", "description": "keeps notes",
+                "mcp": {"command": ["python", "{dir}/mcp_server.py"], "tools": {"list_notes": "read"}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+        let registry = json!({"plugins": [{"id": "notes", "dir": plugin.display().to_string(), "enabled": true}]});
+        std::fs::write(dir.path().join("plugins/registry.json"), registry.to_string()).unwrap();
+
+        let args = governed_args("claude-code", None, false).unwrap();
+        let at = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        let config: Value = serde_json::from_str(&at("--mcp-config").unwrap()).unwrap();
+        let mounted = &config["mcpServers"]["plugin_notes"];
+        assert_eq!(mounted["command"], "python");
+        assert_eq!(mounted["args"][0], format!("{}/mcp_server.py", plugin.display()));
+        // The tools see the same data folder and roles as the plugin's own program.
+        assert_eq!(mounted["env"]["UNZOO_PLUGIN_ID"], "notes");
+        assert!(mounted["env"]["UNZOO_PLUGIN_DATA"].as_str().unwrap().replace('\\', "/").ends_with("plugins/notes/data"));
+        assert!(at("--append-system-prompt").unwrap().contains("Notes (tools plugin_notes__*): keeps notes"));
+        let codex = governed_args("codex-cli", None, false).unwrap();
+        assert!(codex.iter().any(|a| a.starts_with("mcp_servers.plugin_notes.command=")));
+        assert!(codex.iter().any(|a| a.starts_with("mcp_servers.plugin_notes.env={UNZOO_PLUGIN_ID = \"notes\"")));
+
+        // Turned off, it is gone.
+        let registry = json!({"plugins": [{"id": "notes", "dir": plugin.display().to_string(), "enabled": false}]});
+        std::fs::write(dir.path().join("plugins/registry.json"), registry.to_string()).unwrap();
+        let args = governed_args("claude-code", None, false).unwrap();
+        assert!(!args.iter().any(|a| a.contains("plugin_notes")));
+        std::env::remove_var("UNTERM_STATE_DIR");
+    }
+
+    #[test]
     fn the_governed_preset_switches_the_shell_off_and_mounts_unterm() {
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
@@ -968,6 +1086,7 @@ mod tests {
         let config = opencode_governed(None, false).unwrap();
         assert_eq!(config["mcp"]["unterm"]["command"].as_array().unwrap()[..2].to_vec(), vec![json!(cli.display().to_string()), json!("mcp-stdio")]);
         assert_eq!(config["tools"], json!({"bash": false, "webfetch": false}));
+        assert_eq!(config["permission"], json!({"unterm_*": "ask"}), "its terminal's commands come to the inbox");
         let file = config["instructions"][0].as_str().unwrap();
         assert!(std::fs::read_to_string(file).unwrap().contains("exec.run_wait"));
         let env = session_env("opencode", true, None, false).unwrap();

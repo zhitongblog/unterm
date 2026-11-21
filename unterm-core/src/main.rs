@@ -122,9 +122,13 @@ fn main() -> Result<()> {
     // sessions, and two versions can migrate the same database differently.
     // Said at startup, once, because it explains a class of failure nobody
     // would otherwise connect to having installed Unterm twice.
-    let installs = unterm_services::install::survey();
-    for conflict in unterm_services::install::conflicts(&installs) {
-        eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
+    // A product shipping the runtime has its own state directory, so a
+    // standalone Unterm beside it is no conflict.
+    if unterm_protocol::is_standalone() {
+        let installs = unterm_services::install::survey();
+        for conflict in unterm_services::install::conflicts(&installs) {
+            eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
+        }
     }
 
     write_discovery(&endpoint.to_string(), &token, mcp_port, http_port, server.started_at())?;
@@ -202,6 +206,9 @@ fn main() -> Result<()> {
     // However `run` ended -- `core.shutdown`, a finished drain, the orphan
     // watchdog -- the sessions end with it, the ordinary way.
     unterm_core::destroy_all_sessions();
+    // The plugins' programs too: the job is disarmed below, and they would
+    // otherwise outlive the Core.
+    unterm_settings::plugins::stop_all();
     let _ = clear_discovery();
     // An orderly exit: every session has been closed. What is left in the job
     // is what the user launched from a shell to keep (an editor window), and

@@ -61,10 +61,24 @@ pub fn start_web_settings_server(auth_token: String) -> u16 {
     let handler = Arc::new(McpHandler::new());
     // Console tasks run on schedule whether or not a console page is open.
     crate::console_tasks::start_scheduler(Arc::clone(&handler));
+    // The plugins the person turned on run beside it.
+    crate::plugins::start_supervisor();
     // The agents it runs may hand work to other agents on this machine.
     unterm_mcp::records::set_delegator(crate::helpers::delegate);
-    // The user's own clients get the same ceiling as the agents it runs.
-    unterm_mcp::handler::set_client_autonomy(|| crate::console_tasks::run_settings().autonomy);
+    // In a product built on this console (one that names itself), the
+    // user's own clients get the same ceiling as the agents it runs. The
+    // terminal on its own keeps its rule: ask the first time each agent
+    // writes, and refuse when nobody can answer.
+    if unterm_protocol::product_name() != "Unterm" {
+        unterm_mcp::handler::set_client_autonomy(|| crate::console_tasks::run_settings().autonomy);
+    }
+    // An update may have changed the built-in skills: refresh the copies in
+    // the clients the person connected.
+    let _ = thread::Builder::new().name("skills-sync".into()).spawn(|| {
+        if let Err(error) = crate::clients::sync_skills() {
+            log::warn!("could not update the skills in connected clients: {error:#}");
+        }
+    });
     if crate::remote::load_or_init_config().enabled {
         crate::remote::ensure_remote_server_started(Arc::clone(&handler));
     }
@@ -177,7 +191,7 @@ pub(crate) struct Response {
     pub(crate) status: u16,
     reason: &'static str,
     content_type: &'static str,
-    body: Vec<u8>,
+    pub(crate) body: Vec<u8>,
     extra_headers: Vec<(&'static str, String)>,
 }
 
@@ -292,7 +306,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request> {
     })
 }
 
-fn write_response(stream: &mut TcpStream, resp: &Response) -> Result<()> {
+pub(crate) fn write_response(stream: &mut TcpStream, resp: &Response) -> Result<()> {
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n",
         resp.status,
@@ -435,6 +449,26 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/health") => Response::ok_json(json!({"ok": true})),
         ("GET", "/api/state") => api_state(handler),
         ("GET", "/api/shells") => api_shells(),
+        ("GET", "/api/plugins") => super::plugins::api_list(),
+        ("GET", "/api/agents/models") => super::agent_models::api_models(&req.query),
+        ("GET", "/api/plugins/log") => super::plugins::api_log(&req.query),
+        ("POST", "/api/plugins/add") => super::plugins::api_add(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/enable") => super::plugins::api_enable(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/restart") => super::plugins::api_restart(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/remove") => super::plugins::api_remove(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/bind") => super::plugins::api_bind(&parse_json_body(&req.body)),
+        ("POST", "/api/plugins/settings") => super::plugins::api_settings(&parse_json_body(&req.body)),
+        ("GET", "/api/tell-rules") => Response::ok_json(super::tell_rules::api_list()),
+        ("POST", "/api/tell-rules/forget") => {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            match body.get("kind").and_then(Value::as_str).filter(|k| !k.trim().is_empty()) {
+                Some(kind) => match super::tell_rules::forget(kind) {
+                    Ok(rules) => Response::ok_json(json!(rules)),
+                    Err(e) => Response::err(500, "Internal Server Error", &format!("{e:#}")),
+                },
+                None => Response::err(400, "Bad Request", "kind is required"),
+            }
+        }
         ("POST", "/api/shells/install") => api_shell_install(&req.body),
         ("POST", "/api/shells/default") => api_shell_default_set(&req.body),
         ("POST", "/api/proxy") => api_proxy(handler, &req.body),
@@ -573,6 +607,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("GET", "/api/console/tasks") => super::console_tasks::api_list(),
         ("POST", "/api/console/tasks/put") => super::console_tasks::api_put(&req.body),
         ("POST", "/api/console/tasks/delete") => super::console_tasks::api_delete(&req.body),
+        ("POST", "/api/console/tasks/watch-secret") => super::console_tasks::api_watch_secret(&req.body),
         ("POST", "/api/console/tasks/run") => super::console_tasks::api_run(handler, &req.body),
         ("POST", "/api/console/tasks/stop") => super::console_tasks::api_stop(&req.body),
         ("POST", "/api/console/tasks/output") => super::console_tasks::api_output(&req.body),
@@ -1229,11 +1264,60 @@ fn api_state(handler: &McpHandler) -> Response {
 }
 
 fn api_shells() -> Response {
+    let mut shells = shell_inventory();
+    let installs = SHELL_INSTALLS.lock().map(|held| held.clone()).unwrap_or_default();
+    for shell in &mut shells {
+        let id = shell["id"].as_str().unwrap_or_default().to_string();
+        shell["install_by_hand"] = json!(shell_install_by_hand(&id));
+        match installs.get(&id) {
+            Some(ShellInstall::Running) => shell["installing"] = json!(true),
+            Some(ShellInstall::Failed(error)) if shell["installed"] != json!(true) => {
+                shell["install_error"] = json!(error)
+            }
+            _ => {}
+        }
+    }
     Response::ok_json(json!({
         "platform": std::env::consts::OS,
-        "shells": shell_inventory(),
+        "shells": shells,
         "default_shell": current_default_shell(),
     }))
+}
+
+/// Installs started from the settings page, by shell id, while the page
+/// waits for them: running, or the reason one failed.
+#[derive(Clone)]
+enum ShellInstall {
+    Running,
+    Failed(String),
+}
+
+static SHELL_INSTALLS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, ShellInstall>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// A shell whose installer needs an administrator and a restart (WSL): the
+/// page says how to install it rather than starting it from a background
+/// service nobody is watching.
+fn shell_install_by_hand(id: &str) -> bool {
+    id == "wsl"
+}
+
+/// Which listed shell an argv starts, if any.
+fn shell_id_of(argv: &[String]) -> Option<String> {
+    let program = argv.first()?.to_ascii_lowercase();
+    let short = short_program_name(&program);
+    [
+        "pwsh", "windows-powershell", "cmd", "git-bash", "msys2", "cygwin", "wsl", "nushell", "bash", "zsh", "fish",
+        "elvish", "xonsh", "oil",
+    ]
+    .iter()
+    .find(|id| {
+        shell_default_argv(id).and_then(|known| known.first().cloned()).is_some_and(|known| {
+            let known = known.to_ascii_lowercase();
+            known == program || (!program.contains(['/', '\\']) && short_program_name(&known) == short)
+        })
+    })
+    .map(|id| id.to_string())
 }
 
 fn current_default_shell() -> Value {
@@ -1249,6 +1333,7 @@ fn current_default_shell() -> Value {
     };
     json!({
         "source": source,
+        "id": shell_id_of(&argv),
         "argv": argv,
         "label": argv.first().map(|s| short_program_name(s)).unwrap_or_default(),
     })
@@ -1257,9 +1342,21 @@ fn current_default_shell() -> Value {
 fn api_shell_default_set(body: &[u8]) -> Response {
     let body = parse_json_body(body);
     let id = match body.get("id").and_then(|v| v.as_str()) {
-        Some(id) if !id.trim().is_empty() => id.trim(),
+        Some(id) => id.trim(),
         _ => return Response::err(400, "Bad Request", "missing shell id"),
     };
+    // Empty or "auto": back to the platform's choice.
+    if id.is_empty() || id == "auto" {
+        if let Err(err) = clear_default_shell() {
+            return Response::err(500, "Internal Error", &err.to_string());
+        }
+        reload_settings();
+        return Response::ok_json(json!({
+            "applied": true,
+            "requires_new_shell": true,
+            "default_shell": current_default_shell(),
+        }));
+    }
     let Some(argv) = shell_default_argv(id) else {
         return Response::err(400, "Bad Request", "shell cannot be used as a default");
     };
@@ -1269,6 +1366,7 @@ fn api_shell_default_set(body: &[u8]) -> Response {
     if let Err(err) = write_default_shell(&argv) {
         return Response::err(500, "Internal Error", &err.to_string());
     }
+    reload_settings();
     Response::ok_json(json!({
         "applied": true,
         "requires_new_shell": true,
@@ -1299,6 +1397,13 @@ fn api_shell_install(body: &[u8]) -> Response {
             "requires_new_shell": true,
         }));
     }
+    if shell_install_by_hand(id) {
+        return Response::err(
+            409,
+            "Conflict",
+            &format!("install it from an administrator shell: {}", plan.command_line()),
+        );
+    }
     if !program_exists(&plan.program) {
         return Response::err(
             409,
@@ -1306,24 +1411,72 @@ fn api_shell_install(body: &[u8]) -> Response {
             &format!("installer '{}' was not found", plan.program),
         );
     }
-    let mut cmd = std::process::Command::new(&plan.program);
-    cmd.args(&plan.args).stdin(std::process::Stdio::null());
+    {
+        let Ok(mut installs) = SHELL_INSTALLS.lock() else {
+            return Response::err(500, "Internal Error", "install state is unavailable");
+        };
+        if matches!(installs.get(id), Some(ShellInstall::Running)) {
+            return Response::ok_json(json!({"ok": true, "dry_run": false, "id": id, "already_running": true}));
+        }
+        installs.insert(id.to_string(), ShellInstall::Running);
+    }
+    // In the background, with no console window: the page polls the list.
+    // A machine-wide install still raises the system's own consent prompt.
+    let key = id.to_string();
+    let command_line = plan.command_line();
+    std::thread::spawn(move || {
+        let mut command = std::process::Command::new(&plan.program);
+        command.args(&plan.args).stdin(std::process::Stdio::null());
+        hide_console(&mut command);
+        let outcome = match command.output() {
+            Ok(output) if output.status.success() => None,
+            Ok(output) => {
+                let text = decode_command_output(&output.stdout) + &decode_command_output(&output.stderr);
+                let last = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| line.chars().any(char::is_alphanumeric))
+                    .last()
+                    .unwrap_or("")
+                    .chars()
+                    .take(300)
+                    .collect::<String>();
+                Some(format!("exit {}: {last}", output.status.code().unwrap_or(-1)))
+            }
+            Err(e) => Some(format!("launch installer: {e}")),
+        };
+        if let Ok(mut installs) = SHELL_INSTALLS.lock() {
+            match outcome {
+                None => installs.remove(&key),
+                Some(error) => installs.insert(key, ShellInstall::Failed(error)),
+            };
+        }
+    });
+    Response::ok_json(json!({
+        "ok": true,
+        "dry_run": false,
+        "id": id,
+        "command": command_line,
+        "requires_new_shell": true,
+    }))
+}
+
+/// No console window for a program started from the background service.
+fn hide_console(command: &mut std::process::Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
+        command.creation_flags(0x0800_0000);
     }
-    match cmd.spawn()
-    {
-        Ok(_) => Response::ok_json(json!({
-            "ok": true,
-            "dry_run": false,
-            "id": id,
-            "command": plan.command_line(),
-            "requires_new_shell": true,
-        })),
-        Err(e) => Response::err(500, "Internal Error", &format!("launch installer: {e}")),
-    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
+/// New terminals (and agents' terminals) start the shell the config now
+/// names, without restarting the service.
+fn reload_settings() {
+    let (config, _) = unterm_services::settings::load(None);
+    unterm_services::settings::set_current(&config);
 }
 
 struct ShellInstallPlan {
@@ -1339,6 +1492,78 @@ impl ShellInstallPlan {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+/// What an agent is told about the shells here: which one its terminals
+/// start, which others it can start with `session.create`'s argv, and how a
+/// missing one is installed (the gateway asks the person first). The list
+/// runs each shell once to read its version, so it is kept for ten minutes.
+pub(crate) fn shells_prompt() -> String {
+    static HELD: std::sync::Mutex<Option<(std::time::Instant, String)>> = std::sync::Mutex::new(None);
+    if let Ok(held) = HELD.lock() {
+        if let Some((at, text)) = held.as_ref() {
+            if at.elapsed() < std::time::Duration::from_secs(600) {
+                return text.clone();
+            }
+        }
+    }
+    let text = describe_shells(&shell_inventory(), &current_default_shell());
+    if let Ok(mut held) = HELD.lock() {
+        *held = Some((std::time::Instant::now(), text.clone()));
+    }
+    text
+}
+
+fn describe_shells(shells: &[Value], default: &Value) -> String {
+    let default_id = default["id"].as_str().unwrap_or_default();
+    let name_of = |id: &str| {
+        shells
+            .iter()
+            .find(|shell| shell["id"] == id)
+            .and_then(|shell| shell["name"].as_str())
+            .unwrap_or(id)
+            .to_string()
+    };
+    let default_name = if default_id.is_empty() {
+        default["label"].as_str().unwrap_or("the platform shell").to_string()
+    } else {
+        name_of(default_id)
+    };
+    let others: Vec<String> = shells
+        .iter()
+        .filter(|shell| shell["installed"] == true && shell["id"] != default_id)
+        .filter_map(|shell| {
+            let id = shell["id"].as_str()?;
+            let argv = shell_default_argv(id)?;
+            let program = resolve_program(argv.first()?).unwrap_or_else(|| argv[0].clone());
+            let argv: Vec<String> = std::iter::once(program).chain(argv[1..].iter().cloned()).collect();
+            Some(format!("{} (argv {})", shell["name"].as_str()?, serde_json::to_string(&argv).ok()?))
+        })
+        .collect();
+    let missing: Vec<String> = shells
+        .iter()
+        .filter(|shell| shell["installed"] != true && !shell["install_command"].is_null())
+        .filter(|shell| !shell_install_by_hand(shell["id"].as_str().unwrap_or_default()))
+        .filter_map(|shell| Some(format!("{}: `{}`", shell["name"].as_str()?, shell["install_command"].as_str()?)))
+        .take(4)
+        .collect();
+    let mut text = format!("Terminals here start {default_name}; write commands for it.");
+    if !others.is_empty() {
+        text.push_str(&format!(
+            " Other shells on this computer: {}. When a job needs one of them (a bash script, Linux tools), open a terminal with session.create and that argv.",
+            others.join(", ")
+        ));
+    }
+    if !missing.is_empty() {
+        text.push_str(&format!(
+            " If a job needs a shell that is not installed, install it in a terminal; the person is asked first: {}.",
+            missing.join("; ")
+        ));
+    }
+    if shells.iter().any(|shell| shell["id"] == "wsl" && shell["installed"] != true) {
+        text.push_str(" WSL needs an administrator and a restart: ask the person to install it instead.");
+    }
+    text
 }
 
 fn shell_inventory() -> Vec<Value> {
@@ -1388,11 +1613,11 @@ fn shell_inventory() -> Vec<Value> {
         "git-bash",
         "Git Bash",
         "Bash from Git for Windows",
+        // Not a bare `bash.exe`: on Windows that is usually WSL's launcher
+        // in System32, which would list WSL as Git Bash.
         &[
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files (x86)\Git\bin\bash.exe",
-            "bash.exe",
-            "bash",
         ],
         &["--version"],
         shell_install_plan("git-bash").map(|p| p.command_line()),
@@ -1578,6 +1803,10 @@ fn shell_install_plan(id: &str) -> Option<ShellInstallPlan> {
                 "Microsoft.PowerShell".to_string(),
                 "--source".to_string(),
                 "winget".to_string(),
+                "--exact".to_string(),
+                "--accept-package-agreements".to_string(),
+                "--accept-source-agreements".to_string(),
+                "--disable-interactivity".to_string(),
             ],
         }),
         ("windows", "git-bash") => Some(ShellInstallPlan {
@@ -1588,6 +1817,10 @@ fn shell_install_plan(id: &str) -> Option<ShellInstallPlan> {
                 "Git.Git".to_string(),
                 "--source".to_string(),
                 "winget".to_string(),
+                "--exact".to_string(),
+                "--accept-package-agreements".to_string(),
+                "--accept-source-agreements".to_string(),
+                "--disable-interactivity".to_string(),
             ],
         }),
         ("windows", "msys2") => Some(ShellInstallPlan {
@@ -1598,6 +1831,10 @@ fn shell_install_plan(id: &str) -> Option<ShellInstallPlan> {
                 "MSYS2.MSYS2".to_string(),
                 "--source".to_string(),
                 "winget".to_string(),
+                "--exact".to_string(),
+                "--accept-package-agreements".to_string(),
+                "--accept-source-agreements".to_string(),
+                "--disable-interactivity".to_string(),
             ],
         }),
         ("windows", "cygwin") => Some(ShellInstallPlan {
@@ -1608,6 +1845,10 @@ fn shell_install_plan(id: &str) -> Option<ShellInstallPlan> {
                 "Cygwin.Cygwin".to_string(),
                 "--source".to_string(),
                 "winget".to_string(),
+                "--exact".to_string(),
+                "--accept-package-agreements".to_string(),
+                "--accept-source-agreements".to_string(),
+                "--disable-interactivity".to_string(),
             ],
         }),
         ("windows", "clink") => Some(ShellInstallPlan {
@@ -1618,6 +1859,10 @@ fn shell_install_plan(id: &str) -> Option<ShellInstallPlan> {
                 "chrisant996.Clink".to_string(),
                 "--source".to_string(),
                 "winget".to_string(),
+                "--exact".to_string(),
+                "--accept-package-agreements".to_string(),
+                "--accept-source-agreements".to_string(),
+                "--disable-interactivity".to_string(),
             ],
         }),
         ("windows", "wsl") => Some(ShellInstallPlan {
@@ -1632,6 +1877,10 @@ fn shell_install_plan(id: &str) -> Option<ShellInstallPlan> {
                 "Nushell.Nushell".to_string(),
                 "--source".to_string(),
                 "winget".to_string(),
+                "--exact".to_string(),
+                "--accept-package-agreements".to_string(),
+                "--accept-source-agreements".to_string(),
+                "--disable-interactivity".to_string(),
             ],
         }),
         ("macos", "pwsh") => Some(ShellInstallPlan {
@@ -1686,10 +1935,8 @@ fn shell_default_argv(id: &str) -> Option<Vec<String>> {
             &[
                 r"C:\Program Files\Git\bin\bash.exe",
                 r"C:\Program Files (x86)\Git\bin\bash.exe",
-                "bash.exe",
-                "bash",
             ],
-            &[],
+            &["--login", "-i"],
         ),
         ("windows", "msys2") => (
             &[
@@ -1732,6 +1979,29 @@ fn write_default_shell(argv: &[String]) -> std::io::Result<()> {
     let source = std::fs::read_to_string(&path).unwrap_or_default();
     let updated = set_top_level_shell(&source, argv);
     std::fs::write(path, updated)
+}
+
+fn clear_default_shell() -> std::io::Result<()> {
+    let Some(path) = unterm_services::settings::default_path() else { return Ok(()) };
+    let Ok(source) = std::fs::read_to_string(&path) else { return Ok(()) };
+    std::fs::write(path, remove_top_level_shell(&source))
+}
+
+/// The config without its top-level `shell = …` line.
+fn remove_top_level_shell(source: &str) -> String {
+    let mut output = String::new();
+    let mut in_section = false;
+    for line in source.lines() {
+        if line.trim_start().starts_with('[') {
+            in_section = true;
+        }
+        if !in_section && top_level_shell_line(line) {
+            continue;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    output
 }
 
 fn set_top_level_shell(source: &str, argv: &[String]) -> String {
@@ -1823,14 +2093,10 @@ fn program_exists(program: &str) -> bool {
 }
 
 fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args).stdin(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let output = cmd.output().ok()?;
+    let mut command = std::process::Command::new(program);
+    command.args(args).stdin(std::process::Stdio::null());
+    hide_console(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1949,16 +2215,23 @@ fn current_term_program() -> String {
             }
         }
     }
-    "Unterm".to_string()
+    unterm_protocol::default_term_program()
 }
 
 fn api_compat_get() -> Response {
+    let default = unterm_protocol::default_term_program();
+    let mut presets = vec![default.clone()];
+    // Common values the UI offers as one-click presets. Custom is
+    // implicitly available — any non-listed string is accepted.
+    for name in ["WezTerm", "xterm", "vscode", "Apple_Terminal", "iTerm.app"] {
+        if name != default {
+            presets.push(name.to_string());
+        }
+    }
     Response::ok_json(json!({
         "term_program": current_term_program(),
-        "default": "Unterm",
-        // Common values the UI offers as one-click presets. Custom is
-        // implicitly available — any non-listed string is accepted.
-        "presets": ["Unterm", "WezTerm", "Apple_Terminal", "iTerm.app", "xterm"],
+        "default": default,
+        "presets": presets,
     }))
 }
 
@@ -2012,11 +2285,17 @@ fn api_compat_set(body: &[u8]) -> Response {
         Some(s) => {
             let s = s.trim();
             if s.is_empty() {
-                return Response::err(
-                    400,
-                    "Bad Request",
-                    "term_program may not be empty — pass \"Unterm\" to reset to default",
-                );
+                // Back to the default: the product's own name.
+                if let Err(e) = std::fs::remove_file(compat_path()) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Response::err(500, "Internal Error", &e.to_string());
+                    }
+                }
+                return Response::ok_json(json!({
+                    "applied": true,
+                    "term_program": current_term_program(),
+                    "requires_new_shell": true,
+                }));
             }
             if s.len() > 64 {
                 return Response::err(400, "Bad Request", "term_program too long (max 64 chars)");
@@ -2865,11 +3144,42 @@ mod tests {
     }
 
     #[test]
-    fn compat_api_rejects_empty_and_control_values() {
+    fn clearing_the_shell_keeps_the_rest_of_the_config() {
+        let source = "font_size = 12\nshell = [\"bash\"]\n\n[platform.windows]\nshell = [\"cmd.exe\"]\n";
+        assert_eq!(
+            remove_top_level_shell(source),
+            "font_size = 12\n\n[platform.windows]\nshell = [\"cmd.exe\"]\n"
+        );
+    }
+
+    #[test]
+    fn agents_are_told_the_default_the_others_and_how_to_install() {
+        let shells = vec![
+            json!({"id": "pwsh", "name": "PowerShell 7", "installed": true, "install_command": null}),
+            json!({"id": "cmd", "name": "Command Prompt", "installed": true, "install_command": null}),
+            json!({"id": "git-bash", "name": "Git Bash", "installed": false, "install_command": "winget install --id Git.Git"}),
+            json!({"id": "wsl", "name": "WSL", "installed": false, "install_command": "wsl.exe --install"}),
+        ];
+        let text = describe_shells(&shells, &json!({"id": "pwsh", "label": "pwsh.exe"}));
+        assert!(text.starts_with("Terminals here start PowerShell 7"), "{text}");
+        if cfg!(windows) {
+            assert!(text.contains("Command Prompt (argv"), "{text}");
+            assert!(text.contains("Git Bash: `winget install --id Git.Git`"), "{text}");
+            assert!(!text.contains("wsl.exe --install"), "WSL is for the person: {text}");
+            assert!(text.contains("WSL needs an administrator"), "{text}");
+        }
+    }
+
+    #[test]
+    fn compat_api_resets_on_empty_and_rejects_control_values() {
         let _guard = StateDirGuard::new("compat-reject");
 
+        let response = api_compat_set(br#"{"term_program":"WezTerm"}"#);
+        assert_eq!(response.status, 200);
+        // Empty goes back to the default rather than being refused.
         let response = api_compat_set(br#"{"term_program":"   "}"#);
-        assert_eq!(response.status, 400);
+        assert_eq!(response.status, 200);
+        assert_eq!(response_json(response)["term_program"], "Unterm");
 
         let response = api_compat_set(b"{\"term_program\":\"bad\\nvalue\"}");
         assert_eq!(response.status, 400);

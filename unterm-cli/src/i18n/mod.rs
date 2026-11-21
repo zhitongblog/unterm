@@ -182,26 +182,10 @@ fn detect_os_locale() -> Option<&'static str> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("reg")
-            .args([
-                "query",
-                "HKCU\\Control Panel\\International",
-                "/v",
-                "LocaleName",
-            ])
-            .output()
+        if let Some(code) =
+            unterm_services::i18n::detect::windows_locale_name().and_then(|name| map_to_canonical(&name))
         {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                for line in text.lines() {
-                    if let Some(idx) = line.to_ascii_lowercase().find("reg_sz") {
-                        let value = line[idx + "reg_sz".len()..].trim();
-                        if let Some(code) = map_to_canonical(value) {
-                            return Some(code);
-                        }
-                    }
-                }
-            }
+            return Some(code);
         }
     }
     for var in &["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"] {

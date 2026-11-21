@@ -146,7 +146,9 @@ pub fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     if !enabled {
         off.push(name.to_string());
     }
-    write_disabled(&off)
+    write_disabled(&off)?;
+    resync();
+    Ok(())
 }
 
 /// Remove a skill of the person's own. Built-in ones can only be switched
@@ -165,7 +167,9 @@ pub fn delete(name: &str) -> Result<()> {
     std::fs::remove_dir_all(&dir).with_context(|| format!("could not remove {}", dir.display()))?;
     let mut off = disabled();
     off.retain(|known| known != name);
-    write_disabled(&off)
+    write_disabled(&off)?;
+    resync();
+    Ok(())
 }
 
 fn copy_dir(from: &Path, to: &Path, depth: usize) -> Result<()> {
@@ -205,6 +209,7 @@ pub fn import(from: &Path, replace: bool) -> Result<String> {
         std::fs::remove_dir_all(&target)?;
     }
     copy_dir(from, &target, 0)?;
+    resync();
     Ok(name)
 }
 
@@ -257,6 +262,79 @@ pub fn prepare_plugin() -> Result<Option<PathBuf>> {
         copy_dir(&path, &root.join("skills").join(name), 0)?;
     }
     Ok(Some(root))
+}
+
+/// Left in every skill folder copied into another client's skills, so the
+/// copies can be told from the person's own and only they are replaced or
+/// removed.
+const MARK: &str = ".unzoo-one-skill";
+
+/// Built-in skills that only mean something in a run Unzoo One hosts (where
+/// a task has a work folder and its outputs are collected).
+const HOSTED_ONLY: &[&str] = &["unzoo-deliverables"];
+
+/// Put the enabled skills into a client's own skills folder (`~/.claude/skills`,
+/// `~/.codex/skills`...), for the person's clients that use this terminal.
+///
+/// Only copies made here are touched: a folder of the person's with the same
+/// name is left alone and reported as skipped, and a copy of a skill since
+/// switched off or deleted is removed. Returns (installed, skipped).
+pub fn install_into(dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
+    let off = disabled();
+    let wanted: Vec<_> = all()
+        .into_iter()
+        .filter(|skill| !off.contains(&skill.0) && !HOSTED_ONLY.contains(&skill.0.as_str()))
+        .collect();
+    std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.path().join(MARK).is_file() && !wanted.iter().any(|skill| skill.0 == name) {
+            std::fs::remove_dir_all(entry.path())
+                .with_context(|| format!("could not remove {}", entry.path().display()))?;
+        }
+    }
+    let (mut installed, mut skipped) = (Vec::new(), Vec::new());
+    for (name, _, _, path) in wanted {
+        let target = dir.join(&name);
+        if target.exists() {
+            if !target.join(MARK).is_file() {
+                skipped.push(name);
+                continue;
+            }
+            std::fs::remove_dir_all(&target)
+                .with_context(|| format!("could not replace {}", target.display()))?;
+        }
+        copy_dir(&path, &target, 0)?;
+        std::fs::write(
+            target.join(MARK),
+            "Copied here by Unzoo One, which keeps it up to date and removes it when this client is disconnected.\n",
+        )?;
+        installed.push(name);
+    }
+    Ok((installed, skipped))
+}
+
+/// Take back every copy [`install_into`] made in `dir`; nothing else there is
+/// touched. Returns how many were removed.
+pub fn remove_from(dir: &Path) -> Result<usize> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(0) };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if entry.path().join(MARK).is_file() {
+            std::fs::remove_dir_all(entry.path())
+                .with_context(|| format!("could not remove {}", entry.path().display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// After the skills changed: bring the connected clients' copies up to date.
+/// Best effort -- the change itself has already been made.
+fn resync() {
+    if let Err(error) = super::clients::sync_skills() {
+        log::warn!("could not update the skills in connected clients: {error:#}");
+    }
 }
 
 /// What an agent is asked when a person saves a conversation as a skill.

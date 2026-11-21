@@ -122,6 +122,17 @@ pub(crate) fn ensure_term_env(command: &mut portable_pty::CommandBuilder) {
     if needs_colorterm {
         command.env("COLORTERM", "truecolor");
     }
+    // The terminal names itself, as every terminal does. What this process
+    // inherited (`vscode`, another terminal's name) is not ours to pass on;
+    // a value the caller set on purpose is kept.
+    let inherited = std::env::var_os("TERM_PROGRAM");
+    let chosen = command
+        .get_env("TERM_PROGRAM")
+        .filter(|value| !value.is_empty() && Some(value.to_os_string()) != inherited);
+    if chosen.is_none() {
+        command.env("TERM_PROGRAM", unterm_protocol::term_program());
+        command.env("TERM_PROGRAM_VERSION", unterm_protocol::PRODUCT_VERSION);
+    }
 }
 
 /// A GUI launched by Finder/launchd inherits no locale at all, so the
