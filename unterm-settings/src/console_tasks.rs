@@ -648,7 +648,9 @@ pub fn terminal_input(handler: &McpHandler, session: &str, input: &str) -> Resul
 /// Bring an agent's terminal to the front of an Unzoo One terminal window,
 /// for a person to take over.
 pub fn focus_terminal(handler: &McpHandler, session: &str) -> Result<Value> {
-    if !used_by_an_agent("terminals", session)? {
+    // The person's own terminals too: "open in a separate window" from the
+    // Terminal page is the same move as taking over an agent's.
+    if !console_may_use(handler, session)? {
         bail!("{session} is not a terminal an agent used");
     }
     let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");

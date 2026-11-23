@@ -6976,19 +6976,22 @@ impl McpHandler {
         // session was active and left both windows showing what they already
         // were. Raising it is best-effort -- a front end with one window, or
         // none, has nothing to do here.
-        let window_id = engine
+        let holder = engine
             .list_windows()
             .unwrap_or_default()
             .into_iter()
-            .find(|window| window.panes.contains(&pane_id))
-            .filter(|window| !window.focused)
-            .map(|window| window.id);
+            .find(|window| window.panes.contains(&pane_id));
+        // Whether any window shows it at all: `window_id` below is only the
+        // one raised, so a window already in front answers null there and
+        // a caller could not tell "shown" from "no window has it".
+        let shown = holder.is_some();
+        let window_id = holder.filter(|window| !window.focused).map(|window| window.id);
         if let Some(window_id) = window_id {
             if let Err(err) = engine.focus_current_instance_window(Some(window_id)) {
                 log::debug!("session.focus could not raise window {window_id}: {err:#}");
             }
         }
-        Ok(json!({ "ok": true, "id": pane_id, "window_id": window_id }))
+        Ok(json!({ "ok": true, "id": pane_id, "window_id": window_id, "shown": shown }))
     }
 
     fn session_create(&self, params: &Value) -> Result<Value> {
