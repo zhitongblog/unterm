@@ -217,7 +217,7 @@ const HELPERS_PROMPT: &str = "Another agent on this machine can take a self-cont
 fn governed_prompt(browser_profile: Option<&str>, helper: bool) -> String {
     let mut prompt = format!("{GOVERNED_PROMPT} {DELIVERABLES_NOTE} {}", super::server::shells_prompt());
     if let Some(profile) = browser_profile.map(str::trim).filter(|p| !p.is_empty()) {
-        if unzoo_service_path().is_some() && profile != super::browser::RESERVED_PROFILE {
+        if unzoo_service_path().is_some() && profile != super::browser::reserved_profile() {
             prompt.push(' ');
             prompt.push_str(&super::browser::profile_instructions(profile));
         }
@@ -282,7 +282,7 @@ fn governed_servers(helper: bool) -> Result<Vec<super::plugins::McpMount>, Strin
     if let Some(unzoo) = unzoo_service_path() {
         let mut args = vec!["mcp-trim".to_string(), "--keep".to_string(), AGENT_BROWSER_TOOLS.join(","), "--".to_string()];
         args.push(unzoo.display().to_string());
-        args.extend(["--mcp", "stdio", "--client", super::browser::CLIENT].map(str::to_string));
+        args.extend(["--mcp".to_string(), "stdio".into(), "--client".into(), super::browser::client()]);
         servers.push(mount("unzoo", cli, args));
     }
     // The plugins the person turned on, with their own tools.
@@ -1019,10 +1019,10 @@ mod tests {
         assert!(!kept.contains(&"human_click"));
         assert_eq!(browser[3], "--");
         assert_eq!(browser[4], unzoo.display().to_string());
-        assert_eq!(browser.as_array().unwrap()[5..].to_vec(), vec![json!("--mcp"), json!("stdio"), json!("--client"), json!("unzoo-one-agent")]);
+        assert_eq!(browser.as_array().unwrap()[5..].to_vec(), vec![json!("--mcp"), json!("stdio"), json!("--client"), json!(super::super::browser::client())]);
         assert!(!prompt_of(&own).contains("profile_id"));
         // Its own reserved profile needs no instructions either.
-        let reserved = governed_args("claude-code", Some(super::super::browser::RESERVED_PROFILE), false).unwrap();
+        let reserved = governed_args("claude-code", Some(super::super::browser::reserved_profile().as_str()), false).unwrap();
         assert!(!prompt_of(&reserved).contains("profile_id"));
         // A chosen one is named on every call, in tabs the agent opened.
         let chosen = governed_args("claude-code", Some("default"), false).unwrap();
@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(serde_json::from_str::<String>(&value("mcp_servers.unzoo.command")).unwrap(), cli.display().to_string());
         let browser: Vec<String> = serde_json::from_str(&value("mcp_servers.unzoo.args")).unwrap();
         assert_eq!(browser[0], "mcp-trim");
-        assert_eq!(browser[4..], [unzoo.display().to_string(), "--mcp".into(), "stdio".into(), "--client".into(), "unzoo-one-agent".into()]);
+        assert_eq!(browser[4..], [unzoo.display().to_string(), "--mcp".into(), "stdio".into(), "--client".into(), super::super::browser::client()]);
         let told: String = serde_json::from_str(&value("developer_instructions")).unwrap();
         assert!(told.contains("exec.run_wait") && told.contains("profile_id=\"default\"") && told.contains("agent_session.delegate"));
         assert!(!governed_args("codex-cli", None, true).unwrap().iter().any(|a| a.contains("agent_session.delegate")),

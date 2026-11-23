@@ -139,7 +139,7 @@ fn codex_models() -> Result<Vec<Value>, String> {
         }
     });
     let messages = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "unzoo-one", "version": "1"}}}),
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": unterm_protocol::product_slug(), "version": "1"}}}),
         json!({"jsonrpc": "2.0", "method": "initialized"}),
         json!({"jsonrpc": "2.0", "id": 2, "method": "model/list", "params": {}}),
     ];

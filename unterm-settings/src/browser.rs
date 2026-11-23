@@ -22,10 +22,15 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
-/// The client name agents run here present to Unzoo.
-pub const CLIENT: &str = "unzoo-one-agent";
+/// The client name agents run here present to Unzoo: the product's, so two
+/// products shipping the runtime keep their agents' browsing apart.
+pub fn client() -> String {
+    format!("{}-agent", unterm_protocol::product_slug())
+}
 /// The profile Unzoo keeps for that client.
-pub const RESERVED_PROFILE: &str = "mcp-unzoo-one-agent";
+pub fn reserved_profile() -> String {
+    format!("mcp-{}", client())
+}
 
 fn endpoint() -> String {
     std::env::var("UNZOO_ENDPOINT")
@@ -99,7 +104,8 @@ pub(crate) fn profile_list() -> Vec<Value> {
 /// Ok(true) when it exists afterwards.
 pub fn ensure_reserved() -> Result<bool> {
     let (profiles, license) = snapshot()?;
-    if profiles.iter().any(|p| p["id"] == RESERVED_PROFILE) {
+    let reserved = reserved_profile();
+    if profiles.iter().any(|p| p["id"] == reserved.as_str()) {
         return Ok(true);
     }
     let room = license
@@ -109,9 +115,9 @@ pub fn ensure_reserved() -> Result<bool> {
     if !room {
         return Ok(false);
     }
-    call("POST", "/api/v1/profiles/create", Some(&json!({"name": RESERVED_PROFILE})))?;
+    call("POST", "/api/v1/profiles/create", Some(&json!({"name": reserved})))?;
     let (profiles, _) = snapshot()?;
-    Ok(profiles.iter().any(|p| p["id"] == RESERVED_PROFILE))
+    Ok(profiles.iter().any(|p| p["id"] == reserved.as_str()))
 }
 
 /// What the console shows about the agents' browser: whether Unzoo is here
@@ -127,7 +133,7 @@ pub fn status(installed: bool, chosen: &str) -> Value {
     match snapshot() {
         Err(error) => json!({"installed": true, "reachable": false, "error": format!("{error:#}")}),
         Ok((profiles, license)) => {
-            let reserved = profiles.iter().any(|p| p["id"] == RESERVED_PROFILE);
+            let reserved = profiles.iter().any(|p| p["id"] == reserved_profile().as_str());
             let chosen_ok = !chosen.is_empty() && profiles.iter().any(|p| p["id"] == chosen);
             let max = license.pointer("/limits/max_profiles").and_then(Value::as_u64);
             json!({
@@ -136,7 +142,7 @@ pub fn status(installed: bool, chosen: &str) -> Value {
                 "plan": license.get("tier_name").cloned().unwrap_or(Value::Null),
                 "max_profiles": max,
                 "profiles": profiles,
-                "reserved_profile": RESERVED_PROFILE,
+                "reserved_profile": reserved_profile(),
                 "reserved": reserved,
                 "chosen": if chosen.is_empty() { Value::Null } else { json!(chosen) },
                 "chosen_missing": !chosen.is_empty() && !chosen_ok,
@@ -188,8 +194,9 @@ pub fn watch_profile(chosen: &str) -> Result<String> {
         return Ok(chosen.trim().to_string());
     }
     let (profiles, _) = snapshot()?;
-    if profiles.iter().any(|p| p["id"] == RESERVED_PROFILE) {
-        return Ok(RESERVED_PROFILE.to_string());
+    let reserved = reserved_profile();
+    if profiles.iter().any(|p| p["id"] == reserved.as_str()) {
+        return Ok(reserved);
     }
     bail!("the agents have no browser identity to read the page in; choose one in Settings › Agents")
 }
@@ -288,7 +295,7 @@ mod tests {
 
     #[test]
     fn the_reserved_profile_is_the_one_unzoo_keeps_for_the_client() {
-        assert_eq!(RESERVED_PROFILE, format!("mcp-{CLIENT}"));
+        assert_eq!(reserved_profile(), format!("mcp-{}", client()));
     }
 
     #[test]

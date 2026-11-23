@@ -180,7 +180,7 @@ fn write_atomically(path: &Path, text: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let temp = path.with_extension("unzoo-one.tmp");
+    let temp = path.with_extension(format!("{}.tmp", unterm_protocol::product_slug()));
     std::fs::write(&temp, text)?;
     std::fs::rename(&temp, path).with_context(|| format!("could not write {}", path.display()))?;
     Ok(())
