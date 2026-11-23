@@ -380,12 +380,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         // /usr/local/bin). Falls back to bare `unterm-cli` if we can't
         // resolve the executable path (extremely unlikely on Unix; might
         // matter for Wine / weird mount scenarios).
-        let unterm_cli_path = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("unterm-cli")))
-            .filter(|p| p.exists())
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unterm-cli".to_string());
+        let unterm_cli_path = unterm_protocol::program_path(unterm_protocol::Program::Cli).to_string_lossy().to_string();
         // The token is the one this server checks requests against, so
         // the page and the server agree by construction -- also in a Core,
         // which serves this page with no instance record of its own.
@@ -614,6 +609,10 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         ("POST", "/api/console/tasks/thread") => super::console_tasks::api_thread(&req.body),
         ("POST", "/api/console/computer/terminal") => super::console_tasks::api_terminal(handler, &req.body),
         ("POST", "/api/console/computer/terminal/input") => super::console_tasks::api_terminal_input(handler, &req.body),
+        ("GET", "/api/console/terminals") => super::console_tasks::api_terminals(handler),
+        ("POST", "/api/console/terminals/create") => super::console_tasks::api_terminal_create(handler, &req.body),
+        ("POST", "/api/console/terminals/resize") => super::console_tasks::api_terminal_resize(handler, &req.body),
+        ("POST", "/api/console/terminals/close") => super::console_tasks::api_terminal_close(handler, &req.body),
         ("POST", "/api/console/handover") => super::console_tasks::api_handover(&req.body),
         ("POST", "/api/console/computer/terminal/focus") => super::console_tasks::api_terminal_focus(handler, &req.body),
         ("POST", "/api/console/computer/tab") => super::console_tasks::api_tab(&req.body),

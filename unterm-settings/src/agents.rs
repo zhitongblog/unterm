@@ -516,12 +516,7 @@ pub fn api_run_plan(id: &str, body: &[u8]) -> Response {
         .map(|s| s.to_string())
         .unwrap_or_else(|| default_headless_prompt(&manifest.id).to_string());
 
-    let cli_path = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|d| d.join("unterm-cli")))
-        .filter(|p| p.exists())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unterm-cli".to_string());
+    let cli_path = unterm_protocol::program_path(unterm_protocol::Program::Cli).to_string_lossy().to_string();
 
     let mut argv = vec![
         "agent".to_string(),

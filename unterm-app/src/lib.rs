@@ -172,7 +172,7 @@ pub fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
-            report_fatal(&format!("Unterm could not start: {err:#}"));
+            report_fatal(&unterm_services::i18n::branded(format!("Unterm could not start: {err:#}")));
             std::process::ExitCode::FAILURE
         }
     }

@@ -219,6 +219,65 @@ pub fn product_slug() -> String {
     }
 }
 
+/// The runtime's own programs, installed side by side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Program {
+    /// The terminal windows.
+    Terminal,
+    /// The command line, and the MCP bridge AI clients start.
+    Cli,
+    /// The background service that keeps the sessions.
+    Core,
+}
+
+impl Program {
+    fn standalone_stem(self) -> &'static str {
+        match self {
+            Program::Terminal => "unterm",
+            Program::Cli => "unterm-cli",
+            Program::Core => "unterm-core",
+        }
+    }
+
+    fn role(self) -> &'static str {
+        match self {
+            Program::Terminal => "terminal",
+            Program::Cli => "cli",
+            Program::Core => "service",
+        }
+    }
+}
+
+/// A program's file name without its extension. A product shipping the
+/// runtime names them after itself -- `<product>-terminal`, `<product>-cli`,
+/// `<product>-service` -- so nothing it installs is called Unterm; the
+/// standalone Unterm keeps `unterm`, `unterm-cli`, `unterm-core`.
+pub fn program_stem(program: Program) -> String {
+    if is_standalone() {
+        program.standalone_stem().to_string()
+    } else {
+        format!("{}-{}", product_slug(), program.role())
+    }
+}
+
+/// Where `program` is: beside the running one, under this product's name or
+/// (a build tree, which has only the runtime's names) the runtime's own;
+/// else the bare product name, for a PATH lookup.
+pub fn program_path(program: Program) -> std::path::PathBuf {
+    let file = |stem: &str| format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+    let names = [file(&program_stem(program)), file(program.standalone_stem())];
+    let dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    if let Some(dir) = dir {
+        for name in &names {
+            let path = dir.join(name);
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+    std::path::PathBuf::from(&names[0])
+}
+
 pub fn core_state_dir() -> Option<std::path::PathBuf> {
     if let Ok(dir) = std::env::var("UNTERM_STATE_DIR") {
         if !dir.is_empty() {
@@ -275,9 +334,21 @@ mod tests {
         std::env::remove_var("UNTERM_STATE_DIR");
         std::env::remove_var("UNTERM_PRODUCT_NAME");
         let (unterm_core, unterm_home) = (core_state_dir(), state_dir());
+        assert_eq!(
+            [Program::Terminal, Program::Cli, Program::Core].map(program_stem),
+            ["unterm", "unterm-cli", "unterm-core"]
+        );
         std::env::set_var("UNTERM_PRODUCT_NAME", "Unzoo One");
         let (product_core, product_home) = (core_state_dir(), state_dir());
         assert_eq!(product_slug(), "unzoo-one");
+        // Nothing a product installs is called Unterm.
+        assert_eq!(
+            [Program::Terminal, Program::Cli, Program::Core].map(program_stem),
+            ["unzoo-one-terminal", "unzoo-one-cli", "unzoo-one-service"]
+        );
+        // A build tree has only the runtime's names: those are found, or the
+        // product's name is handed to the PATH.
+        assert!(program_path(Program::Cli).file_stem().is_some_and(|s| s == "unzoo-one-cli" || s == "unterm-cli"));
         std::env::remove_var("UNTERM_PRODUCT_NAME");
         if let Some(value) = saved {
             std::env::set_var("UNTERM_STATE_DIR", value);

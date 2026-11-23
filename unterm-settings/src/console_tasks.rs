@@ -424,8 +424,85 @@ const TERMINAL_INPUT_MAX: usize = 16 * 1024;
 /// emulator it draws the same screen, colours and cursor. `from_line` asks
 /// only for what came since (the line given included, since the last one may
 /// have grown); without it, the recent history.
+// ---- the person's own terminals, inside the app -----------------------------
+//
+// The console's Terminal page: the same sessions the terminal windows show,
+// opened, used, resized and closed in the app itself, so a person never has
+// to leave it for a shell. The separate window is still there for the heavy
+// full-screen programs.
+
+fn internal() -> unterm_mcp::handler::ConnectionContext {
+    unterm_mcp::handler::ConnectionContext::internal("web_settings")
+}
+
+/// The live terminals, newest last, each saying whether an agent used it.
+pub fn terminals(handler: &McpHandler) -> Result<Value> {
+    let listed = handler.handle(&internal(), "session.list", &json!({})).map_err(|e| anyhow!("{e}"))?;
+    let sessions: Vec<Value> = listed
+        .get("sessions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.get("is_dead").and_then(Value::as_bool).unwrap_or(false))
+        .map(|s| {
+            let id = s.get("id").map(|v| v.to_string().trim_matches('"').to_string()).unwrap_or_default();
+            json!({
+                "session_id": id,
+                "title": s.get("title").cloned().unwrap_or(Value::Null),
+                "shell": s.get("shell").cloned().unwrap_or(Value::Null),
+                "cols": s.get("cols").cloned().unwrap_or(Value::Null),
+                "rows": s.get("rows").cloned().unwrap_or(Value::Null),
+                "agent": used_by_an_agent("terminals", &id).unwrap_or(false),
+            })
+        })
+        .collect();
+    Ok(json!({"sessions": sessions}))
+}
+
+fn is_live(handler: &McpHandler, session: &str) -> bool {
+    terminals(handler).is_ok_and(|all| {
+        all["sessions"].as_array().is_some_and(|list| list.iter().any(|s| s["session_id"] == session))
+    })
+}
+
+/// A new terminal for the person, in `cwd` (their home by default).
+pub fn terminal_create(handler: &McpHandler, cwd: Option<&str>, cols: u64, rows: u64) -> Result<Value> {
+    let cwd = cwd
+        .map(str::to_string)
+        .filter(|c| !c.trim().is_empty())
+        .or_else(|| dirs_next::home_dir().map(|h| h.display().to_string()));
+    let mut params = json!({"cols": cols.clamp(20, 500), "rows": rows.clamp(5, 200)});
+    if let Some(cwd) = cwd {
+        params["cwd"] = json!(cwd);
+    }
+    let made = handler.handle(&internal(), "session.create", &params).map_err(|e| anyhow!("{e}"))?;
+    Ok(json!({"session_id": made.get("session_id").cloned().unwrap_or(Value::Null)}))
+}
+
+pub fn terminal_resize(handler: &McpHandler, session: &str, cols: u64, rows: u64) -> Result<Value> {
+    if !is_live(handler, session) {
+        bail!("{session} is not open");
+    }
+    handler
+        .handle(&internal(), "session.resize", &json!({"session_id": session, "cols": cols.clamp(20, 500), "rows": rows.clamp(5, 200)}))
+        .map_err(|e| anyhow!("{e}"))
+}
+
+pub fn terminal_close(handler: &McpHandler, session: &str) -> Result<Value> {
+    if !is_live(handler, session) {
+        bail!("{session} is not open");
+    }
+    handler.handle(&internal(), "session.destroy", &json!({"session_id": session})).map_err(|e| anyhow!("{e}"))
+}
+
+/// Whether the console may show and type into `session`: one an agent
+/// used (also after it closed, from what was kept), or any live one.
+fn console_may_use(handler: &McpHandler, session: &str) -> Result<bool> {
+    Ok(used_by_an_agent("terminals", session)? || is_live(handler, session))
+}
+
 pub fn terminal_screen(handler: &McpHandler, session: &str, from_line: Option<i64>) -> Result<Value> {
-    if !used_by_an_agent("terminals", session)? {
+    if !console_may_use(handler, session)? {
         bail!("{session} is not a terminal an agent used");
     }
     read_terminal(handler, session, from_line).or_else(|live| {
@@ -540,7 +617,7 @@ pub fn terminal_input(handler: &McpHandler, session: &str, input: &str) -> Resul
     if input.is_empty() || input.len() > TERMINAL_INPUT_MAX {
         bail!("input must be 1 to {TERMINAL_INPUT_MAX} bytes");
     }
-    if !used_by_an_agent("terminals", session)? {
+    if !console_may_use(handler, session)? {
         bail!("{session} is not a terminal an agent used");
     }
     handler.person_input(session, input)?;
@@ -2232,6 +2309,39 @@ pub fn api_terminal_input(handler: &McpHandler, body: &[u8]) -> Response {
             Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
         },
         _ => Response::err(400, "Bad Request", "session_id and input are required"),
+    }
+}
+
+/// GET /api/console/terminals — the live terminals.
+pub fn api_terminals(handler: &McpHandler) -> Response {
+    computer_reply(terminals(handler))
+}
+
+/// POST /api/console/terminals/create — `{cwd?, cols?, rows?}`.
+pub fn api_terminal_create(handler: &McpHandler, body: &[u8]) -> Response {
+    let body = body_json(body);
+    let size = |k: &str, d: u64| body.get(k).and_then(Value::as_u64).unwrap_or(d);
+    match terminal_create(handler, body.get("cwd").and_then(Value::as_str), size("cols", 120), size("rows", 30)) {
+        Ok(value) => Response::ok_json(value),
+        Err(e) => Response::err(409, "Conflict", &format!("{e:#}")),
+    }
+}
+
+/// POST /api/console/terminals/resize — `{session_id, cols, rows}`.
+pub fn api_terminal_resize(handler: &McpHandler, body: &[u8]) -> Response {
+    let body = body_json(body);
+    let size = |k: &str| body.get(k).and_then(Value::as_u64);
+    match (id_field(&body, "session_id"), size("cols"), size("rows")) {
+        (Some(session), Some(cols), Some(rows)) => computer_reply(terminal_resize(handler, &session, cols, rows)),
+        _ => Response::err(400, "Bad Request", "session_id, cols and rows are required"),
+    }
+}
+
+/// POST /api/console/terminals/close — `{session_id}`.
+pub fn api_terminal_close(handler: &McpHandler, body: &[u8]) -> Response {
+    match id_field(&body_json(body), "session_id") {
+        Some(session) => computer_reply(terminal_close(handler, &session)),
+        None => Response::err(400, "Bad Request", "session_id is required"),
     }
 }
 

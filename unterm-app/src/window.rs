@@ -1720,7 +1720,7 @@ impl App {
         // resource the build script embeds. Both, so the logo is there
         // whichever way Windows asks for it.
         let window_icon = {
-            const LOGO: &[u8] = include_bytes!("../../assets/icon/unterm-icon-256.png");
+            const LOGO: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app-icon-256.png"));
             image::load_from_memory(LOGO)
                 .ok()
                 .map(|logo| logo.to_rgba8())
@@ -7104,7 +7104,7 @@ impl App {
             // The window says so where the eye is; when the eye is elsewhere,
             // the system's own notification carries it.
             if !self.window.focused {
-                let _ = unterm_services::toast::notify("Unterm", &text);
+                let _ = unterm_services::toast::notify(&unterm_protocol::product_name(), &text);
             }
             self.show_notice(format!("\u{1F514} {text}"));
         }
@@ -7153,7 +7153,7 @@ impl App {
                     };
                     if let Some(text) = msg {
                         if !self.window.focused {
-                            let _ = unterm_services::toast::notify("Unterm", &text);
+                            let _ = unterm_services::toast::notify(&unterm_protocol::product_name(), &text);
                             crate::updates::notify(text.clone());
                             if let Some(live) = self.window.state.as_ref() {
                                 live.window.request_user_attention(Some(
@@ -9860,9 +9860,9 @@ impl App {
             },
             crate::palette::Entry {
                 label: if is_zh {
-                    "手机扫码远程查看与审批 (Pocket Unterm QR)".to_string()
+                    unterm_services::i18n::branded("手机扫码远程查看与审批 (Pocket Unterm QR)")
                 } else {
-                    "Mobile Remote Pairing QR (Pocket Unterm)".to_string()
+                    unterm_services::i18n::branded("Mobile Remote Pairing QR (Pocket Unterm)")
                 },
                 hint: "QR + PIN".to_string(),
                 command: crate::palette::Command::OpenPocketQr,
@@ -9919,12 +9919,7 @@ impl App {
         let _ = std::thread::Builder::new()
             .name("setup-ai-agents".to_string())
             .spawn(move || {
-                let cli_name = format!("unterm-cli{}", std::env::consts::EXE_SUFFIX);
-                let cli = std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| exe.parent().map(|dir| dir.join(&cli_name)))
-                    .filter(|path| path.is_file())
-                    .unwrap_or_else(|| std::path::PathBuf::from(cli_name));
+                let cli = unterm_protocol::program_path(unterm_protocol::Program::Cli);
                 match crate::git::hidden_command(&cli.to_string_lossy()).arg("setup-ai").output() {
                     Ok(out) if out.status.success() => {
                         crate::updates::notify(if is_zh {
@@ -9960,12 +9955,7 @@ impl App {
     }
 
     fn unterm_cli_path() -> String {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("unterm-cli")))
-            .filter(|path| path.is_file())
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "unterm-cli".to_string())
+        unterm_protocol::program_path(unterm_protocol::Program::Cli).display().to_string()
     }
 
     fn open_language_selector(&mut self) {
@@ -10231,9 +10221,9 @@ impl App {
         let mut entries = Vec::with_capacity(devices.len() + 1);
         entries.push(crate::palette::Entry {
             label: if is_zh {
-                "+ 扫码配对新手机 (Pocket Unterm QR)".to_string()
+                unterm_services::i18n::branded("+ 扫码配对新手机 (Pocket Unterm QR)")
             } else {
-                "+ Pair New Mobile Device (Pocket Unterm QR)".to_string()
+                unterm_services::i18n::branded("+ Pair New Mobile Device (Pocket Unterm QR)")
             },
             hint: "QR + PIN".to_string(),
             command: crate::palette::Command::OpenPocketQr,
@@ -12135,13 +12125,13 @@ impl App {
 
         let fg = self.window.colors.foreground;
         let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
-        let title = if is_zh {
+        let title = unterm_services::i18n::branded(if is_zh {
             "\u{25C6} 手机扫码远程监控与审批 (Pocket Unterm)"
         } else {
             "\u{25C6} Pocket Unterm Mobile Remote"
-        };
+        });
         crate::terminal::append_text(
-            title,
+            &title,
             &mut self.window.font,
             &mut self.window.atlas,
             [0.38, 0.69, 0.94, 1.0],
@@ -12543,7 +12533,13 @@ impl App {
             // the version — the menu's quiet last line, clicking through
             // to the website.
             crate::palette::Entry {
-                label: format!("Unterm · {}", t("sidebar.author_caption")),
+                // Inside a product this is where the terminal says what it
+                // is built on, as its MIT licence asks.
+                label: if unterm_protocol::is_standalone() {
+                    format!("Unterm · {}", t("sidebar.author_caption"))
+                } else {
+                    format!("{} · based on Unterm (MIT)", unterm_protocol::product_name())
+                },
                 hint: format!("unterm.app · v{}", env!("CARGO_PKG_VERSION")),
                 command: crate::palette::Command::OpenUrl {
                     url: "https://unterm.app".to_string(),
@@ -14640,13 +14636,14 @@ impl App {
                 (left + metrics.width, footer_top),
                 quads,
             );
+            let name = crate::topbar::wordmark();
             crate::terminal::append_text(
-                "Unterm",
+                &name,
                 &mut self.window.font,
                 &mut self.window.atlas,
                 mix(foreground, self.window.colors.background, 0.65),
                 (
-                    left + (width - metrics.width * "Unterm".len() as f32) / 2.0,
+                    left + (width - metrics.width * name.chars().count() as f32) / 2.0,
                     footer_top + metrics.height,
                 ),
                 quads,
@@ -15978,7 +15975,7 @@ impl ApplicationHandler for App {
                 crate::startup_trace::mark("window.state.ready");
             }
             Err(err) => {
-                crate::report_fatal(&format!("Unterm could not start: {err:#}"));
+                crate::report_fatal(&unterm_services::i18n::branded(format!("Unterm could not start: {err:#}")));
                 event_loop.exit();
             }
         }
@@ -18778,9 +18775,9 @@ fn command_entries() -> Vec<crate::palette::Entry> {
     });
     entries.push(crate::palette::Entry {
         label: if is_zh {
-            "手机扫码远程查看与审批 (Pocket Unterm QR)".to_string()
+            unterm_services::i18n::branded("手机扫码远程查看与审批 (Pocket Unterm QR)")
         } else {
-            "Mobile Remote Pairing QR (Pocket Unterm)".to_string()
+            unterm_services::i18n::branded("Mobile Remote Pairing QR (Pocket Unterm)")
         },
         hint: "QR + PIN".to_string(),
         command: crate::palette::Command::OpenPocketQr,
@@ -18834,17 +18831,21 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         hint: "unterm.conf".to_string(),
         command: crate::palette::Command::OpenConfigFile,
     });
-    // Last, and only here: there to be found by whoever looks for it.
-    entries.push(crate::palette::Entry {
-        label: unterm_services::i18n::t("command.star"),
-        hint: "github.com/zhitongblog/unterm".to_string(),
-        command: crate::palette::Command::StarOnGitHub,
-    });
-    entries.push(crate::palette::Entry {
-        label: unterm_services::i18n::t("command.ambassador"),
-        hint: "unterm.app/ambassador".to_string(),
-        command: crate::palette::Command::ShareAmbassadorPost,
-    });
+    // Last, and only here: there to be found by whoever looks for it. Only
+    // in the standalone Unterm: inside a product they would ask its users
+    // to promote a program they never installed.
+    if unterm_protocol::is_standalone() {
+        entries.push(crate::palette::Entry {
+            label: unterm_services::i18n::t("command.star"),
+            hint: "github.com/zhitongblog/unterm".to_string(),
+            command: crate::palette::Command::StarOnGitHub,
+        });
+        entries.push(crate::palette::Entry {
+            label: unterm_services::i18n::t("command.ambassador"),
+            hint: "unterm.app/ambassador".to_string(),
+            command: crate::palette::Command::ShareAmbassadorPost,
+        });
+    }
     entries
 }
 

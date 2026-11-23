@@ -175,6 +175,21 @@ pub fn t_args(key: &str, args: &[(&str, &str)]) -> String {
 }
 
 fn lookup(locale: &str, key: &str) -> String {
+    branded(raw_lookup(locale, key))
+}
+
+/// The text as this product says it: a product shipping the runtime names
+/// itself, not Unterm, in every language -- its terminal is a feature of it.
+pub fn branded(text: impl Into<String>) -> String {
+    let text = text.into();
+    if unterm_protocol::is_standalone() || !text.contains("nterm") {
+        return text;
+    }
+    let product = unterm_protocol::product_name();
+    text.replace("unterm-core", &format!("{product} Service")).replace("Unterm", &product)
+}
+
+fn raw_lookup(locale: &str, key: &str) -> String {
     let bundles = bundles();
     if let Some(dict) = bundles.by_code.get(locale) {
         if let Some(v) = dict.get(key) {
@@ -194,6 +209,16 @@ fn lookup(locale: &str, key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_product_says_its_own_name_not_unterms() {
+        std::env::set_var("UNTERM_PRODUCT_NAME", "Nissewyn");
+        assert_eq!(branded("Close Unterm? 2 session(s) running".into()), "Close Nissewyn? 2 session(s) running");
+        assert_eq!(branded("unterm-core has stopped".into()), "Nissewyn Service has stopped");
+        assert_eq!(branded("编辑 unterm.conf".into()), "编辑 unterm.conf", "file names stay");
+        std::env::remove_var("UNTERM_PRODUCT_NAME");
+        assert_eq!(branded("Close Unterm?".into()), "Close Unterm?");
+    }
 
     #[test]
     fn english_is_canonical() {

@@ -3510,13 +3510,7 @@ pub fn ensure_running_reporting_arrival() -> Result<(DiscoveryInfo, CoreArrival)
             let _ = clear_discovery();
         }
     }
-    let current = std::env::current_exe().context("resolve unterm executable path")?;
-    let core_name = if cfg!(windows) {
-        "unterm-core.exe"
-    } else {
-        "unterm-core"
-    };
-    let core_path = current.with_file_name(core_name);
+    let core_path = unterm_protocol::program_path(unterm_protocol::Program::Core);
     let mut command = std::process::Command::new(&core_path);
     // The Core this starts belongs to windows: it ends when the last one
     // is gone. The pid is how it tells, for the stretch before this

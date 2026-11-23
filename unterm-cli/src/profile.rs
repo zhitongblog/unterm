@@ -576,20 +576,7 @@ fn run_spawn(name: &str, cwd: Option<PathBuf>) -> Result<()> {
     // PATH if the sibling lookup fails — useful in development setups
     // where unterm-cli might be launched via `cargo run` from a
     // workspace that puts artifacts in a different dir.
-    let unterm_exe = match std::env::current_exe() {
-        Ok(self_path) => self_path
-            .parent()
-            .map(|dir| {
-                dir.join(if cfg!(windows) {
-                    "unterm.exe"
-                } else {
-                    "unterm"
-                })
-            })
-            .filter(|p| p.exists())
-            .unwrap_or_else(|| PathBuf::from("unterm")),
-        Err(_) => PathBuf::from("unterm"),
-    };
+    let unterm_exe = unterm_protocol::program_path(unterm_protocol::Program::Terminal);
 
     let mut cmd = std::process::Command::new(&unterm_exe);
     cmd.arg("--profile").arg(&id);

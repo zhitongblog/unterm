@@ -552,21 +552,7 @@ fn run_start(
             );
         }
     }
-    let current = std::env::current_exe().context("locating unterm-cli executable")?;
-    let sibling = current.with_file_name(if cfg!(windows) {
-        "unterm.exe"
-    } else {
-        "unterm"
-    });
-    let program = if sibling.is_file() {
-        sibling
-    } else {
-        std::path::PathBuf::from(if cfg!(windows) {
-            "unterm.exe"
-        } else {
-            "unterm"
-        })
-    };
+    let program = unterm_protocol::program_path(unterm_protocol::Program::Terminal);
     let mut launch = std::process::Command::new(&program);
     launch.arg("start");
     if let Some(cwd) = cwd {
