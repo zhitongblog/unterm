@@ -34,8 +34,10 @@ import datetime as dt
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -49,15 +51,72 @@ UA = "unterm-promo-watch/1.0 (+https://unterm.app)"
 LABEL = "app.unterm.promo-watch"
 
 
+def _proxy_reachable(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port
+        if not port:
+            return False
+        with socket.create_connection((host, port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_proxy_env() -> None:
+    """Populate HTTP_PROXY/HTTPS_PROXY only when a configured or local proxy port is actually reachable."""
+    existing = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+    if existing:
+        if _proxy_reachable(existing):
+            return
+        for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            os.environ.pop(k, None)
+    proxy_file = Path.home() / ".unterm" / "proxy.json"
+    if proxy_file.exists():
+        try:
+            cfg = json.loads(proxy_file.read_text())
+            if cfg.get("enabled"):
+                url = cfg.get("http_proxy") or cfg.get("socks_proxy")
+                if url and _proxy_reachable(url):
+                    os.environ["HTTP_PROXY"] = url
+                    os.environ["HTTPS_PROXY"] = url
+                    return
+        except Exception:
+            pass
+    for port in (7890, 7897, 10808, 6152):
+        url = f"http://127.0.0.1:{port}"
+        if _proxy_reachable(url):
+            os.environ["HTTP_PROXY"] = url
+            os.environ["HTTPS_PROXY"] = url
+            return
+
+
 def gh(*args: str) -> object:
-    out = subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
-    return json.loads(out) if out.strip() else None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            out = subprocess.run(["gh", *args], check=True, capture_output=True, text=True, timeout=30).stdout
+            return json.loads(out) if out.strip() else None
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise last_err  # type: ignore[misc]
 
 
 def http_json(url: str) -> object:
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r)
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.load(r)
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    raise last_err  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------- sources --
@@ -225,13 +284,18 @@ def main() -> int:
     ap.add_argument("--notify", action="store_true", help="macOS notification when something is new")
     ap.add_argument("--install", action="store_true", help="run daily at 10:00 via launchd")
     args = ap.parse_args()
+    ensure_proxy_env()
     if args.install:
         return install()
 
     state = json.loads(STATE.read_text()) if STATE.exists() else {"seen": [], "numbers": {}}
     seen = set(state["seen"])
     first_run = not STATE.exists()
-    me = gh("api", "user")["login"]
+    try:
+        user_info = gh("api", "user")
+        me = user_info["login"] if isinstance(user_info, dict) and "login" in user_info else OWNER
+    except Exception:
+        me = OWNER
 
     today = dt.date.today().isoformat()
     lines = [f"# Unterm promotion watch — {today}", ""]

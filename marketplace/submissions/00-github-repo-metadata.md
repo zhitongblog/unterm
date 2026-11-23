@@ -8,7 +8,7 @@ GitHub Topics discovery, and improves every marketplace listing).
 ## 1. Description (the right-sidebar one-liner)
 
 ```
-The terminal AI agents can drive — 67 MCP methods across 11 namespaces. macOS / Linux / Windows, local-first, $0, MIT.
+The terminal AI agents can drive — a pure-Rust terminal & multi-agent cockpit with 155 MCP methods across 16 namespaces. macOS / Linux / Windows, local-first, $0, MIT.
 ```
 
 ## 2. Website
@@ -22,13 +22,13 @@ https://unterm.app
 Paste these into the "Topics" field of the repo settings, comma-separated:
 
 ```
-mcp, mcp-server, model-context-protocol, terminal, tty, pty, claude, claude-code, cursor, codex, gemini-cli, opencode, agent-tools, wezterm, rust, macos, linux, windows
+mcp, mcp-server, model-context-protocol, terminal, tty, pty, claude, claude-code, cursor, codex, gemini-cli, opencode, antigravity, ai-agents, agent-tools, rust, macos, linux, windows
 ```
 
 ## 4. Releases — confirm latest is pinned
 
 The Releases page (<https://github.com/zhitongblog/unterm/releases>) should show
-**v0.23** at top with all 5 platform artifacts. The smart-download function
+**v0.71.26+** at top with all platform artifacts. The smart-download function
 at `unterm.app/api/download` already routes here.
 
 ## Why these three matter

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.71.32 — 2026-11-23
+
+### Fixed
+
+- **Eliminated GUI UI-thread stalls across `unterm-app`, `unterm-core`, `unterm-engine`, and `unterm-services`.**
+  - Removed blocking process-tree and IPC `SessionEngine::activity` probes from the render, session-restore, and status hot paths, and hardened background cache refresh coalescing in `unterm-core`.
+- **Headless MCP E2E verification (`unterm-core/tests/process_e2e.rs`).**
+  - Updated `headless_mcp_serves_sessions_without_any_gui` to assert immediate fail-closed denial on above-ceiling destructive commands (`git push --force`) under the default `Balanced` autonomy policy.
+
+### Added
+
+- **1-Click Clear Input & Polished UI Overlays (`window.rs`, `palette.rs`, `keys.rs`, `i18n/locales/*.json`).**
+  - Added a 1-click **Clear Input** floating pane micro-pill and Command Palette action (`command.clear_input`) localized across all 9 supported languages, along with refined overlay hit-testing and visual polish.
+
 ## v0.71.31 — 2026-11-20
 
 ### Added

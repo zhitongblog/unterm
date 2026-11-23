@@ -14,18 +14,18 @@ partnerships address, or a message in the Cursor community Discord
 Hi Cursor team,
 
 I'd like to request a listing in the Cursor MCP directory for
-Unterm — a cross-platform terminal (macOS / Linux / Windows) that
-exposes itself as an MCP server with 67 methods across 11 namespaces.
+Unterm — a cross-platform pure-Rust terminal (macOS / Linux / Windows)
+that exposes itself as an MCP server with 155 methods across 16 namespaces.
 
 Why it's a good fit for Cursor users:
-- Cursor agents can spawn shells, split panes, type into them, and
-  read scrollback — without ever simulating keystrokes.
-- The agent that runs your code lives next to the agent that wrote it.
-- Local-first: 127.0.0.1 only, bearer-token gated, per-call audit log.
-  Every session.input is recorded with the calling agent's identity;
-  first write triggers an Allow / Block prompt.
-- One-click install of other coding agents (Claude Code, Codex, Gemini,
-  OpenCode, Aider) from inside Unterm with auto-MCP-wiring.
+- Cursor agents can spawn shells, split panes, run commands with structured
+  exit codes, and read scrollback — without ever simulating keystrokes.
+- Zero-pollution Git checkpoints (`refs/unterm/checkpoints`) snapshot the
+  working tree before agent edits without dirtying `git status`.
+- Local-first: 127.0.0.1 only, bearer-token gated, risk-tiered autonomy
+  (`Cautious` / `Balanced` / `Autonomous`), and per-call audit log.
+- 1-click MCP integration for Cursor, Claude Code, Codex, Gemini CLI,
+  Windsurf, and Antigravity right from Unterm's Web Settings panel.
 
 Install for Cursor users is one snippet (~/.cursor/mcp.json or
 Settings → MCP → Add), prerequisite is the Unterm desktop app

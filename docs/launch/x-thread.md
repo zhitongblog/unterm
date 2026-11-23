@@ -1,53 +1,63 @@
-# X/Twitter 线程包
+# X/Twitter 线程包（v0.71+ Multi-Agent Cockpit & Pocket 版）
 
-**时机**:配合 Show HN 同日,互相导流。英文为主(MCP 圈在英文区)。
-**标签/@**:#MCP #ClaudeCode;可 @AnthropicAI 的开发者关系相关账号(别 @ 主号,显 spam)。
-**发线程的可靠方法**(2026-06-11 实战验证):`x.com/intent/post?text=...&in_reply_to=<上一条id>`,
-每条点 tweetButton,从 `/untermapp/with_replies` 抓新 id。**不要用时间线内联 composer**(布局位移,
-曾把文字误打进别人推文的回复框)。X 拒绝完全相同的重复文本——补发时微调措辞。
+**时机**：配合 Show HN 同日发布，互相导流。
+**标签**：`#MCP` `#ClaudeCode` `#Rust` `#CodingAgents`
 
-## 历史:v0.40 线程(2026-06-11 已发,@untermapp)
-
-根推 x.com/untermapp/status/2064946328980091165,T1–T6 已确认,T7 未肉眼确认(下次核对,缺则补发)。
-旧文案见 git 历史(数字口径:67 methods / 11 namespaces,已过时,勿再用)。
-
-## v0.57 新线程(Agent Cockpit 角度,8 条,待发)
+## 英文 8 连推（v0.71 Multi-Agent Cockpit + Pocket + Checkpoints）
 
 1/
-Every terminal in 2026 is racing to put AI *inside* the box.
-We made the opposite bet: a terminal with zero AI inside — built to be *driven* by the agents you already run.
-Unterm v0.57 is out. MIT, local-first, macOS/Linux/Windows. 🧵
+Every terminal in 2026 is racing to put an AI chat box *inside* the terminal.
+We made the opposite bet: a pure-Rust terminal with zero AI inside — built to be the cockpit and hands for the CLI agents you already run.
+Unterm v0.71 is out. MIT, local-first, macOS / Linux / Windows. 🧵
 
 2/
-The reasoning hasn't changed: terminals are thirty-year tools, AI models are six-month components.
-Weld the model into the terminal and your longest-lived tool is defined by its shortest-lived part.
-You already HAVE agents. What they're missing isn't a brain — it's hands.
+Why zero AI inside?
+Terminals are 30-year tools. AI models are 6-month components.
+You already run Claude Code, Codex, Gemini CLI, Cursor, or OpenCode. What they're missing isn't another brain — it's hands, safety guardrails, and multi-agent coordination.
 
 3/
-So the terminal itself is an MCP server. 103 authenticated methods:
-spawn panes → run commands with structured results → read screen & full scrollback as text → scrolling screenshots → record sessions → identity profiles. All local JSON-RPC, token-gated.
+So Unterm is a 155-method MCP server across 16 namespaces:
+- 1-click MCP wiring for Claude / Codex / Gemini / Cursor / Windsurf / Antigravity
+- Spawn tabs & splits, run commands with structured JSON exit codes, read scrollback as text
+- `agent_session.delegate`: let one CLI agent delegate sub-tasks to another!
 
 4/
-New since launch: Agent Cockpit. Run a *fleet* of CLI agents — each one gets its own tab and its own git worktree, so five Claudes can hack on the same repo without stepping on each other.
+Fear #1 when running autonomous agents: "What if it wrecks my working tree?"
+Unterm v0.71 ships Zero-Pollution Git Checkpoints (`refs/unterm/checkpoints`).
+It snapshots your tree via `git write-tree` without touching `HEAD` or `git status` — diff or roll back in 1 click.
 
 5/
-The tab strip tells you who's working, who's idle, and who's *waiting for you* — parsed straight from each agent's title/OSC signals. Zero config. One palette shows the inbox: "agents that need a human."
+Fear #2: "I stepped away for coffee and my agent is stuck waiting for approval."
+Meet Unterm Pocket 📱: scan a GPU-rendered QR code over Wi-Fi / Tailscale (zero cloud relay, Ed25519 signed) to watch live terminal panes, create checkpoints, and tap Allow / Deny from your phone.
 
 6/
-And a review layer that makes agent work reversible: checkpoint before the run, diff after, roll back without touching your index or HEAD. Agent went sideways? One command, you're back.
+Risk-Tiered Autonomy (`Cautious` / `Balanced` / `Autonomous`):
+Commands and multi-line pastes are classified before execution. Even in Autonomous mode, destructive patterns (`rm -rf`, `git push --force`, `DROP TABLE`) are always intercepted for human confirmation.
 
 7/
-My favorite party trick is still scrolling screenshots: the agent re-renders your ENTIRE scrollback into one tall PNG — exact re-render with your fonts & theme, works even when the window is buried.
+Command failed? Click "🩺 Diagnose Last Command Failure" in the top bar (or `Cmd+Shift+P`) to package the exit code, `git status`, and last 40 terminal lines — and automatically spawn Claude / Codex / Gemini in a split pane to fix it.
 
 8/
-No account. No cloud. No subscription. No telemetry. No AI inside the terminal — ever.
+Backed by `unterm-core` daemon for `<2ms` input latency, seamless session/split auto-restore across restarts, background long-command notifications (>=10s), and headless full-scrollback PNG screenshots.
+No account. No cloud. No telemetry. MIT.
 https://unterm.app
 https://github.com/zhitongblog/unterm
 
-## 中文版(3 条)
+---
 
-1/ 2026 年所有终端都在往里塞 AI。我们反着做:内部零 AI 的终端,专门被 AI 驱动。v0.57 起它还是 CLI agent 的座舱:一队 agent 各占一个 tab + 独立 git worktree,五个 Claude 改同一个仓库互不踩脚。
+## 中文精简线程（3 条）
 
-2/ tab 栏直接显示每个 agent 在干活/闲着/等你确认(解析 agent 自己的标题和 OSC 信号,零配置);一个面板汇总"等人类的 agent";checkpoint/review 层让 agent 的改动可回滚——跑偏了一键回到跑之前。
+1/
+2026 年所有终端都在往里塞 AI 聊天框。我们反着做：纯 Rust 自研内核、内部零 AI 的终端，专门做 Claude Code / Codex / Gemini / Antigravity 的「多 Agent 协同座舱」。Unterm v0.71 已开源（MIT，macOS/Linux/Windows）。
 
-3/ 终端本身是 MCP server(99 方法/21 命名空间):开分屏、跑命令拿结构化结果、读完整回滚、滚屏长截图、录会话、身份 profile。全本地无账号无遥测,MIT,mac/Linux/Windows。unterm.app
+2/
+这次更新把日常用 CLI Agent 最痛的 4 件事全补齐了：
+- 零污染 Git 隐藏检查点（`refs/unterm/checkpoints`）：不脏 git status，改崩一键无损回滚；
+- Unterm Pocket 手机扫码远程看盘与审批（仅限局域网/Tailscale，零云端）；
+- 跨 Agent 子任务委派（`delegate`）与一键上下文接力（Handoff）；
+- 命令报错一键右侧分屏拉起 AI 诊断修复 + 后台长命令（>=10s）系统通知。
+
+3/
+终端本身暴露 155 个 MCP 方法（16 命名空间），图形化 Web 设置面板支持一键接入本机所有主流 AI 客户端、切换三级风险自治护栏、持久化恢复所有标签页与分屏布局。
+官网：https://unterm.app
+GitHub：https://github.com/zhitongblog/unterm

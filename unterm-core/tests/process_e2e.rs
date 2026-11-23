@@ -423,17 +423,18 @@ fn headless_mcp_serves_sessions_without_any_gui() {
         "created pane missing from list: {listed}"
     );
 
-    // Unauthorized first write must fail closed *now* — a hang here
-    // would mean the gate parked on a confirmation banner that no
-    // window exists to answer.
+    // Under default Balanced autonomy, a write above the autonomy ceiling
+    // (such as a destructive command) must fail closed *now* — a hang here
+    // would mean the gate parked on a confirmation banner that no window
+    // exists to answer.
     let started = Instant::now();
     let denied = mcp(
         "exec.run",
-        serde_json::json!({"id": pane_id, "command": "echo should-not-run"}),
+        serde_json::json!({"id": pane_id, "command": "git push --force"}),
     );
     assert!(
         denied.get("error").is_some(),
-        "headless untrusted write must be denied: {denied}"
+        "headless write above autonomy ceiling must be denied: {denied}"
     );
     assert!(
         started.elapsed() < Duration::from_secs(5),
