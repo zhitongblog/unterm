@@ -1136,9 +1136,10 @@ fn api_i18n_state() -> Response {
         .collect();
     let dict = unterm_services::i18n::dictionary(current)
         .map(|d| {
+            // In a product its own name, as the terminal windows say it.
             let map: serde_json::Map<String, Value> = d
                 .iter()
-                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .map(|(k, v)| (k.clone(), Value::String(unterm_services::i18n::branded(v.clone()))))
                 .collect();
             Value::Object(map)
         })
