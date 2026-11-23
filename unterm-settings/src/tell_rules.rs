@@ -217,7 +217,9 @@ Otherwise report normally: the point, the facts, the next step.",
 pub fn fold(reply: &str) -> Option<(&'static str, String)> {
     let trimmed = reply.trim_start();
     for (marker, kind) in [("[quiet]", "quiet"), ("[later]", "later")] {
-        if trimmed.len() >= marker.len() && trimmed[..marker.len()].eq_ignore_ascii_case(marker) {
+        // `get`, not `[..]`: a reply in Chinese has no char boundary at byte 7,
+        // and a slice there panics -- which aborts the whole Core.
+        if trimmed.get(..marker.len()).is_some_and(|head| head.eq_ignore_ascii_case(marker)) {
             return Some((kind, trimmed[marker.len()..].trim_start().to_string()));
         }
     }
@@ -379,6 +381,14 @@ mod tests {
         assert_eq!(fold("[quiet] Noted a newsletter."), Some(("quiet", "Noted a newsletter.".to_string())));
         assert_eq!(fold("  [LATER]\nDana's quote is due Friday."), Some(("later", "Dana's quote is due Friday.".to_string())));
         assert_eq!(fold("Standup moved to 10:00."), None);
+    }
+
+    #[test]
+    fn a_reply_in_chinese_is_not_cut_inside_a_character() {
+        // Byte 7 falls inside 日: slicing there used to panic and take the Core down.
+        assert_eq!(fold("## 今日科技热点"), None);
+        assert_eq!(fold("今天"), None);
+        assert_eq!(fold("[later] 周五前回复"), Some(("later", "周五前回复".to_string())));
     }
 
     #[test]
