@@ -449,7 +449,9 @@ pub fn terminals(handler: &McpHandler) -> Result<Value> {
             json!({
                 "session_id": id,
                 "title": s.get("title").cloned().unwrap_or(Value::Null),
-                "shell": s.get("shell").cloned().unwrap_or(Value::Null),
+                // The program and where it is, not the launch policy behind it.
+                "shell": s.pointer("/shell/process_name").cloned().unwrap_or(Value::Null),
+                "cwd": s.pointer("/shell/cwd").cloned().unwrap_or(Value::Null),
                 "cols": s.get("cols").cloned().unwrap_or(Value::Null),
                 "rows": s.get("rows").cloned().unwrap_or(Value::Null),
                 // Only a run still going: terminal ids start again at 1 with

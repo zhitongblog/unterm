@@ -346,7 +346,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
             200,
             "OK",
             "text/html; charset=utf-8",
-            assets::INDEX_HTML.as_bytes().to_vec(),
+            assets::index_html().as_bytes().to_vec(),
         );
     }
     if req.method == "GET" && path == "/favicon.ico" {
@@ -398,6 +398,11 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
     }
     if req.method == "GET" {
         if let Some(name) = path.strip_prefix("/static/") {
+            if name == "logo.svg" {
+                if let Some(logo) = assets::product_logo() {
+                    return Response::text(200, "OK", "image/svg+xml; charset=utf-8", logo);
+                }
+            }
             if let Some((ct, body)) = assets::lookup_static(name) {
                 return Response::text(200, "OK", ct, body.as_bytes().to_vec());
             }
@@ -1148,9 +1153,10 @@ fn api_i18n_state() -> Response {
 fn api_i18n_dict(code: &str) -> Response {
     match unterm_services::i18n::dictionary(code) {
         Some(d) => {
+            // In a product its own name, as the terminal windows say it.
             let map: serde_json::Map<String, Value> = d
                 .iter()
-                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .map(|(k, v)| (k.clone(), Value::String(unterm_services::i18n::branded(v.clone()))))
                 .collect();
             Response::ok_json(Value::Object(map))
         }

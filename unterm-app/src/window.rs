@@ -11373,9 +11373,9 @@ impl App {
             crate::unzoo_hub::UnzooState::Installed { path } => {
                 entries.push(crate::palette::Entry {
                     label: if is_zh {
-                        "🦁 一键启动 Unzoo Browser 并自动绑定 Unterm MCP".to_string()
+                        unterm_services::i18n::branded("🦁 一键启动 Unzoo Browser 并自动绑定 Unterm MCP")
                     } else {
-                        "🦁 Launch Unzoo Browser & Auto-Bind to Unterm MCP".to_string()
+                        unterm_services::i18n::branded("🦁 Launch Unzoo Browser & Auto-Bind to Unterm MCP")
                     },
                     hint: path.display().to_string(),
                     command: crate::palette::Command::LaunchOrBindUnzoo,
@@ -11395,9 +11395,9 @@ impl App {
                 });
                 entries.push(crate::palette::Entry {
                     label: if is_zh {
-                        "   ✦ 为什么搭配 Unzoo：1. 零配置直连 Unterm MCP，AI 自主调试网页与前端".to_string()
+                        unterm_services::i18n::branded("   ✦ 为什么搭配 Unzoo：1. 零配置直连 Unterm MCP，AI 自主调试网页与前端")
                     } else {
-                        "   ✦ Why Unzoo: 1. Zero-config Unterm MCP bridge for AI frontend debugging".to_string()
+                        unterm_services::i18n::branded("   ✦ Why Unzoo: 1. Zero-config Unterm MCP bridge for AI frontend debugging")
                     },
                     hint: "Zero-Config MCP".to_string(),
                     command: crate::palette::Command::OpenUrl {
@@ -11439,9 +11439,9 @@ impl App {
         }
 
         let title = if is_zh {
-            "Unzoo Browser 联动中心 (Unterm × Unzoo 黄金开发组合)".to_string()
+            unterm_services::i18n::branded("Unzoo Browser 联动中心 (Unterm × Unzoo 黄金开发组合)")
         } else {
-            "Unzoo Browser Synergy Hub (Unterm × Unzoo Developer Stack)".to_string()
+            unterm_services::i18n::branded("Unzoo Browser Synergy Hub (Unterm × Unzoo Developer Stack)")
         };
         self.open_named_palette(entries, title);
     }
@@ -11476,7 +11476,7 @@ impl App {
         match crate::unzoo_hub::launch_unzoo(None) {
             Ok(()) => {
                 self.show_notice(if is_zh {
-                    "🦁 正在启动 Unzoo Browser，启动后将自动接入 Unterm MCP…".to_string()
+                    unterm_services::i18n::branded("🦁 正在启动 Unzoo Browser，启动后将自动接入 Unterm MCP…")
                 } else {
                     "🦁 Launching Unzoo Browser…".to_string()
                 });

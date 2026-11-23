@@ -213,11 +213,11 @@ mod tests {
     #[test]
     fn a_product_says_its_own_name_not_unterms() {
         std::env::set_var("UNTERM_PRODUCT_NAME", "Nissewyn");
-        assert_eq!(branded("Close Unterm? 2 session(s) running".into()), "Close Nissewyn? 2 session(s) running");
-        assert_eq!(branded("unterm-core has stopped".into()), "Nissewyn Service has stopped");
-        assert_eq!(branded("编辑 unterm.conf".into()), "编辑 unterm.conf", "file names stay");
+        assert_eq!(branded("Close Unterm? 2 session(s) running"), "Close Nissewyn? 2 session(s) running");
+        assert_eq!(branded("unterm-core has stopped"), "Nissewyn Service has stopped");
+        assert_eq!(branded("编辑 unterm.conf"), "编辑 unterm.conf", "file names stay");
         std::env::remove_var("UNTERM_PRODUCT_NAME");
-        assert_eq!(branded("Close Unterm?".into()), "Close Unterm?");
+        assert_eq!(branded("Close Unterm?"), "Close Unterm?");
     }
 
     #[test]
