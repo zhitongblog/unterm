@@ -234,6 +234,14 @@ pub enum Command {
     },
     /// Unbind Unzoo Browser and revoke active leases.
     UnbindUnzoo,
+    /// Bridge Unzoo Browser frontend console/network errors for `url` into the active AI agent pane.
+    BridgeUnzooErrorsToAgent {
+        url: String,
+    },
+    /// Copy the clean stdout/stderr of the last command executed in the focused pane.
+    CopyLastCommandOutput,
+    /// Send the last command and its clean output directly to an active AI agent pane.
+    SendLastCommandToAgent,
     /// A row that is information rather than a verb. The Insights card is a
     /// list to read, not a list to run, and pressing a line of it should do
     /// nothing rather than whatever a guess would be.

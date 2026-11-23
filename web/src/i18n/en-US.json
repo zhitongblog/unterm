@@ -6,7 +6,7 @@
   "nav.download": "Download",
   "nav.docs": "Docs",
   "cap.title": "The complete control surface",
-  "cap.subtitle": "Not a screenshot tour — the real surface every agent and script can call. 155 MCP methods across 30 namespaces, plus 34 CLI commands, all returning the same JSON.",
+  "cap.subtitle": "Not a screenshot tour — the real surface every agent and script can call. 165 MCP methods across 32 namespaces, plus 38 CLI commands, all returning the same JSON.",
   "cap.stat.methods": "MCP methods",
   "cap.stat.namespaces": "namespaces",
   "cap.stat.cli": "CLI commands",
