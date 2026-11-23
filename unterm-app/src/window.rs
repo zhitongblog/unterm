@@ -14852,7 +14852,10 @@ impl App {
         // windows open, `read()` answers for whichever registered last, and
         // both titles claim to be it.
         let instance = unterm_services::server_info::read_current().id;
-        let instance = if instance.is_empty() {
+        // Inside a product the code name ("alpha") reads like a pre-release
+        // label to its users; it is for agents telling windows apart, and
+        // they read it from instance.list, not the title.
+        let instance = if instance.is_empty() || !unterm_protocol::is_standalone() {
             String::new()
         } else {
             format!(" ({instance})")
