@@ -622,6 +622,7 @@ fn read_terminal(handler: &McpHandler, session: &str, from_line: Option<i64>) ->
         )
         .map_err(|e| anyhow!("{e}"))?;
     let field = |name: &str| history.get(name).cloned().unwrap_or(Value::Null);
+    let digest = screen_digest(&[&field("text"), &field("first_row"), &field("cols"), &field("viewport_rows"), &cursor]);
     Ok(json!({
         "session_id": session,
         "text": field("text"),
@@ -630,7 +631,52 @@ fn read_terminal(handler: &McpHandler, session: &str, from_line: Option<i64>) ->
         "cols": field("cols"),
         "rows": field("viewport_rows"),
         "cursor": cursor,
+        "digest": digest,
     }))
+}
+
+/// A short fingerprint of what a read returned: a viewer hands it back and
+/// is answered only when the terminal shows something else.
+fn screen_digest(parts: &[&Value]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for part in parts {
+        for byte in part.to_string().bytes().chain([0xff]) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("{hash:016x}")
+}
+
+/// Longest a viewer's read is held open waiting for the terminal to change.
+const TERMINAL_WAIT_MAX: Duration = Duration::from_secs(15);
+
+/// Like [`terminal_screen`], but held open until what it returns differs
+/// from `known` (a digest the viewer already has) or `wait` runs out: the
+/// console's terminal sees output as it comes, without asking every moment.
+pub fn terminal_screen_wait(
+    handler: &McpHandler,
+    session: &str,
+    from_line: Option<i64>,
+    known: Option<&str>,
+    wait: Duration,
+) -> Result<Value> {
+    let first = terminal_screen(handler, session, from_line)?;
+    let Some(known) = known.filter(|k| !k.is_empty()) else { return Ok(first) };
+    if first.get("digest").and_then(Value::as_str) != Some(known) {
+        return Ok(first);
+    }
+    let deadline = Instant::now() + wait.min(TERMINAL_WAIT_MAX);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(30));
+        // Permission was checked by the first read; a terminal that closed
+        // since answers with an error the viewer already handles.
+        let now = read_terminal(handler, session, from_line)?;
+        if now.get("digest").and_then(Value::as_str) != Some(known) {
+            return Ok(now);
+        }
+    }
+    Ok(first)
 }
 
 /// Keys the person typed into an agent's terminal from the console.
@@ -2315,7 +2361,9 @@ pub fn api_terminal(handler: &McpHandler, body: &[u8]) -> Response {
     match id_field(&body, "session_id") {
         Some(session) => {
             let from = body.get("from_line").and_then(Value::as_i64);
-            computer_reply(terminal_screen(handler, &session, from))
+            let known = body.get("known").and_then(Value::as_str);
+            let wait = Duration::from_millis(body.get("wait_ms").and_then(Value::as_u64).unwrap_or(0));
+            computer_reply(terminal_screen_wait(handler, &session, from, known, wait))
         }
         None => Response::err(400, "Bad Request", "session_id is required"),
     }
@@ -2485,6 +2533,17 @@ mod tests {
 
     fn at(text: &str) -> DateTime<FixedOffset> {
         DateTime::parse_from_rfc3339(text).unwrap()
+    }
+
+    #[test]
+    fn a_screen_digest_changes_with_the_text_or_the_cursor_and_only_then() {
+        let (text, cursor) = (json!("PS C:\\> "), json!({"x": 7, "y": 0}));
+        let same = screen_digest(&[&text, &cursor]);
+        assert_eq!(same, screen_digest(&[&text, &cursor]));
+        assert_ne!(same, screen_digest(&[&json!("PS C:\\> d"), &cursor]), "a typed letter");
+        assert_ne!(same, screen_digest(&[&text, &json!({"x": 8, "y": 0})]), "the cursor moved");
+        // Parts are kept apart: moving a character between them is a change.
+        assert_ne!(screen_digest(&[&json!("ab"), &json!("c")]), screen_digest(&[&json!("a"), &json!("bc")]));
     }
 
     #[test]
