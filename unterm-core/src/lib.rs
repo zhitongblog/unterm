@@ -1801,6 +1801,12 @@ impl CoreClient {
             )
         })?;
         stream.set_nodelay(true).context("set core nodelay")?;
+        // Bound synchronous request/response calls so a busy or wedged Core
+        // can never freeze the GUI thread or a CLI caller indefinitely.
+        // Event and host-channel streams explicitly clear their read timeout
+        // after connecting.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
         Ok(Self {
             stream,
             token: token.into(),

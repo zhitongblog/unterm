@@ -81,6 +81,7 @@
   "cockpit.state_idle": "閒置",
   "cockpit.state_waiting": "等你確認",
   "cockpit.state_working": "工作中",
+  "command.clear_input": "一鍵清除輸入框內容",
   "composer.hint": "輸入內容，Enter 入列，Esc 關閉",
   "composer.title": "提示詞佇列",
   "composer.waiting": "{n} 筆等待中",

@@ -81,6 +81,7 @@
   "cockpit.state_idle": "inattivo",
   "cockpit.state_waiting": "ti aspetta",
   "cockpit.state_working": "al lavoro",
+  "command.clear_input": "Cancella campo di input",
   "composer.hint": "digita, Invio per accodare, Esc per chiudere",
   "composer.title": "Coda di prompt",
   "composer.waiting": "{n} in attesa",

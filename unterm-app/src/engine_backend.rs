@@ -670,6 +670,31 @@ impl ScreenEngine for AppEngine {
         }
     }
 
+    /// Build the Cockpit pulse from the local frame cache in Core mode so
+    /// `feed_cockpit` never stalls the GUI thread on per-pane IPC or
+    /// deep-clones the entire styled screen grid when only the revision or
+    /// last few lines are needed.
+    fn read_pane_pulse(
+        &self,
+        pane_id: usize,
+        since_revision: Option<u64>,
+        tail_rows: usize,
+    ) -> Result<unterm_engine::PanePulse> {
+        match self {
+            Self::Local(engine) => engine.read_pane_pulse(pane_id, since_revision, tail_rows),
+            Self::Core { client, cache } => {
+                if let Some(screen) = cache.styled_screen(pane_id) {
+                    return Ok(unterm_engine::PanePulse::from_snapshot(
+                        &screen,
+                        since_revision,
+                        tail_rows,
+                    ));
+                }
+                client.read_pane_pulse(pane_id, since_revision, tail_rows)
+            }
+        }
+    }
+
     fn read_render_frame(
         &self,
         pane_id: usize,

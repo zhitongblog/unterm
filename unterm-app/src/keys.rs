@@ -85,6 +85,8 @@ pub enum Action {
     ClearScrollback,
     /// Throw away the scrollback and the screen with it.
     ClearScreen,
+    /// Clear the current input box or terminal prompt input line in one click/chord.
+    ClearInput,
     /// Put a letter on every pane and go to the one that is typed.
     SelectPane,
     /// The same, but exchange the chosen pane with the one in front.
@@ -138,6 +140,7 @@ impl Action {
             Action::FleetLaunch => "FleetLaunch",
             Action::ClearScrollback => "ClearScrollback",
             Action::ClearScreen => "ClearScreen",
+            Action::ClearInput => "ClearInput",
             Action::SelectPane => "SelectPane",
             Action::SwapPane => "SwapPane",
             Action::FocusPane(Direction::Left) => "FocusPaneLeft",
@@ -208,6 +211,7 @@ impl Action {
             Action::FleetLaunch => "Launch Fleet",
             Action::ClearScrollback => "Clear Scrollback",
             Action::ClearScreen => "Clear Screen",
+            Action::ClearInput => "Clear Input",
             Action::SelectPane => "Select Pane",
             Action::SwapPane => "Swap Pane",
             Action::FocusPane(Direction::Left) => "Focus Pane Left",
@@ -743,6 +747,7 @@ const NAMED_ACTIONS: &[(&str, Action)] = &[
     ("FleetLaunch", Action::FleetLaunch),
     ("ClearScrollback", Action::ClearScrollback),
     ("ClearScreen", Action::ClearScreen),
+    ("ClearInput", Action::ClearInput),
     ("SelectPane", Action::SelectPane),
     ("SwapPane", Action::SwapPane),
     ("FocusPaneLeft", Action::FocusPane(Direction::Left)),
@@ -999,6 +1004,7 @@ pub const PALETTE_ACTIONS: &[Action] = &[
     Action::FleetLaunch,
     Action::ClearScrollback,
     Action::ClearScreen,
+    Action::ClearInput,
     Action::SelectPane,
     Action::SwapPane,
     Action::FocusPane(Direction::Left),

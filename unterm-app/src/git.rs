@@ -259,6 +259,49 @@ pub fn cached_dirty_count(directory: &std::path::Path) -> usize {
     }
 }
 
+/// Non-blocking read of the git panel for `directory`, suitable for the GUI
+/// render/input thread. Returns the cached panel immediately (or a clean empty
+/// placeholder while the first background probe is in flight) and schedules a
+/// background refresh when missing or stale.
+pub fn read_nonblocking(directory: &std::path::Path) -> Panel {
+    let known = cache()
+        .lock()
+        .get(directory)
+        .map(|(at, panel)| (at.elapsed(), panel.clone()));
+    let stale = known.as_ref().map_or(true, |(age, _)| *age >= CACHE_TTL);
+    if stale {
+        static REFRESHING: std::sync::OnceLock<
+            parking_lot::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+        > = std::sync::OnceLock::new();
+        let refreshing = REFRESHING.get_or_init(Default::default);
+        if refreshing.lock().insert(directory.to_path_buf()) {
+            let directory = directory.to_path_buf();
+            let prev_panel = known.as_ref().map(|(_, p)| p.clone());
+            let spawned = std::thread::Builder::new()
+                .name("git-panel".into())
+                .spawn({
+                    let directory = directory.clone();
+                    move || {
+                        let fresh = read(&directory);
+                        cache()
+                            .lock()
+                            .insert(directory.clone(), (std::time::Instant::now(), fresh.clone()));
+                        REFRESHING.get().map(|set| set.lock().remove(&directory));
+                        if prev_panel.as_ref() != Some(&fresh) {
+                            crate::mcp_host::request_repaint();
+                        }
+                    }
+                });
+            if spawned.is_err() {
+                refreshing.lock().remove(&directory);
+            }
+        }
+    }
+    known
+        .map(|(_, panel)| panel)
+        .unwrap_or_else(|| Panel::Status(Status::default()))
+}
+
 /// The longest branch name the bar will print in full.
 ///
 /// Long enough for the ones people type and the ones tools generate up to a
