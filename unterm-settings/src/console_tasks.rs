@@ -452,11 +452,30 @@ pub fn terminals(handler: &McpHandler) -> Result<Value> {
                 "shell": s.get("shell").cloned().unwrap_or(Value::Null),
                 "cols": s.get("cols").cloned().unwrap_or(Value::Null),
                 "rows": s.get("rows").cloned().unwrap_or(Value::Null),
-                "agent": used_by_an_agent("terminals", &id).unwrap_or(false),
+                // Only a run still going: terminal ids start again at 1 with
+                // every Core, so an old run's list names today's terminals.
+                "agent": used_by_a_running_agent(&id).unwrap_or(false),
             })
         })
         .collect();
     Ok(json!({"sessions": sessions}))
+}
+
+/// Whether a run that is going now has used terminal `id`.
+fn used_by_a_running_agent(id: &str) -> Result<bool> {
+    let store = store()?;
+    let lists = |detail: &Value| detail.get("terminals").and_then(Value::as_array).is_some_and(|ids| ids.iter().any(|v| v == id));
+    for task in store.tasks()?.into_iter().filter(|t| t.kind == KIND) {
+        for run in store.runs(&task.id)?.into_iter().filter(|r| r.state == State::Running) {
+            for step in store.steps(&run.id)? {
+                let helpers = step.detail.get("helpers").and_then(Value::as_array);
+                if lists(&step.detail) || helpers.is_some_and(|all| all.iter().any(lists)) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn is_live(handler: &McpHandler, session: &str) -> bool {
