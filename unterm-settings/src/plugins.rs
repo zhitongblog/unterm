@@ -16,7 +16,8 @@
 //!     "account": { "kind": "browser", "label": "X account" },
 //!     "writer":  { "kind": "agent", "label": "Writing", "default": { "agent": "claude-code", "model": "sonnet" } }
 //!   },
-//!   "permissions": { "domains": ["x.com"] }
+//!   "permissions": { "domains": ["x.com"] },
+//!   "i18n": { "en": "i18n/en.json" }
 //! }
 //! ```
 //!
@@ -31,6 +32,12 @@
 //! - `roles`: what the person assigns: a browser identity for each `browser`
 //!   role, an agent and model for each `agent` role. The program reads them
 //!   from `UNZOO_PLUGIN_ROLES`.
+//!
+//! - `i18n`: the manifest's own text (name, description, setting labels, help,
+//!   choices, role labels) in other languages, written the way Nissewyn's
+//!   interface is: a map from the text as the manifest has it to the text in
+//!   that language, per language code -- inline, or a JSON file in the
+//!   plugin's folder. The page itself is opened with `?lang=` and does its own.
 //!
 //! Placeholders in commands: `{dir}` (the plugin's folder), `{port}`,
 //! `{data}` (a folder the plugin may keep its state in).
@@ -67,6 +74,10 @@ pub struct Manifest {
     /// when. Unzoo One shows them and passes the values in.
     pub settings: Vec<Setting>,
     pub domains: Vec<String>,
+    /// Language code -> (manifest text -> that text in the language). A file
+    /// named here is read by [`read_manifest`]; until then the entry holds
+    /// the file's name as a string.
+    pub i18n: Map<String, Value>,
 }
 
 /// One thing the person can set. `key` is the plugin's own name for it
@@ -297,6 +308,20 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         .and_then(Value::as_array)
         .map(|d| d.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
+    let mut i18n = Map::new();
+    if let Some(map) = raw.get("i18n").and_then(Value::as_object) {
+        for (lang, source) in map {
+            if lang.is_empty() || lang.len() > 16 || !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(format!("i18n: {lang:?} is not a language code"));
+            }
+            match source {
+                Value::String(_) => {}
+                Value::Object(words) if words.values().all(Value::is_string) => {}
+                _ => return Err(format!("i18n.{lang} must be a file name or a map of text to text")),
+            }
+            i18n.insert(lang.clone(), source.clone());
+        }
+    }
     Ok(Manifest {
         id,
         name,
@@ -308,13 +333,35 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         roles,
         settings,
         domains,
+        i18n,
     })
 }
 
 pub fn read_manifest(dir: &Path) -> Result<Manifest, String> {
     let file = dir.join(MANIFEST);
     let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    parse_manifest(&text)
+    let mut manifest = parse_manifest(&text)?;
+    for (lang, source) in manifest.i18n.iter_mut() {
+        if let Value::String(name) = source {
+            *source = Value::Object(read_catalog(dir, name).map_err(|e| format!("i18n.{lang}: {e}"))?);
+        }
+    }
+    Ok(manifest)
+}
+
+/// A language file in the plugin's folder: text -> text.
+fn read_catalog(dir: &Path, name: &str) -> Result<Map<String, Value>, String> {
+    let relative = Path::new(name);
+    if relative.is_absolute() || relative.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("{name} must be a file inside the plugin's folder"));
+    }
+    let file = dir.join(relative);
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(words)) => Ok(words.into_iter().filter(|(_, v)| v.is_string()).collect()),
+        Ok(_) => Err(format!("{name} must hold a map of text to text")),
+        Err(e) => Err(format!("{name} is not valid JSON: {e}")),
+    }
 }
 
 /// `{dir}`, `{port}` and `{data}` filled in.
@@ -778,6 +825,7 @@ fn view(entry: &Entry) -> Value {
                 "roles": roles,
                 "settings": settings,
                 "domains": m.domains,
+                "i18n": m.i18n,
             })
         }
     }
@@ -1048,6 +1096,26 @@ mod tests {
         assert_eq!(writer.kind, RoleKind::Agent);
         assert_eq!(writer.default["model"], "sonnet");
         assert_eq!(m.domains, vec!["x.com"]);
+    }
+
+    #[test]
+    fn manifest_text_comes_in_other_languages() {
+        let inline = r#"{"id": "a", "i18n": {"en": {"写稿": "Writing"}, "de": "i18n/de.json"}}"#;
+        let m = parse_manifest(inline).unwrap();
+        assert_eq!(m.i18n["en"]["写稿"], "Writing");
+        assert_eq!(m.i18n["de"], "i18n/de.json");
+        assert!(parse_manifest(r#"{"id": "a", "i18n": {"en": 3}}"#).unwrap_err().contains("i18n.en"));
+        assert!(parse_manifest(r#"{"id": "a", "i18n": {"e n": {}}}"#).unwrap_err().contains("language code"));
+
+        let dir = std::env::temp_dir().join(format!("nissewyn-plugin-i18n-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("i18n")).unwrap();
+        std::fs::write(dir.join(MANIFEST), r#"{"id": "a", "i18n": {"en": "i18n/en.json"}}"#).unwrap();
+        std::fs::write(dir.join("i18n/en.json"), r#"{"写稿": "Writing", "n": 1}"#).unwrap();
+        let m = read_manifest(&dir).unwrap();
+        assert_eq!(m.i18n["en"], json!({"写稿": "Writing"}));
+        std::fs::write(dir.join(MANIFEST), r#"{"id": "a", "i18n": {"en": "../en.json"}}"#).unwrap();
+        assert!(read_manifest(&dir).unwrap_err().contains("inside the plugin's folder"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
