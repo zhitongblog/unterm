@@ -295,6 +295,7 @@ mod tests {
 
     #[test]
     fn skills_are_listed_switched_off_imported_saved_and_laid_out_as_a_plugin() {
+        let _env = crate::test_env::EnvGuard::new();
         let state = tempfile::tempdir().unwrap();
         let builtin = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();

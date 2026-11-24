@@ -32,3 +32,57 @@ pub mod server;
 
 pub use server::start_web_settings_server;
 pub mod update_check;
+
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::ffi::OsString;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const TRACKED_VARS: &[&str] = &[
+        "UNTERM_STATE_DIR",
+        "UNTERM_TASKS_DB",
+        "UNTERM_CLI",
+        "UNZOO_SERVICE",
+        "UNTERM_CONSOLE_DIR",
+        "UNTERM_WORK_ROOT",
+        "UNTERM_CLIENTS_HOME",
+        "UNTERM_PRODUCT_NAME",
+        "UNTERM_BUILTIN_SKILLS",
+    ];
+
+    pub(crate) fn lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(crate) struct EnvGuard {
+        _guard: MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        pub(crate) fn new() -> Self {
+            let guard = lock();
+            let saved = TRACKED_VARS
+                .iter()
+                .map(|&k| (k, std::env::var_os(k)))
+                .collect();
+            Self {
+                _guard: guard,
+                saved,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in self.saved.drain(..) {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+}

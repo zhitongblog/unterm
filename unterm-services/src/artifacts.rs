@@ -255,16 +255,8 @@ pub fn enforce_quota(limit_bytes: i64) -> Result<Sweep> {
 mod tests {
     use super::*;
 
-    struct Isolated {
-        _dir: tempfile::TempDir,
-    }
-
-    fn isolate() -> Isolated {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
-        Isolated { _dir: dir }
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     fn spec(origin: &str) -> NewArtifact {

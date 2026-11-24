@@ -100,13 +100,6 @@ pub fn lookup(request_path: &str) -> Option<(&'static str, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// `UNTERM_CONSOLE_DIR` is process-wide, so the tests that set it take
-    /// turns. Run the suite with `--test-threads=1` like the rest of the
-    /// workspace and this is belt-and-braces; run it in parallel and it is
-    /// what keeps these two from reading each other's directory.
-    static CONSOLE_DIR_ENV: Mutex<()> = Mutex::new(());
 
     /// Points `UNTERM_CONSOLE_DIR` at a directory for as long as it lives,
     /// then puts the old value back.
@@ -117,9 +110,7 @@ mod tests {
 
     impl ConsoleDirGuard {
         fn set(dir: &Path) -> Self {
-            let lock = CONSOLE_DIR_ENV
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let lock = crate::test_env::lock();
             let original = std::env::var_os("UNTERM_CONSOLE_DIR");
             std::env::set_var("UNTERM_CONSOLE_DIR", dir);
             Self {

@@ -261,13 +261,11 @@ mod tests {
     use super::*;
 
     fn with_home<T>(work: impl FnOnce(&Path) -> T) -> T {
+        let _env = crate::test_env::EnvGuard::new();
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("UNTERM_CLIENTS_HOME", home.path());
         std::env::set_var("UNTERM_PRODUCT_NAME", "Unzoo One");
-        let out = work(home.path());
-        std::env::remove_var("UNTERM_CLIENTS_HOME");
-        std::env::remove_var("UNTERM_PRODUCT_NAME");
-        out
+        work(home.path())
     }
 
     fn entry_of<'a>(status: &'a Value, id: &str) -> &'a Value {
@@ -276,6 +274,7 @@ mod tests {
 
     #[test]
     fn the_server_is_named_after_the_product() {
+        let _env = crate::test_env::EnvGuard::new();
         std::env::set_var("UNTERM_PRODUCT_NAME", "Unzoo One");
         assert_eq!(server_name(), "unzoo-one");
         std::env::remove_var("UNTERM_PRODUCT_NAME");

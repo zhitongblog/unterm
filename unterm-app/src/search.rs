@@ -102,6 +102,44 @@ impl Search {
             self.matches.len()
         )
     }
+
+    /// Build a prompt containing the currently selected search match plus
+    /// surrounding context lines to send directly to an active AI Agent pane.
+    pub fn agent_context_prompt(
+        &self,
+        lines: &[String],
+        first_row: i64,
+        is_zh: bool,
+    ) -> Option<String> {
+        let current = self.current()?;
+        if lines.is_empty() {
+            return None;
+        }
+        let rel = (current.row - first_row).clamp(0, lines.len().saturating_sub(1) as i64) as usize;
+        let start = rel.saturating_sub(4);
+        let end = (rel + 5).min(lines.len());
+        let excerpt = lines[start..end]
+            .iter()
+            .map(|l| l.trim_end())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ⏎ ");
+        if excerpt.is_empty() {
+            return None;
+        }
+        let pos = format!("{}/{}", self.selected + 1, self.matches.len());
+        if is_zh {
+            Some(format!(
+                "请分析终端搜索命中 `{}` ({pos}) 的上下文：{excerpt}\r",
+                self.pattern
+            ))
+        } else {
+            Some(format!(
+                "Please analyze this terminal search match `{}` ({pos}) with context: {excerpt}\r",
+                self.pattern
+            ))
+        }
+    }
 }
 
 /// What a key press means to an open search.
@@ -115,6 +153,8 @@ pub enum Key {
     Clear,
     /// Read the pattern the next way, and search again.
     CycleMode,
+    /// Send the current match and surrounding context to the active AI Agent pane.
+    SendToAgent,
     /// Move through the results.
     Step(isize),
     /// Close the search.
@@ -145,6 +185,8 @@ pub fn key_for(named: Option<&str>, character: Option<&str>, ctrl: bool, shift: 
         Some(text) if ctrl && text.eq_ignore_ascii_case("u") => Key::Clear,
         // Ctrl+R cycles how the pattern reads, as it always has.
         Some(text) if ctrl && text.eq_ignore_ascii_case("r") => Key::CycleMode,
+        // Ctrl+S feeds the current match + surrounding context to the active AI agent pane.
+        Some(text) if ctrl && text.eq_ignore_ascii_case("s") => Key::SendToAgent,
         // Ctrl+something else is a command, not text to search for.
         Some(text) if !ctrl => Key::Type(text.to_string()),
         _ => Key::NotOurs,
@@ -323,5 +365,26 @@ mod tests {
             key_for(None, Some("r"), false, false),
             Key::Type("r".to_string())
         );
+    }
+
+    #[test]
+    fn ctrl_s_sends_match_context_to_agent() {
+        assert_eq!(key_for(None, Some("s"), true, false), Key::SendToAgent);
+        assert_eq!(key_for(None, Some("S"), true, false), Key::SendToAgent);
+        let s = Search {
+            pattern: "E0308".to_string(),
+            matches: vec![found(12, 0)],
+            selected: 0,
+            mode: Mode::CaseSensitive,
+        };
+        let lines = vec![
+            "Compiling unterm-app".to_string(),
+            "error[E0308]: mismatched types".to_string(),
+            "  --> src/window.rs:42:5".to_string(),
+        ];
+        let prompt = s.agent_context_prompt(&lines, 11, false).unwrap();
+        assert!(prompt.contains("E0308"));
+        assert!(prompt.contains("1/1"));
+        assert!(prompt.contains("mismatched types"));
     }
 }

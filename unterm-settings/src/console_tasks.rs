@@ -2075,6 +2075,7 @@ mod tests {
 
     #[test]
     fn tasks_are_kept_and_an_orphaned_run_is_closed_as_interrupted() {
+        let _env = crate::test_env::EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("UNTERM_STATE_DIR", dir.path());
         std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));

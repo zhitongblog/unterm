@@ -355,11 +355,8 @@ mod tests {
     use super::*;
 
     /// Each test gets its own database, or they inherit each other's fleets.
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        reset_for_tests();
-        dir
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     fn member(branch: &str, review: ReviewState) -> FleetMember {

@@ -78,7 +78,7 @@ function targetForUA(
 
 export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   const url = new URL(ctx.request.url);
-  const v = url.searchParams.get("v") || "v0.71.32";
+  const v = url.searchParams.get("v") || "v0.72.0";
   const mirror = url.searchParams.get("mirror");
   // Primary download button (/api/download?v=...) always serves GitHub Releases;
   // only the dedicated China mirror button (?mirror=atomgit or ?cn=1) uses AtomGit.

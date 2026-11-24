@@ -17,6 +17,7 @@ mod chrome;
 mod chrome_font;
 mod clipboard;
 mod cockpit;
+mod arena;
 mod command_block;
 mod composer;
 mod confirm;

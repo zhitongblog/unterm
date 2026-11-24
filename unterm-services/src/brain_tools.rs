@@ -326,11 +326,8 @@ mod tests {
     use serde_json::json;
     use unterm_gateway::{Code, Risk};
 
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        fleet_store::reset_for_tests();
-        dir
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     fn request(name: &str, arguments: Value) -> BrainEvent {

@@ -242,6 +242,24 @@ pub enum Command {
     CopyLastCommandOutput,
     /// Send the last command and its clean output directly to an active AI agent pane.
     SendLastCommandToAgent,
+    /// Jump viewport to the most recent failed command block in the focused pane's scrollback.
+    JumpToLastFailedCommand,
+    /// Open a native quick-pick list of recent OSC 133 / prompt command blocks in the focused pane.
+    ListCommandBlocks,
+    /// Scroll `pane_id` viewport directly to `row`.
+    ScrollToRow { pane_id: usize, row: isize },
+    /// Open the Remote Core over SSH tunnel manager palette.
+    OpenRemoteCores,
+    /// Open the Native Fleet Arena palette (parallel multi-agent worktree competition).
+    OpenFleetArena,
+    /// Launch a Fleet Arena run across `agents` in isolated Git worktrees.
+    LaunchFleetArena { agents: Vec<String> },
+    /// Select `branch` as the winner of `run_id`, squash-merge it, and clean up losing worktrees.
+    PickArenaWinner { run_id: String, branch: String },
+    /// Discard an arena run and remove all of its temporary worktrees.
+    CleanupArenaRun { run_id: String },
+    /// Open the cross-session Daily Agent Telemetry summary (Tokens, Cost, Success Rate).
+    OpenTelemetrySummary,
     /// A row that is information rather than a verb. The Insights card is a
     /// list to read, not a list to run, and pressing a line of it should do
     /// nothing rather than whatever a guess would be.

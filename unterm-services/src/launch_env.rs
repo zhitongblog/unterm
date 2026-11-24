@@ -569,10 +569,6 @@ mod proxy_env_tests {
     use std::ffi::OsStr;
     use std::net::TcpListener;
     use std::path::PathBuf;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     struct StateDirGuard {
         old: Option<std::ffi::OsString>,
         dir: PathBuf,
@@ -616,7 +612,7 @@ mod proxy_env_tests {
 
     #[test]
     fn enabled_manual_proxy_injects_upper_and_lowercase_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let (_listener, http_url) = loopback_listener();
         let state = StateDirGuard::new("manual");
         state.write_proxy_json(serde_json::json!({
@@ -655,7 +651,7 @@ mod proxy_env_tests {
 
     #[test]
     fn disabled_proxy_does_not_create_a_command_builder() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let state = StateDirGuard::new("disabled");
         state.write_proxy_json(serde_json::json!({
             "enabled": false,
@@ -671,7 +667,7 @@ mod proxy_env_tests {
 
     #[test]
     fn dead_proxy_endpoint_is_not_injected() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let (listener, http_url) = loopback_listener();
         let port = listener.local_addr().expect("listener address").port();
         drop(listener);

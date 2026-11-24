@@ -176,4 +176,13 @@ if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$(ba
   exit 1
 fi
 
+if [ -n "${CF_PAGES_DEPLOY_HOOK:-}" ]; then
+  echo ">> Triggering Cloudflare Pages deploy hook for $TAG"
+  if curl -fsS -X POST "$CF_PAGES_DEPLOY_HOOK" >/dev/null; then
+    echo "   Cloudflare Pages rebuild triggered."
+  else
+    echo "WARNING: CF_PAGES_DEPLOY_HOOK request failed (release upload itself succeeded)." >&2
+  fi
+fi
+
 echo ">> Done. Asset $dmg attached to release $TAG."

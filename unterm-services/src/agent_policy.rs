@@ -448,10 +448,8 @@ mod tests {
         assert!(evaluate_in(&rules, None, "Write", &json!({"file_path": "a.txt"})).is_none());
     }
 
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
-        dir
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     #[test]

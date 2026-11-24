@@ -371,21 +371,10 @@ fn opencode_governed(browser_profile: Option<&str>, helper: bool) -> Result<Valu
     }))
 }
 
-/// The adapter a run of this agent is read with. Said back to the console
-/// so it knows which vocabulary the events came from.
-/// The enabled skills for a CLI that is not Claude Code, as the session
-/// environment that hands them over for this session only -- nothing is
-/// written into the person's own configuration. Codex's app server is told
-/// the folder at start (`skills/extraRoots/set`); OpenCode reads it from its
-/// inline configuration. `None` when there is nothing to hand over, or the
-/// CLI has no way to take it.
-pub(crate) fn skill_env(adapter: &str) -> Option<Value> {
-    session_env(adapter, false, None, false)
-}
-
-/// The session's environment: [`skill_env`]'s skills, and for a governed
-/// OpenCode its whole preset ([`opencode_governed`]) -- one inline
-/// configuration, so both go into the same variable.
+/// The session's environment: enabled skills for CLIs that take them via
+/// environment (Codex `skills/extraRoots/set`, OpenCode inline config), and
+/// for a governed OpenCode its whole preset ([`opencode_governed`]) -- one
+/// inline configuration, so both go into the same variable.
 pub(crate) fn session_env(adapter: &str, governed: bool, browser_profile: Option<&str>, helper: bool) -> Option<Value> {
     if adapter != "codex" && adapter != "opencode" {
         return None;
@@ -786,6 +775,7 @@ mod tests {
 
     #[test]
     fn capabilities_say_what_governed_runs_can_mount() {
+        let _env = crate::test_env::EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
         let browser = dir.path().join("unzoo-service.exe");
@@ -848,6 +838,7 @@ mod tests {
 
     #[test]
     fn the_governed_preset_switches_the_shell_off_and_mounts_unterm() {
+        let _env = crate::test_env::EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
         std::fs::write(&cli, b"").unwrap();
@@ -876,6 +867,7 @@ mod tests {
 
     #[test]
     fn unzoo_is_mounted_as_the_agents_own_client_and_a_chosen_profile_is_named() {
+        let _env = crate::test_env::EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
         let unzoo = dir.path().join("unzoo-service.exe");
@@ -916,6 +908,7 @@ mod tests {
 
     #[test]
     fn codex_is_governed_with_its_own_tools_off_and_ours_mounted() {
+        let _env = crate::test_env::EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });
         let unzoo = dir.path().join("unzoo service.exe");
@@ -959,6 +952,7 @@ mod tests {
 
     #[test]
     fn opencode_is_governed_through_its_inline_configuration() {
+        let _env = crate::test_env::EnvGuard::new();
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("UNTERM_STATE_DIR", dir.path());
         let cli = dir.path().join(if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" });

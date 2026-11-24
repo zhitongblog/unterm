@@ -207,11 +207,8 @@ pub fn owning(path: impl AsRef<Path>) -> Result<Option<Workspace>> {
 mod tests {
     use super::*;
 
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
-        dir
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     fn dir(under: &Path, name: &str) -> PathBuf {
@@ -301,6 +298,7 @@ mod tests {
         assert!(error.contains("outer"), "the message does not say which: {error}");
 
         // And the other direction: a new workspace that would swallow one.
+        drop(store);
         let store2 = isolate();
         let inner = dir(store2.path(), "outer/inner");
         create("inner", &inner).unwrap();

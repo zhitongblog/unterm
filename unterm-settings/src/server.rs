@@ -2887,11 +2887,7 @@ mod tests {
 
     impl StateDirGuard {
         fn new(name: &str) -> Self {
-            static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-            let lock = ENV_LOCK
-                .get_or_init(|| std::sync::Mutex::new(()))
-                .lock()
-                .expect("state dir env lock");
+            let lock = crate::test_env::lock();
             let original = std::env::var_os("UNTERM_STATE_DIR");
             let path =
                 std::env::temp_dir().join(format!("unterm-settings-{name}-{}", std::process::id()));

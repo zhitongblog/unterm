@@ -12448,6 +12448,373 @@ impl App {
         });
     }
 
+    fn send_search_match_to_agent(&mut self, search: &crate::search::Search) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let source_pane = self.focused_session();
+        let Ok(snapshot) = self.engine.read_scrollback_text(
+            source_pane,
+            unterm_engine::ScrollbackTextRequest {
+                start_line: None,
+                end_line: None,
+                tail_lines: None,
+                escapes: false,
+            },
+        ) else {
+            return;
+        };
+        let Some(prompt) = search.agent_context_prompt(&snapshot.lines, snapshot.first_row, is_zh) else {
+            self.show_notice(if is_zh {
+                "当前没有可投喂的搜索命中".to_string()
+            } else {
+                "No active search match to send to AI Agent".to_string()
+            });
+            return;
+        };
+        let statuses = unterm_services::cockpit::status::snapshot();
+        let target_pane = statuses
+            .iter()
+            .find(|s| s.pane_id as usize != source_pane)
+            .or_else(|| statuses.first())
+            .map(|s| s.pane_id as usize)
+            .unwrap_or(source_pane);
+        let _ = self.engine.write_input(target_pane, &prompt);
+        self.show_notice(if is_zh {
+            format!("\u{2726} 已将搜索命中上下文投喂至窗格 #{target_pane}")
+        } else {
+            format!("\u{2726} Sent search match context to pane #{target_pane}")
+        });
+    }
+
+    fn jump_to_last_failed_command(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane_id = self.focused_session();
+        let Ok(snapshot) = self.engine.read_scrollback_text(
+            pane_id,
+            unterm_engine::ScrollbackTextRequest {
+                start_line: None,
+                end_line: None,
+                tail_lines: Some(600),
+                escapes: false,
+            },
+        ) else {
+            return;
+        };
+        let Some(block) = crate::command_block::find_last_failed_block(&snapshot.lines) else {
+            self.show_notice(if is_zh {
+                "最近 600 行内未检测到失败的命令块".to_string()
+            } else {
+                "No failed command block found in recent scrollback".to_string()
+            });
+            return;
+        };
+        let target_row = snapshot.first_row as isize + block.line_index as isize;
+        let _ = self.engine.scroll_viewport_to(pane_id, target_row);
+        self.window.drawn_revision = None;
+        self.show_notice(if is_zh {
+            format!("✗ 已定位至失败命令: {}", block.command)
+        } else {
+            format!("✗ Jumped to failed command: {}", block.command)
+        });
+    }
+
+    fn open_command_blocks_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane_id = self.focused_session();
+        let Ok(snapshot) = self.engine.read_scrollback_text(
+            pane_id,
+            unterm_engine::ScrollbackTextRequest {
+                start_line: None,
+                end_line: None,
+                tail_lines: Some(800),
+                escapes: false,
+            },
+        ) else {
+            return;
+        };
+        let blocks = crate::command_block::extract_command_blocks(&snapshot.lines, 24);
+        let mut entries = Vec::new();
+        if blocks.is_empty() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "当前窗格暂无可识别的命令块".to_string()
+                } else {
+                    "No command blocks detected in this pane yet".to_string()
+                },
+                hint: "OSC 133".to_string(),
+                command: crate::palette::Command::Nothing,
+            });
+        } else {
+            for block in blocks {
+                let icon = if block.looks_failed { "✗" } else { "✓" };
+                let row = snapshot.first_row as isize + block.line_index as isize;
+                let hint = if block.preview.is_empty() {
+                    format!("{} lines", block.output_line_count)
+                } else {
+                    format!("{} lines · {}", block.output_line_count, block.preview)
+                };
+                entries.push(crate::palette::Entry {
+                    label: format!("{icon} {}", block.command),
+                    hint,
+                    command: crate::palette::Command::ScrollToRow { pane_id, row },
+                });
+            }
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn open_remote_cores_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let dir = unterm_protocol::state_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join(".unterm"))
+            .join("remote-cores");
+        let mut entries = Vec::new();
+        if let Ok(read_dir) = std::fs::read_dir(&dir) {
+            for entry in read_dir.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(raw) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        let name = val["name"].as_str().unwrap_or("remote");
+                        let target = val["ssh_target"].as_str().unwrap_or("");
+                        let local_port = val["local_port"].as_u64().unwrap_or(0);
+                        let pid = val["tunnel_pid"].as_u64().unwrap_or(0);
+                        entries.push(crate::palette::Entry {
+                            label: format!("🌐 {name} ({target})"),
+                            hint: format!("127.0.0.1:{local_port} · ssh pid {pid}"),
+                            command: crate::palette::Command::Nothing,
+                        });
+                    }
+                }
+            }
+        }
+        if entries.is_empty() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "暂无活跃的 Remote Core SSH 隧道".to_string()
+                } else {
+                    "No active Remote Core SSH tunnels".to_string()
+                },
+                hint: "unterm-cli remote-core attach user@host".to_string(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn open_fleet_arena_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let mut entries = Vec::new();
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "⚔️ 启动双智能体竞速：Claude + Codex（各自独立 Worktree）".to_string()
+            } else {
+                "⚔️ Launch 2-Agent Arena: Claude + Codex (Isolated Worktrees)".to_string()
+            },
+            hint: "Fleet Arena".to_string(),
+            command: crate::palette::Command::LaunchFleetArena {
+                agents: vec!["claude".to_string(), "codex".to_string()],
+            },
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "⚔️ 启动双智能体竞速：Claude + Agy（各自独立 Worktree）".to_string()
+            } else {
+                "⚔️ Launch 2-Agent Arena: Claude + Agy (Isolated Worktrees)".to_string()
+            },
+            hint: "Fleet Arena".to_string(),
+            command: crate::palette::Command::LaunchFleetArena {
+                agents: vec!["claude".to_string(), "agy".to_string()],
+            },
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "⚔️ 启动三智能体竞速：Claude + Codex + Agy".to_string()
+            } else {
+                "⚔️ Launch 3-Agent Arena: Claude + Codex + Agy".to_string()
+            },
+            hint: "Fleet Arena · 3x".to_string(),
+            command: crate::palette::Command::LaunchFleetArena {
+                agents: vec!["claude".to_string(), "codex".to_string(), "agy".to_string()],
+            },
+        });
+
+        let mut runs = crate::arena::load_runs();
+        for run in &mut runs {
+            run.refresh_all_diffs();
+            for member in &run.members {
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!(
+                            "🏆 采纳胜出方案 [{} · {}] 并 Squash Merge",
+                            run.id, member.agent
+                        )
+                    } else {
+                        format!(
+                            "🏆 Pick Winner & Squash Merge [{} · {}]",
+                            run.id, member.agent
+                        )
+                    },
+                    hint: format!("{} · {}", member.branch, member.status_badge()),
+                    command: crate::palette::Command::PickArenaWinner {
+                        run_id: run.id.clone(),
+                        branch: member.branch.clone(),
+                    },
+                });
+            }
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("🧹 清理竞速工作树 [{}] ({} 个分支)", run.id, run.members.len())
+                } else {
+                    format!("🧹 Cleanup Arena Run [{}] ({} branches)", run.id, run.members.len())
+                },
+                hint: run.repo_root.display().to_string(),
+                command: crate::palette::Command::CleanupArenaRun {
+                    run_id: run.id.clone(),
+                },
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn launch_fleet_arena(&mut self, agents: &[String]) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let repo_dir = self
+            .current_directory()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        match crate::arena::create_arena_run(&repo_dir, "parallel arena task", agents) {
+            Ok(run) => {
+                for member in &run.members {
+                    self.split(unterm_engine::next_core::layout::SplitAxis::Horizontal);
+                    let pane_id = self.focused_session();
+                    let cd_cmd = format!(
+                        "cd '{}' && {}\r",
+                        member.worktree_path.display().to_string().replace('\'', "'\\''"),
+                        member.agent
+                    );
+                    let _ = self.engine.write_input(pane_id, &cd_cmd);
+                }
+                self.show_notice(if is_zh {
+                    format!(
+                        "⚔️ 已启动 Fleet Arena {}（{} 个隔离 Worktree 分屏）",
+                        run.id,
+                        run.members.len()
+                    )
+                } else {
+                    format!(
+                        "⚔️ Launched Fleet Arena {} ({} isolated worktree panes)",
+                        run.id,
+                        run.members.len()
+                    )
+                });
+            }
+            Err(err) => {
+                self.show_notice(if is_zh {
+                    format!("Fleet Arena 启动失败：{err}")
+                } else {
+                    format!("Fleet Arena failed: {err}")
+                });
+            }
+        }
+    }
+
+    fn pick_arena_winner(&mut self, run_id: &str, branch: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match crate::arena::pick_winner(run_id, branch) {
+            Ok(msg) => self.show_notice(if is_zh {
+                format!("🏆 已择优合入 {branch} 并清理其余 Worktree")
+            } else {
+                format!("🏆 {msg}")
+            }),
+            Err(err) => self.show_notice(format!("Arena merge failed: {err}")),
+        }
+    }
+
+    fn cleanup_arena_run(&mut self, run_id: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match crate::arena::cleanup_run(run_id) {
+            Ok(count) => self.show_notice(if is_zh {
+                format!("🧹 已清理 {run_id} 的 {count} 个 Worktree 与临时分支")
+            } else {
+                format!("🧹 Cleaned up {count} worktrees for {run_id}")
+            }),
+            Err(err) => self.show_notice(format!("Arena cleanup failed: {err}")),
+        }
+    }
+
+    fn open_telemetry_summary_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let mut summary = crate::telemetry::DailyTelemetrySummary {
+            day_index: crate::telemetry::DailyTelemetrySummary::today_index(),
+            agents: Vec::new(),
+        };
+        let statuses = unterm_services::cockpit::status::snapshot();
+        for status in &statuses {
+            let pane_id = status.pane_id as usize;
+            let lines = self
+                .engine
+                .read_scrollback_text(
+                    pane_id,
+                    unterm_engine::ScrollbackTextRequest {
+                        start_line: None,
+                        end_line: None,
+                        tail_lines: Some(60),
+                        escapes: false,
+                    },
+                )
+                .map(|s| s.lines)
+                .unwrap_or_default();
+            let sample = crate::telemetry::extract_from_lines(&lines);
+            let outcome = if self
+                .window
+                .pane_notices
+                .get(&pane_id)
+                .and_then(|n| n.last_exit_code)
+                .is_some_and(|c| c != 0)
+            {
+                Some(false)
+            } else if matches!(status.state, unterm_services::cockpit::status::AgentState::Done) {
+                Some(true)
+            } else {
+                None
+            };
+            summary.record_sample(&status.agent, &sample, outcome);
+        }
+
+        let mut entries = Vec::new();
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                format!(
+                    "📊 今日总计：{} tokens · 估算费用 ${:.2}（{} 个 Agent）",
+                    crate::telemetry::format_tokens(summary.total_tokens()),
+                    summary.total_cost_usd(),
+                    summary.agents.len()
+                )
+            } else {
+                format!(
+                    "📊 Today Total: {} tokens · Est. ${:.2} ({} agents)",
+                    crate::telemetry::format_tokens(summary.total_tokens()),
+                    summary.total_cost_usd(),
+                    summary.agents.len()
+                )
+            },
+            hint: "Live cross-session summary".to_string(),
+            command: crate::palette::Command::Nothing,
+        });
+        for agent in &summary.agents {
+            entries.push(crate::palette::Entry {
+                label: format!("  ✦ {} ({} panes)", agent.agent, agent.sessions_seen),
+                hint: agent.summary_line(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
     fn fix_failure_with_agent(&mut self, program: &str) {
         let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
         let source_pane = self.focused_session();
@@ -14013,6 +14380,26 @@ impl App {
             }
             crate::palette::Command::CopyLastCommandOutput => self.copy_last_command_output(),
             crate::palette::Command::SendLastCommandToAgent => self.send_last_command_to_agent(),
+            crate::palette::Command::JumpToLastFailedCommand => self.jump_to_last_failed_command(),
+            crate::palette::Command::ListCommandBlocks => self.open_command_blocks_palette(),
+            crate::palette::Command::ScrollToRow { pane_id, row } => {
+                let _ = self.engine.scroll_viewport_to(pane_id, row);
+                self.window.drawn_revision = None;
+            }
+            crate::palette::Command::OpenRemoteCores => self.open_remote_cores_palette(),
+            crate::palette::Command::OpenFleetArena => self.open_fleet_arena_palette(),
+            crate::palette::Command::LaunchFleetArena { agents } => {
+                self.launch_fleet_arena(&agents)
+            }
+            crate::palette::Command::PickArenaWinner { run_id, branch } => {
+                self.pick_arena_winner(&run_id, &branch)
+            }
+            crate::palette::Command::CleanupArenaRun { run_id } => {
+                self.cleanup_arena_run(&run_id)
+            }
+            crate::palette::Command::OpenTelemetrySummary => {
+                self.open_telemetry_summary_palette()
+            }
             crate::palette::Command::ConfirmSafePaste { pane_id, text } => {
                 self.perform_paste_input(pane_id, &text)
             }
@@ -14628,6 +15015,15 @@ impl App {
             crate::search::Key::CycleMode => {
                 search.cycle_mode();
                 research = true;
+            }
+            crate::search::Key::SendToAgent => {
+                self.send_search_match_to_agent(&search);
+                self.window.search = Some(search);
+                self.window.drawn_revision = None;
+                if let Some(live) = self.window.state.as_ref() {
+                    live.window.request_redraw();
+                }
+                return true;
             }
             crate::search::Key::Type(text) => {
                 search.pattern.push_str(&text);
@@ -15326,7 +15722,7 @@ impl App {
             color: self.window.colors.foreground,
         });
         let background = self.window.colors.background;
-        let button_cells = 16usize;
+        let button_cells = 21usize;
         let columns = (width / metrics.width.max(1.0)).floor().max(0.0) as usize;
         let label = crate::sidebar::fit(&label, columns.saturating_sub(button_cells + 2));
         crate::terminal::append_text(
@@ -15339,8 +15735,10 @@ impl App {
         );
 
         let has_pattern = !search.pattern.is_empty();
+        let has_match = search.current().is_some();
         let dim_ink = self.chrome().dim_text;
         let buttons = [
+            ("✦AI", 5usize),
             ("⌫", 3usize),
             ("↑", 3usize),
             ("↓", 3usize),
@@ -15358,7 +15756,7 @@ impl App {
                 color: self.window.colors.background,
             });
             let text_width = text.chars().count() as f32 * metrics.width;
-            let ink = if text == "⌫" && !has_pattern {
+            let ink = if (text == "⌫" && !has_pattern) || (text == "✦AI" && !has_match) {
                 dim_ink
             } else {
                 self.window.colors.foreground
@@ -19574,6 +19972,51 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         },
         hint: "OSC 133 · Clean stdout/stderr".to_string(),
         command: crate::palette::Command::CopyLastCommandOutput,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "✗ 一键跳转到上一个失败命令块 (OSC 133)".to_string()
+        } else {
+            "✗ Jump to Last Failed Command Block (OSC 133)".to_string()
+        },
+        hint: "OSC 133 · Error jump".to_string(),
+        command: crate::palette::Command::JumpToLastFailedCommand,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📜 命令块快览与跳转 (OSC 133 Command Blocks)".to_string()
+        } else {
+            "📜 Command Blocks Overview & Jump (OSC 133)".to_string()
+        },
+        hint: "Quick jump".to_string(),
+        command: crate::palette::Command::ListCommandBlocks,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "🌐 查看 Remote Core over SSH 远端隧道".to_string()
+        } else {
+            "🌐 Remote Core over SSH Tunnels".to_string()
+        },
+        hint: "unterm-cli remote-core".to_string(),
+        command: crate::palette::Command::OpenRemoteCores,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "⚔️ Native Fleet Arena — 多 Agent 独立 Worktree 并行竞速与择优合并".to_string()
+        } else {
+            "⚔️ Native Fleet Arena — Parallel Multi-Agent Worktree Competition".to_string()
+        },
+        hint: "Claude / Codex / Agy".to_string(),
+        command: crate::palette::Command::OpenFleetArena,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📊 跨会话 Agent Telemetry 汇总（今日 Token / 费用 / 成功率）".to_string()
+        } else {
+            "📊 Cross-Session Agent Telemetry Summary (Tokens / Cost / Success Rate)".to_string()
+        },
+        hint: "Telemetry HUD".to_string(),
+        command: crate::palette::Command::OpenTelemetrySummary,
     });
     entries.push(crate::palette::Entry {
         label: if is_zh {

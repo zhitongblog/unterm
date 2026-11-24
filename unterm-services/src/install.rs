@@ -395,8 +395,7 @@ mod tests {
 
     #[test]
     fn an_uninstall_that_keeps_data_lists_none_of_it() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let dir = crate::test_env::IsolatedEnv::new();
         std::fs::write(dir.path().join("tasks.db"), b"x").unwrap();
 
         let plan = uninstall_plan(true);
@@ -414,8 +413,7 @@ mod tests {
         // "Delete my data?" is a question with an answer only if the answer
         // says what the data is. A year of task history is not obvious from a
         // filename.
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let dir = crate::test_env::IsolatedEnv::new();
         for name in ["tasks.db", "settings.json"] {
             std::fs::write(dir.path().join(name), b"x").unwrap();
         }
@@ -518,8 +516,7 @@ mod tests {
     fn a_plan_removes_nothing() {
         // The whole reason this is a plan and not an action: the answer to
         // "what will I lose" is what somebody wants *before* they say yes.
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let dir = crate::test_env::IsolatedEnv::new();
         let path = dir.path().join("tasks.db");
         std::fs::write(&path, b"precious").unwrap();
 
