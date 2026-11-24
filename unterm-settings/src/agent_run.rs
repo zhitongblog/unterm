@@ -70,11 +70,18 @@ fn unterm_cli_path() -> Option<std::path::PathBuf> {
         return path.is_file().then_some(path);
     }
     let exe = std::env::current_exe().ok()?;
-    let name = if cfg!(windows) { "unterm-cli.exe" } else { "unterm-cli" };
+    // Installed under a product's name (Nissewyn's `nissewyn-cli`), the CLI
+    // is not called `unterm-cli`: look for the product's name first, then the
+    // runtime's own (a build tree, a standalone Unterm).
+    let file = |stem: &str| format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+    let names = [
+        file(&unterm_protocol::program_stem(unterm_protocol::Program::Cli)),
+        file("unterm-cli"),
+    ];
     exe.ancestors()
         .skip(1)
         .take(2)
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|candidate| candidate.is_file())
 }
 
