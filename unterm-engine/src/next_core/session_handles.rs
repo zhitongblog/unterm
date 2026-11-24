@@ -28,13 +28,13 @@ pub(super) struct ShellHandles {
 
 pub(super) struct ScrollbackHandles {
     pub(super) screen: Arc<Mutex<NextCoreScreen>>,
-    pub(super) output: Arc<Mutex<String>>,
+    pub(super) output: Arc<Mutex<super::pty_io::OutputLog>>,
     pub(super) activity: Arc<Mutex<SessionIoActivity>>,
     pub(super) cols: usize,
     pub(super) rows: usize,
 }
 
-pub(super) fn output_current(pane_id: usize) -> Result<Arc<Mutex<String>>> {
+pub(super) fn output_current(pane_id: usize) -> Result<Arc<Mutex<super::pty_io::OutputLog>>> {
     runtime::with_session(pane_id, |session| Ok(Arc::clone(&session.output)))
 }
 

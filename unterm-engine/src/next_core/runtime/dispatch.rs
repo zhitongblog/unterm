@@ -28,7 +28,7 @@ pub(in crate::next_core) enum RuntimeDispatchResult {
     Cursor(CursorSnapshot),
     PaneModes(crate::PaneModesSnapshot),
     ScreenRevision(u64),
-    Output(String),
+    Output(crate::OutputSince),
     ShellSnapshot(ShellSnapshot),
     SessionActivity(SessionActivitySnapshot),
     HealthSnapshot(EngineHealthSnapshot),

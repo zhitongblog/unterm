@@ -3,9 +3,11 @@ use super::{command::RuntimeCommand, with_current_mut};
 use crate::{EngineHealthSnapshot, SessionActivitySnapshot, ShellSnapshot};
 use anyhow::{bail, Result};
 
-pub(in crate::next_core) fn execute_output(command: RuntimeCommand) -> Result<String> {
+pub(in crate::next_core) fn execute_output(command: RuntimeCommand) -> Result<crate::OutputSince> {
     match command {
-        RuntimeCommand::RawOutput { pane_id } => session_queries::output(pane_id),
+        RuntimeCommand::RawOutput { pane_id, from, max_bytes } => {
+            session_queries::output(pane_id, from, max_bytes)
+        }
         _ => bail!("runtime status executor expected raw-output command"),
     }
 }
@@ -50,7 +52,7 @@ mod tests {
 
         assert!(err.to_string().contains("expected shell-snapshot command"));
 
-        let err = execute_health_snapshot(RuntimeCommand::RawOutput { pane_id: 1 })
+        let err = execute_health_snapshot(RuntimeCommand::RawOutput { pane_id: 1, from: None, max_bytes: 0 })
             .expect_err("wrong health command should fail");
 
         assert!(err.to_string().contains("expected health-snapshot command"));

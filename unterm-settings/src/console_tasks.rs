@@ -679,6 +679,48 @@ pub fn terminal_screen_wait(
     Ok(first)
 }
 
+/// A live terminal's output exactly as it arrived, from byte `from` of
+/// everything it printed (the newest stretch without one): what the console's
+/// emulator needs to draw full-screen programs right -- the line view above
+/// loses the carriage returns and trailing spaces they redraw with. Held open
+/// until something new arrives or `wait` runs out, like [`terminal_screen_wait`].
+/// `start` later than `from` means the bytes asked for are gone: start over.
+pub fn terminal_raw_wait(handler: &McpHandler, session: &str, from: Option<u64>, wait: Duration) -> Result<Value> {
+    if !console_may_use(handler, session)? {
+        bail!("{session} is not a terminal an agent used");
+    }
+    let read = || -> Result<Value> {
+        let out = handler
+            .handle(
+                &internal(),
+                "screen.scrollback_text",
+                &json!({"session_id": session, "raw": true, "raw_from": from}),
+            )
+            .map_err(|e| anyhow!("{session} is closed: {e}"))?;
+        Ok(json!({
+            "session_id": session,
+            "raw": true,
+            "text": out.get("text").cloned().unwrap_or(Value::Null),
+            "start": out.get("start").cloned().unwrap_or(Value::Null),
+            "end": out.get("end").cloned().unwrap_or(Value::Null),
+        }))
+    };
+    let first = read()?;
+    let caught_up = |v: &Value| from.is_some() && v.get("end").and_then(Value::as_u64) == from;
+    if !caught_up(&first) || wait.is_zero() {
+        return Ok(first);
+    }
+    let deadline = Instant::now() + wait.min(TERMINAL_WAIT_MAX);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        let now = read()?;
+        if !caught_up(&now) {
+            return Ok(now);
+        }
+    }
+    Ok(first)
+}
+
 /// Keys the person typed into an agent's terminal from the console.
 pub fn terminal_input(handler: &McpHandler, session: &str, input: &str) -> Result<Value> {
     if input.is_empty() || input.len() > TERMINAL_INPUT_MAX {
@@ -2360,9 +2402,14 @@ pub fn api_terminal(handler: &McpHandler, body: &[u8]) -> Response {
     let body = body_json(body);
     match id_field(&body, "session_id") {
         Some(session) => {
+            let wait = Duration::from_millis(body.get("wait_ms").and_then(Value::as_u64).unwrap_or(0));
+            // `raw: true, from_byte?`: the output as it arrived (see terminal_raw_wait).
+            if body.get("raw").and_then(Value::as_bool).unwrap_or(false) {
+                let from = body.get("from_byte").and_then(Value::as_u64);
+                return computer_reply(terminal_raw_wait(handler, &session, from, wait));
+            }
             let from = body.get("from_line").and_then(Value::as_i64);
             let known = body.get("known").and_then(Value::as_str);
-            let wait = Duration::from_millis(body.get("wait_ms").and_then(Value::as_u64).unwrap_or(0));
             computer_reply(terminal_screen_wait(handler, &session, from, known, wait))
         }
         None => Response::err(400, "Bad Request", "session_id is required"),

@@ -155,7 +155,7 @@ mod tests {
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
             writer,
-            output: Arc::new(Mutex::new(String::new())),
+            output: Arc::new(Mutex::new(super::super::pty_io::OutputLog::default())),
             screen: Arc::new(Mutex::new(super::super::NextCoreScreen::new(80, 24))),
             recording: Arc::new(Mutex::new(None)),
             activity: Arc::new(Mutex::new(

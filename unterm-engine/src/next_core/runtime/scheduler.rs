@@ -398,8 +398,12 @@ pub(in crate::next_core) fn screen_revision(pane_id: usize) -> Result<u64> {
     }
 }
 
-pub(in crate::next_core) fn output(pane_id: usize) -> Result<String> {
-    let command = RuntimeCommand::RawOutput { pane_id };
+pub(in crate::next_core) fn output(
+    pane_id: usize,
+    from: Option<u64>,
+    max_bytes: usize,
+) -> Result<crate::OutputSince> {
+    let command = RuntimeCommand::RawOutput { pane_id, from, max_bytes };
     match consumer::submit_and_dispatch_response(command)? {
         RuntimeDispatchResult::Output(output) => Ok(output),
         other => bail!(

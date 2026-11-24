@@ -114,7 +114,7 @@ struct NextCoreSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    output: Arc<Mutex<String>>,
+    output: Arc<Mutex<pty_io::OutputLog>>,
     screen: Arc<Mutex<NextCoreScreen>>,
     recording: Arc<Mutex<Option<NextCoreRecording>>>,
     activity: Arc<Mutex<SessionIoActivity>>,
@@ -3008,7 +3008,7 @@ impl NextCoreEngine {
 
     #[doc(hidden)]
     pub fn debug_output(&self, pane_id: usize) -> Result<String> {
-        runtime::output(pane_id)
+        Ok(runtime::output(pane_id, None, usize::MAX)?.text)
     }
 
     /// Resize a pane to the size a window is drawing it at: a shrink waits
@@ -3151,6 +3151,15 @@ impl ScreenEngine for NextCoreEngine {
         request: ScrollbackTextRequest,
     ) -> Result<ScrollbackTextSnapshot> {
         runtime::read_scrollback_text(pane_id, request)
+    }
+
+    fn read_output_since(
+        &self,
+        pane_id: usize,
+        from: Option<u64>,
+        max_bytes: usize,
+    ) -> Result<crate::OutputSince> {
+        runtime::output(pane_id, from, max_bytes)
     }
 
     fn read_styled_scrollback(

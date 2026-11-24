@@ -11136,6 +11136,24 @@ impl McpHandler {
             params,
             PaneResolutionOptions::ACTIVE_EXISTING,
         )?;
+        // `raw: true`: the output exactly as it arrived, from byte
+        // `raw_from` of everything the pane printed on -- for a viewer that
+        // replays it in its own emulator (lines would lose the carriage
+        // returns and trailing spaces full-screen programs draw with).
+        if params.get("raw").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let from = params.get("raw_from").and_then(|v| v.as_u64());
+            let max_bytes = params
+                .get("max_bytes")
+                .and_then(|v| v.as_u64())
+                .map_or(512 * 1024, |n| n.min(1024 * 1024) as usize);
+            let slice = engine.read_output_since(pane_id, from, max_bytes)?;
+            return Ok(json!({
+                "raw": true,
+                "text": slice.text,
+                "start": slice.start,
+                "end": slice.end,
+            }));
+        }
         let want_escapes = params
             .get("escapes")
             .and_then(|v| v.as_bool())

@@ -159,6 +159,8 @@ pub(in crate::next_core) enum RuntimeCommand {
     },
     RawOutput {
         pane_id: usize,
+        from: Option<u64>,
+        max_bytes: usize,
     },
     ShellSnapshot {
         pane_id: usize,
@@ -243,7 +245,7 @@ impl RuntimeCommand {
             | Self::RecordingStatus { pane_id }
             | Self::AttachRecordingTrace { pane_id, .. }
             | Self::ExportRecordingMarkdown { pane_id, .. }
-            | Self::RawOutput { pane_id }
+            | Self::RawOutput { pane_id, .. }
             | Self::ShellSnapshot { pane_id }
             | Self::SessionActivity { pane_id } => Some(*pane_id),
         }

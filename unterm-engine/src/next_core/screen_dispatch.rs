@@ -209,7 +209,7 @@ pub(super) fn read_scrollback_text(
 
     let (selected, line_count, start, end) = if request.escapes {
         let output = handles.output.lock();
-        let lines = screen_text::output_lines(&output);
+        let lines = screen_text::output_lines(&output.text);
         let line_count = lines.len();
         let (start, end) = screen_text::bounded_range(
             line_count,

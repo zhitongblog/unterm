@@ -305,6 +305,8 @@ pub const MCP_METHODS: &[McpMethod] = &[
             P_PANE_ID,
             P_SESSION_ID,
             Param { name: "escapes", kind: "bool", required: false, summary: "Preserve ANSI escapes." },
+            Param { name: "raw", kind: "bool", required: false, summary: "The output exactly as it arrived (for replaying in an emulator): returns {text, start, end} byte offsets instead of lines." },
+            Param { name: "raw_from", kind: "int", required: false, summary: "With raw: byte offset into all the pane printed to read from." },
             Param { name: "start_line", kind: "int", required: false, summary: "Absolute StableRowIndex." },
             Param { name: "end_line", kind: "int", required: false, summary: "Absolute StableRowIndex (exclusive)." },
             Param { name: "tail_lines", kind: "int", required: false, summary: "Keep only the last N rows in the selected range." },

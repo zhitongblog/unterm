@@ -1290,6 +1290,19 @@ fn dispatch_inner(
                 engine.read_scrollback_text(pane_id, parse_scrollback_request(&request.params))?,
             ))?
         }
+        "session.output_since" => {
+            let pane_id = required_pane_id(request)?;
+            let from = request.params.get("from").and_then(|v| v.as_u64());
+            let max_bytes = request
+                .params
+                .get("max_bytes")
+                .and_then(|v| v.as_u64())
+                .map_or(usize::MAX, |n| n as usize);
+            serde_json::to_string(&response_ok(
+                id,
+                engine.read_output_since(pane_id, from, max_bytes)?,
+            ))?
+        }
         "session.styled_scrollback" => {
             let pane_id = required_pane_id(request)?;
             serde_json::to_string(&response_ok(
@@ -2839,6 +2852,18 @@ impl ScreenEngine for CoreEngineClient {
         self.call(
             "session.scrollback_text",
             scrollback_request_params(pane_id, &request),
+        )
+    }
+
+    fn read_output_since(
+        &self,
+        pane_id: usize,
+        from: Option<u64>,
+        max_bytes: usize,
+    ) -> Result<unterm_engine::OutputSince> {
+        self.call(
+            "session.output_since",
+            serde_json::json!({"pane_id": pane_id, "from": from, "max_bytes": max_bytes}),
         )
     }
 
