@@ -62,6 +62,23 @@ const FALLBACK: Stats = {
   tags: null,
 };
 
+function parseSemver(tag: string): [number, number, number] | null {
+  const m = tag.trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function newerReleaseTag(apiTag: string | undefined, fallbackTag: string): string {
+  if (!apiTag) return fallbackTag;
+  const a = parseSemver(apiTag);
+  const b = parseSemver(fallbackTag);
+  if (!a || !b) return apiTag;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i] ? apiTag : fallbackTag;
+  }
+  return apiTag;
+}
+
 let cache: Promise<Stats> | null = null;
 
 export function fetchStats(): Promise<Stats> {
@@ -105,7 +122,7 @@ async function doFetch(): Promise<Stats> {
     return {
       stars: repoJson.stargazers_count ?? 0,
       downloads,
-      release: releasesJson?.[0]?.tag_name ?? FALLBACK.release,
+      release: newerReleaseTag(releasesJson?.[0]?.tag_name, FALLBACK.release),
       tags: Array.isArray(releasesJson)
         ? releasesJson.map((r) => r.tag_name).filter(Boolean)
         : null,
