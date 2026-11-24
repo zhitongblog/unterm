@@ -84,6 +84,55 @@ pub fn apply_unterm_proxy_to_process_env() {
     }
 }
 
+/// The variables the proxy setting decides.
+const PROXY_VARS: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
+/// What this process inherited for those, before the setting changed any.
+static INHERITED_PROXY: std::sync::OnceLock<Vec<(&'static str, Option<std::ffi::OsString>)>> =
+    std::sync::OnceLock::new();
+
+/// Make the proxy setting the whole app's: put what it resolves to into this
+/// process's own environment, so everything started from here -- terminals,
+/// agents, plugins, git, installers -- goes through it, and requests this
+/// process makes with an env-aware client too. Turned off (or nothing
+/// reachable), the variables go back to what this process inherited. Call
+/// at start and after every change of the setting.
+pub fn sync_proxy_to_process_env() -> Option<Vec<(String, String)>> {
+    let inherited = INHERITED_PROXY.get_or_init(|| {
+        PROXY_VARS
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect()
+    });
+    let wanted = read_unterm_proxy_env();
+    for (name, original) in inherited {
+        let set = wanted
+            .as_ref()
+            .and_then(|env| env.iter().find(|(key, _)| key == name))
+            .map(|(_, value)| std::ffi::OsString::from(value))
+            .or_else(|| {
+                // A proxy in use with no list of its own: the inherited
+                // exceptions would be mixed with another proxy's. Local
+                // addresses always stay direct.
+                original.clone().filter(|_| wanted.is_none())
+            });
+        match set {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+    wanted
+}
+
 /// On Windows, force UTF-8 in spawned shells so that PowerShell / cmd.exe
 /// running on a zh-CN (CP936/GBK), zh-TW (CP950/Big5), ja-JP (CP932/SJIS),
 /// or any other non-UTF-8 system locale still emit UTF-8 bytes — which is
@@ -343,11 +392,36 @@ pub fn read_unterm_proxy_env() -> Option<Vec<(String, String)>> {
         env.push(("ALL_PROXY".to_string(), socks.clone()));
         env.push(("all_proxy".to_string(), socks.clone()));
     }
-    if !no_proxy.is_empty() {
-        env.push(("NO_PROXY".to_string(), no_proxy.clone()));
-        env.push(("no_proxy".to_string(), no_proxy));
-    }
+    let no_proxy = no_proxy_list(&no_proxy);
+    env.push(("NO_PROXY".to_string(), no_proxy.clone()));
+    env.push(("no_proxy".to_string(), no_proxy));
     Some(env)
+}
+
+/// The exceptions as programs read `NO_PROXY`: comma separated, and always
+/// this computer itself -- the app's own services (the browser, plugins, the
+/// runtime) talk over 127.0.0.1 and must never be sent to a proxy. Windows
+/// writes its list with `;`, `<local>` and `*.` wildcards, which curl,
+/// Python and Node do not understand; a leading-dot domain is what they do.
+fn no_proxy_list(raw: &str) -> String {
+    let mut out: Vec<String> = vec!["localhost".into(), "127.0.0.1".into(), "::1".into()];
+    for entry in raw.split([',', ';', ' ']).map(str::trim).filter(|e| !e.is_empty()) {
+        if entry.eq_ignore_ascii_case("<local>") {
+            continue;
+        }
+        let entry = if let Some(rest) = entry.strip_prefix("*.") {
+            format!(".{rest}")
+        } else if entry.contains('*') {
+            // `127.*`, `192.168.*`: no form other programs read.
+            continue;
+        } else {
+            entry.to_string()
+        };
+        if !out.iter().any(|known| known.eq_ignore_ascii_case(&entry)) {
+            out.push(entry);
+        }
+    }
+    out.join(",")
 }
 
 /// Resolve the URLs the toggle would inject — mode overlay, detection and the
@@ -662,5 +736,34 @@ mod proxy_env_tests {
         let mut command = None;
         apply_unterm_proxy_env(&mut command);
         assert!(command.is_none());
+    }
+
+    #[test]
+    fn exceptions_are_written_the_way_programs_read_them() {
+        assert_eq!(no_proxy_list(""), "localhost,127.0.0.1,::1");
+        assert_eq!(
+            no_proxy_list("localhost;127.*;10.*;*.corp.example;intranet;<local>"),
+            "localhost,127.0.0.1,::1,.corp.example,intranet"
+        );
+    }
+
+    #[test]
+    fn the_setting_is_the_whole_processs_and_off_gives_back_what_was_there() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let (_listener, http_url) = loopback_listener();
+        let state = StateDirGuard::new("sync");
+        let before = std::env::var_os("HTTPS_PROXY");
+        state.write_proxy_json(serde_json::json!({
+            "enabled": true,
+            "mode": "manual",
+            "http_proxy": http_url,
+        }));
+        assert!(sync_proxy_to_process_env().is_some());
+        assert_eq!(std::env::var("HTTPS_PROXY").ok().as_deref(), Some(http_url.as_str()));
+        assert!(std::env::var("NO_PROXY").unwrap().contains("127.0.0.1"));
+
+        state.write_proxy_json(serde_json::json!({"enabled": false}));
+        assert!(sync_proxy_to_process_env().is_none());
+        assert_eq!(std::env::var_os("HTTPS_PROXY"), before);
     }
 }

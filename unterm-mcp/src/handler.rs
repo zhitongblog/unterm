@@ -6089,13 +6089,13 @@ impl McpHandler {
             // Proxy
             "proxy.status" => self.proxy_status(),
             "proxy.nodes" => self.proxy_nodes(),
-            "proxy.switch" => self.proxy_switch(params),
+            "proxy.switch" => self.proxy_switch(params).map(proxy_changed),
             "proxy.speedtest" => self.proxy_speedtest(params),
-            "proxy.configure" => self.proxy_configure(params),
-            "proxy.disable" => self.proxy_disable(),
+            "proxy.configure" => self.proxy_configure(params).map(proxy_changed),
+            "proxy.disable" => self.proxy_disable().map(proxy_changed),
             "proxy.env" => self.proxy_env(),
-            "proxy.rotation" => self.proxy_rotation(params),
-            "proxy.set_nodes" => self.proxy_set_nodes(params),
+            "proxy.rotation" => self.proxy_rotation(params).map(proxy_changed),
+            "proxy.set_nodes" => self.proxy_set_nodes(params).map(proxy_changed),
             "proxy.clash_status" => self.proxy_clash_status(),
             "proxy.clash_select" => self.proxy_clash_select(params),
             "proxy.clash_set_controller" => self.proxy_clash_set_controller(params),
@@ -12095,6 +12095,13 @@ fn load_proxy_settings() -> ProxySettings {
 
 /// Result of probing whether the configured (or auto-detected) proxy is
 /// reachable. Returned in the `health` field of `proxy.status`.
+/// After the proxy setting changed: it is the whole app's, so this process's
+/// own environment follows (what everything it starts inherits).
+fn proxy_changed(result: Value) -> Value {
+    unterm_services::launch_env::sync_proxy_to_process_env();
+    result
+}
+
 fn probe_proxy_health(settings: &ProxySettings) -> Value {
     // 1. If the user supplied an explicit URL, probe that.
     if let Some(url) = settings

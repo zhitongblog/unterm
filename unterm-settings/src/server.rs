@@ -471,6 +471,7 @@ fn route(req: &Request, auth_token: &str, handler: &McpHandler) -> Response {
         }
         ("POST", "/api/shells/install") => api_shell_install(&req.body),
         ("POST", "/api/shells/default") => api_shell_default_set(&req.body),
+        ("GET", "/api/proxy") => api_proxy_get(handler),
         ("POST", "/api/proxy") => api_proxy(handler, &req.body),
         ("POST", "/api/proxy/rotation") => api_proxy_rotation(handler, &req.body),
         ("POST", "/api/proxy/nodes") => api_proxy_set_nodes(handler, &req.body),
@@ -2337,6 +2338,35 @@ fn api_compat_set(body: &[u8]) -> Response {
         // shells pick up the change. Tell the client to prompt for new tab.
         "requires_new_shell": true,
     }))
+}
+
+/// GET /api/proxy — the app's proxy: the setting, what this computer's own
+/// proxy is (asked even when the setting is off, so the page can offer it),
+/// and what programs started from now on actually get.
+fn api_proxy_get(handler: &McpHandler) -> Response {
+    let ctx = unterm_mcp::handler::ConnectionContext::internal("web_settings");
+    let mut status = match handler.handle(&ctx, "proxy.status", &json!({})) {
+        Ok(v) => v,
+        Err(e) => return Response::err(500, "Internal Server Error", &e.to_string()),
+    };
+    let detected = unterm_services::system_proxy::detect().map(|found| {
+        json!({
+            "source": found.source,
+            "http": found.primary_http(),
+            "socks": found.socks,
+        })
+    });
+    let applied: serde_json::Map<String, Value> = unterm_services::launch_env::read_unterm_proxy_env()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(k, _)| k.chars().all(|c| !c.is_ascii_lowercase()))
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    if let Some(obj) = status.as_object_mut() {
+        obj.insert("detected".into(), detected.unwrap_or(Value::Null));
+        obj.insert("applied".into(), Value::Object(applied));
+    }
+    Response::ok_json(status)
 }
 
 fn api_proxy(handler: &McpHandler, body: &[u8]) -> Response {

@@ -78,6 +78,9 @@ fn main() -> Result<()> {
     // this process's environment -- a Core started by the CLI or headless
     // inherits nothing from any window that would otherwise have set them.
     unterm_services::process_env::apply(&config);
+    // The proxy setting is the whole app's: everything started from here
+    // (terminals, agents, plugins, git) inherits it from this process.
+    unterm_services::launch_env::sync_proxy_to_process_env();
     unterm_engine::next_core::NextCoreEngine::set_new_session_scrollback_lines(
         unterm_services::settings::scrollback_lines(&config),
     );
