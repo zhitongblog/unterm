@@ -3,6 +3,14 @@ use unterm_core::lifetime::{self, CoreMode};
 use unterm_core::{clear_discovery, try_acquire_instance_lock, write_discovery, CoreServer};
 
 fn main() -> Result<()> {
+    // A copy of this program reaches other consoles for it (Ctrl+C in a
+    // terminal), so the Core never gives up its own hidden console.
+    if let Some(code) = unterm_services::interrupt::run_console_helper() {
+        std::process::exit(code);
+    }
+    if let Ok(program) = std::env::current_exe() {
+        unterm_services::interrupt::use_console_helper(program);
+    }
     let args = CoreArgs::parse(std::env::args_os().skip(1))?;
     if args.version {
         println!("unterm-core {}", unterm_protocol::PRODUCT_VERSION);
