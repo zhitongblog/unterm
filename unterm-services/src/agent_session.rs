@@ -1749,12 +1749,8 @@ mod tests {
 
     use super::*;
 
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
-        dir
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     fn a_codex_like_agent(script: &str) -> Vec<String> {

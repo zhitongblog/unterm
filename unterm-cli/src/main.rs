@@ -28,6 +28,7 @@ mod profile;
 mod proxy;
 mod quit;
 mod remote;
+mod remote_core;
 mod update;
 mod reference;
 mod review;
@@ -56,6 +57,7 @@ use profile::ProfileCommand;
 use proxy::ProxyCommand;
 use quit::QuitCommand;
 use remote::RemoteCommand;
+use remote_core::RemoteCoreCommand;
 use update::UpdateCommand;
 use reference::ReferenceCommand;
 use review::ReviewCommand;
@@ -307,6 +309,12 @@ enum SubCommand {
     Remote(RemoteCommand),
 
     #[command(
+        name = "remote-core",
+        about = "Attach to a remote `unterm-core --headless` over an SSH port-forwarding tunnel"
+    )]
+    RemoteCore(RemoteCoreCommand),
+
+    #[command(
         name = "setup-ai",
         about = "Register Unterm with every AI coding agent on this machine \
                  (Claude Code / Codex / Gemini / Cursor / Windsurf / OpenCode) \
@@ -443,6 +451,7 @@ fn main() -> Result<()> {
         SubCommand::Reference(cmd) => run_reference(cmd, opts.json),
         SubCommand::Server(cmd) => run_server(cmd, opts.json),
         SubCommand::Remote(cmd) => remote::run(cmd, opts.json),
+        SubCommand::RemoteCore(cmd) => remote_core::run(cmd, opts.json),
         SubCommand::SetupAi(cmd) => run_setup_ai(cmd, opts.json),
         SubCommand::McpStdio(cmd) => run_mcp_stdio(cmd),
         SubCommand::McpTrim(cmd) => mcp_trim::run(cmd),

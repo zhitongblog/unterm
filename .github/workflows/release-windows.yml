@@ -180,3 +180,15 @@ jobs:
             Unterm-windows-*.zip
             dist\Unterm-*.msi
           fail_on_unmatched_files: true
+      - name: Trigger Cloudflare Pages deploy hook
+        if: ${{ matrix.arch == 'x64' && inputs.draft != 'true' }}
+        shell: pwsh
+        env:
+          CF_PAGES_DEPLOY_HOOK: ${{ secrets.CF_PAGES_DEPLOY_HOOK }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:CF_PAGES_DEPLOY_HOOK)) {
+            Invoke-RestMethod -Method Post -Uri $env:CF_PAGES_DEPLOY_HOOK | Out-Null
+            Write-Host "Triggered Cloudflare Pages rebuild for ${{ steps.tag.outputs.name }}"
+          } else {
+            Write-Host "CF_PAGES_DEPLOY_HOOK secret not configured; skipping website rebuild."
+          }

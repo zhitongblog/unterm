@@ -152,7 +152,13 @@ fn apply(
     // losing an "agent needs you" is the worst failure mode, and a false
     // positive clears on the user's first keystroke anyway.
     let attention_override = new_state == AgentState::WaitingForUser && layer <= Layer::Osc;
-    if layer > entry.layer && entry.signal_at.elapsed() < SIGNAL_HOLD && !attention_override {
+    let heuristic_refines_process =
+        layer == Layer::Heuristic && entry.layer == Layer::Process;
+    if layer > entry.layer
+        && entry.signal_at.elapsed() < SIGNAL_HOLD
+        && !attention_override
+        && !heuristic_refines_process
+    {
         return;
     }
     // WaitingForUser is sticky against anything below OSC.
@@ -204,16 +210,20 @@ pub fn breath_epoch() -> &'static Instant {
 }
 
 /// Layer-4 screen-text heuristics — the fallback for agents that emit no
-/// OSC signals (Aider's line-based REPL, mainly). Only consulted for
-/// entries whose current verdict came from the process layer or below;
-/// any OSC/hook activity outranks this. `tail` is the last few viewport
-/// lines, newest last.
+/// OSC signals (Aider's line-based REPL, mainly) and for process-detected
+/// agents (`Layer::Process`) that do not set dynamic OSC titles (e.g. `agy` /
+/// `antigravity`). Only consulted for entries whose current verdict came from
+/// the process layer or below; any OSC/hook activity outranks this. `tail` is
+/// the last few viewport lines, newest last.
 pub fn on_screen_tail(pane_id: u64, tail: &[String]) {
     {
         let reg = registry().lock();
         match reg.get(&pane_id) {
-            // A recent stronger signal owns the state — don't guess.
-            Some(e) if e.layer < Layer::Heuristic && e.signal_at.elapsed() < SIGNAL_HOLD => return,
+            // A recent stronger signal (Hook or OSC) owns the state — don't
+            // guess. Process-layer initial `Working` (`Layer::Process`) is a
+            // launch guess awaiting screen/OSC confirmation, so screen-text
+            // prompts (`>`, `❯`, `PS ...>`) may refine it immediately.
+            Some(e) if e.layer < Layer::Process && e.signal_at.elapsed() < SIGNAL_HOLD => return,
             Some(_) => {}
             None => return,
         }
@@ -230,13 +240,41 @@ pub fn on_screen_tail(pane_id: u64, tail: &[String]) {
         Some(AgentState::WaitingForUser)
     } else if joined.contains("esc to interrupt") {
         Some(AgentState::Working)
-    } else if last_line.ends_with('>') || last_line.ends_with('❯') || last_line.ends_with('›') {
+    } else if last_line.ends_with('>')
+        || last_line.ends_with('❯')
+        || last_line.ends_with('›')
+        || last_line.ends_with('$')
+        || last_line.ends_with('%')
+        || tail.iter().rev().take(6).any(|l| {
+            let trimmed = l.trim();
+            trimmed == ">" || trimmed == "❯" || trimmed == "›"
+        })
+    {
         Some(AgentState::Idle)
     } else {
         None
     };
     if let Some(state) = state {
         apply(pane_id, None, state, Layer::Heuristic, "screen-text", None);
+    }
+}
+
+/// Decay an unconfirmed process-layer `Working` guess to `Idle` when a pane
+/// has produced no screen changes for at least `SIGNAL_HOLD`.
+pub fn on_pane_unchanged(pane_id: u64) {
+    let mut reg = registry().lock();
+    if let Some(entry) = reg.get_mut(&pane_id) {
+        if entry.layer >= Layer::Process
+            && entry.status.state == AgentState::Working
+            && entry.signal_at.elapsed() >= SIGNAL_HOLD
+        {
+            let now = Instant::now();
+            entry.status.state = AgentState::Idle;
+            entry.status.since = now;
+            entry.status.last_signal = "idle-decay";
+            entry.layer = Layer::Heuristic;
+            entry.signal_at = now;
+        }
     }
 }
 
@@ -593,5 +631,26 @@ mod tests {
         on_notification(6, None, "approval-requested");
         // pane 5 fresh-launch Working, pane 6 waiting.
         assert_eq!(summary(), (1, 1));
+    }
+
+    #[test]
+    fn screen_tail_prompt_refines_process_layer_working_to_idle() {
+        let _g = test_guard();
+        // Process poll discovers antigravity → starts at Working (Layer::Process).
+        poll(&[7], |_| Some("antigravity".to_string()));
+        assert_eq!(state_of(7), Some(AgentState::Working));
+
+        // Screen tail shows an idle prompt with a status footer line below it
+        // (like Antigravity TUI: `───`, `>`, `───`, `? for shortcuts ...`).
+        on_screen_tail(
+            7,
+            &[
+                "───────────────".to_string(),
+                ">".to_string(),
+                "───────────────".to_string(),
+                "? for shortcuts   auto · Gemini 4 Argon · medium".to_string(),
+            ],
+        );
+        assert_eq!(state_of(7), Some(AgentState::Idle));
     }
 }

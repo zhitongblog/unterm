@@ -1814,6 +1814,12 @@ impl CoreClient {
             )
         })?;
         stream.set_nodelay(true).context("set core nodelay")?;
+        // Bound synchronous request/response calls so a busy or wedged Core
+        // can never freeze the GUI thread or a CLI caller indefinitely.
+        // Event and host-channel streams explicitly clear their read timeout
+        // after connecting.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
         Ok(Self {
             stream,
             token: token.into(),
@@ -3579,12 +3585,55 @@ pub fn ensure_running_reporting_arrival() -> Result<(DiscoveryInfo, CoreArrival)
 mod tests {
     use super::*;
 
-    fn start_server(token: &str) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+    struct TestServerWorker {
+        handle: Option<std::thread::JoinHandle<()>>,
+        release: Option<std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>>,
+    }
+
+    impl TestServerWorker {
+        fn join(mut self) -> std::thread::Result<()> {
+            self.handle.take().map(|h| h.join()).unwrap_or(Ok(()))
+        }
+    }
+
+    impl Drop for TestServerWorker {
+        fn drop(&mut self) {
+            if let Some(state) = self.release.take() {
+                let (lock, cvar) = &*state;
+                let mut busy = lock.lock().unwrap_or_else(|e| e.into_inner());
+                *busy = false;
+                cvar.notify_one();
+            }
+        }
+    }
+
+    fn start_server(token: &str) -> (std::net::SocketAddr, TestServerWorker) {
+        static SERVER_GATE: OnceLock<std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>> =
+            OnceLock::new();
+        let gate = SERVER_GATE
+            .get_or_init(|| {
+                std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()))
+            })
+            .clone();
+        {
+            let (lock, cvar) = &*gate;
+            let mut busy = lock.lock().unwrap_or_else(|e| e.into_inner());
+            while *busy {
+                busy = cvar.wait(busy).unwrap_or_else(|e| e.into_inner());
+            }
+            *busy = true;
+        }
         let server = CoreServer::bind(("127.0.0.1", 0), token).unwrap();
         let endpoint = server.endpoint().unwrap();
         let worker = std::thread::spawn(move || server.run().unwrap());
         std::thread::sleep(Duration::from_millis(20));
-        (endpoint, worker)
+        (
+            endpoint,
+            TestServerWorker {
+                handle: Some(worker),
+                release: Some(gate),
+            },
+        )
     }
 
     /// Answers a fixed set of methods, and records what it was asked.

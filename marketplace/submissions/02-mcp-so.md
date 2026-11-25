@@ -8,7 +8,7 @@ mcp.so is a directory site; submission is a form at <https://mcp.so/submit>
 | Field | Value |
 | --- | --- |
 | **Name** | `Unterm` |
-| **Tagline** | `The terminal AI agents can drive — 67 MCP methods.` |
+| **Tagline** | `The terminal AI agents can drive — 155 MCP methods & multi-agent cockpit.` |
 | **Repository** | `https://github.com/zhitongblog/unterm` |
 | **Homepage** | `https://unterm.app` |
 | **Logo URL** | `https://unterm.app/assets/icon-256.png` |
@@ -18,15 +18,16 @@ mcp.so is a directory site; submission is a form at <https://mcp.so/submit>
 
 ## Long description (paste verbatim)
 
-> **Unterm** is a cross-platform terminal (macOS / Linux / Windows) that
-> exposes itself as a Model Context Protocol server. Any MCP-speaking
-> client — Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI,
-> OpenCode — gets **67 methods across 11 namespaces** to drive your
-> terminal: spawn shells, split panes, type into them character-by-character,
-> read pane scrollback as a single string, take screenshots, manage
-> multi-instance sessions (NATO-named: alpha / bravo / charlie ...), and
-> launch other AI coding agents (Claude Code, Codex, Gemini, OpenCode,
-> Aider) one-click each — each pre-wired back to this terminal's MCP.
+> **Unterm** is a cross-platform pure-Rust GPU terminal (macOS / Linux / Windows)
+> that exposes itself as a Model Context Protocol server and multi-agent cockpit.
+> Any MCP-speaking client — Claude Desktop, Claude Code, Cursor, Windsurf,
+> Antigravity (`agy`), Codex CLI, Gemini CLI, OpenCode — gets **155 methods
+> across 16 namespaces** to drive your terminal: spawn shells, split panes,
+> run commands with structured JSON exit codes, delegate sub-tasks across
+> different CLI agents (`agent_session.delegate`), create zero-pollution Git
+> checkpoints (`refs/unterm/checkpoints`), read pane scrollback as text,
+> render headless full-scrollback PNG screenshots, and approve pending agent
+> actions from your phone over LAN/Tailscale (`Unterm Pocket`).
 >
 > **Local-first**: every server binds `127.0.0.1` only, is bearer-token
 > gated, and every `session.input` / `exec.send` is logged with the

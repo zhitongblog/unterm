@@ -70,7 +70,12 @@
     # decoders -- called by name so EXR, TIFF and the rest stay out -- are
     # what the probe binary grew by. Measured 14962 core / 11.9 MB probe;
     # recalibrated to measured plus the usual headroom.
-    [int]$MaxCoreSourceLines = 15080,
+    # 15080 -> 18100 (2026-11-24): main-screen reflow on resize, xterm grid &
+    # ECMA-48 alignment (DECLRMM, DECFRA/DECERA/DECSERA, LNM, DECST8C,
+    # XTSAVE/XTRESTORE), OSC 133 command-block tracking, and non-blocking
+    # activity/snapshot paths across v0.71.22-v0.71.32. Measured 17934 core;
+    # recalibrated to measured plus the usual headroom.
+    [int]$MaxCoreSourceLines = 18100,
     [int]$MaxProbeSourceLines = 2800,
     [int]$MaxDirectDependencies = 10,
     # A debug binary carries its debug info, so this tracks the toolchain and

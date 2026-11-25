@@ -83,6 +83,7 @@
   "cockpit.state_idle": "idle",
   "cockpit.state_waiting": "needs you",
   "cockpit.state_working": "working",
+  "command.clear_input": "Clear input box",
   "command.capture_region": "Capture region",
   "command.capture_region.hint": "OS screenshot picker, window visible",
   "command.close_tab": "Close tab",

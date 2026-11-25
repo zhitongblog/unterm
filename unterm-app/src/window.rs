@@ -6322,6 +6322,7 @@ impl App {
             }
             Action::ClearScrollback => self.clear_scrollback(session_id, false),
             Action::ClearScreen => self.clear_scrollback(session_id, true),
+            Action::ClearInput => self.clear_input_box(session_id),
             Action::SelectPane => self.open_pane_select(crate::paneselect::Mode::Activate),
             Action::SwapPane => self.open_pane_select(crate::paneselect::Mode::Swap),
             Action::FocusPane(direction) => self.focus_pane_toward(direction),
@@ -7017,6 +7018,7 @@ impl App {
                 if session.id == active_pane {
                     notice.unread = false;
                 }
+                unterm_services::cockpit::status::on_pane_unchanged(session.id as u64);
                 continue;
             }
             let tail = pulse.tail.clone();
@@ -7122,6 +7124,29 @@ impl App {
         unterm_services::cockpit::status::poll(&pane_ids, |pane_id| {
             crate::statsbar::known_facts(pane_id as usize).agent_id
         });
+        for session in &sessions {
+            if let Some(status) =
+                unterm_services::cockpit::status::status_for_pane(session.id as u64)
+            {
+                if status.last_signal == "process"
+                    && status.state == unterm_services::cockpit::status::AgentState::Working
+                {
+                    if let Ok(pulse) =
+                        self.engine
+                            .read_pane_pulse(session.id, None, COCKPIT_TAIL_ROWS)
+                    {
+                        unterm_services::cockpit::status::on_screen_tail(
+                            session.id as u64,
+                            &pulse.tail,
+                        );
+                    }
+                    unterm_services::cockpit::status::on_title_change(
+                        session.id as u64,
+                        &session.title,
+                    );
+                }
+            }
+        }
         let live: std::collections::HashSet<u64> = pane_ids.iter().copied().collect();
         unterm_services::cockpit::status::retain_panes(&live);
 
@@ -7508,8 +7533,14 @@ impl App {
             WinitKey::Named(NamedKey::Enter) if shift => composer.typing.push('\n'),
             WinitKey::Named(NamedKey::Enter) if ctrl => send = composer.take_selected(),
             WinitKey::Named(NamedKey::Enter) => composer.commit(),
+            WinitKey::Named(NamedKey::Backspace) if ctrl => {
+                composer.typing.clear();
+            }
             WinitKey::Named(NamedKey::Backspace) => {
                 composer.typing.pop();
+            }
+            WinitKey::Character(text) if ctrl && text.eq_ignore_ascii_case("u") => {
+                composer.typing.clear();
             }
             WinitKey::Named(NamedKey::Delete) => {
                 composer.remove_selected();
@@ -7694,11 +7725,21 @@ impl App {
         );
         // The line being written, with a cursor after it so it is obviously
         // the one accepting keys.
-        lines.push(format!("> {}_", composer.typing.replace('\n', " ↵ ")));
+        let max_cols = ((width / metrics.width.max(1.0)) as usize).saturating_sub(6).max(8);
+        let raw_typing = composer.typing.replace('\n', " ↵ ");
+        let shown_typing = crate::statusbar::short_path(&raw_typing, max_cols)
+            .trim_end_matches('/')
+            .to_string();
+        lines.push(format!("> {shown_typing}_"));
 
         for (index, line) in lines.iter().enumerate() {
+            let fitted = if index + 1 == lines.len() {
+                line.clone()
+            } else {
+                crate::sidebar::fit(line, max_cols + 3)
+            };
             crate::terminal::append_text(
-                line,
+                &fitted,
                 &mut self.window.font,
                 &mut self.window.atlas,
                 foreground,
@@ -7706,6 +7747,65 @@ impl App {
                 quads,
             );
         }
+        if !composer.typing.is_empty() {
+            let clear_top = top + metrics.height * (rows - 1) as f32;
+            let clear_left = left + width - metrics.width * 3.0;
+            let clear_w = metrics.width * 2.2;
+            let hovered = self.window.pointer.1 >= clear_top
+                && self.window.pointer.1 < clear_top + metrics.height
+                && self.window.pointer.0 >= left + width - metrics.width * 3.5
+                && self.window.pointer.0 < left + width;
+            let chrome = self.chrome();
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                clear_left,
+                clear_top + 2.0,
+                clear_w,
+                (metrics.height - 4.0).max(1.0),
+                self.corner_radius() * 0.6,
+                if hovered { chrome.hover_bg } else { chrome.surface },
+            ));
+            let ink = if hovered { foreground } else { chrome.dim_text };
+            crate::terminal::append_text(
+                "×",
+                &mut self.window.font,
+                &mut self.window.atlas,
+                ink,
+                (left + width - metrics.width * 2.4, clear_top),
+                quads,
+            );
+        }
+    }
+
+    fn click_composer(&mut self) -> bool {
+        let Some(composer) = self.window.composer.as_mut() else {
+            return false;
+        };
+        if composer.typing.is_empty() {
+            return false;
+        }
+        let Some(live) = self.window.state.as_ref() else {
+            return false;
+        };
+        let window_width = live.width as f32;
+        let metrics = self.window.font.metrics();
+        let width = (window_width * 0.6)
+            .max(metrics.width * 30.0)
+            .min(window_width);
+        let left = ((window_width - width) / 2.0).max(0.0);
+        let shown = composer.queued().len().min(MAX_COMPOSER_ROWS);
+        let rows = shown + 2;
+        let top = metrics.height * 2.0;
+        let clear_top = top + metrics.height * (rows - 1) as f32;
+        if self.window.pointer.1 >= clear_top
+            && self.window.pointer.1 < clear_top + metrics.height
+            && self.window.pointer.0 >= left + width - metrics.width * 3.5
+            && self.window.pointer.0 < left + width
+        {
+            composer.typing.clear();
+            self.window.drawn_revision = None;
+            return true;
+        }
+        false
     }
 
     fn append_suggestion(
@@ -7762,6 +7862,58 @@ impl App {
         }
     }
 
+    /// Clear whichever input box is active (Command Palette, Search Bar,
+    /// Prompt Queue Composer, or the focused terminal/Agent input prompt).
+    fn clear_input_box(&mut self, session_id: usize) {
+        if let Some(mut palette) = self.window.palette.take() {
+            if palette.view == crate::palette::View::Search {
+                palette.query.clear();
+                self.requery_palette(&mut palette);
+            }
+            self.window.palette = Some(palette);
+            self.window.drawn_revision = None;
+            return;
+        }
+        if let Some(mut search) = self.window.search.take() {
+            search.pattern.clear();
+            let matches = self.run_search(session_id, &search.pattern, search.mode);
+            search.adopt(matches);
+            self.window.search = Some(search);
+            self.window.drawn_revision = None;
+            return;
+        }
+        if let Some(composer) = self.window.composer.as_mut() {
+            composer.typing.clear();
+            self.window.drawn_revision = None;
+            return;
+        }
+        unterm_services::ghost_text::cancel_input(session_id as u64);
+        self.window.preedit = crate::ime::Preedit::default();
+        let facts = crate::statsbar::known_facts(session_id);
+        let shell_type = unterm_engine::SessionEngine::shell(&self.engine, session_id)
+            .ok()
+            .map(|s| s.shell_type)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let is_plain_win_shell = facts.agent_id.is_none()
+            && (shell_type.contains("powershell")
+                || shell_type.contains("pwsh")
+                || shell_type == "cmd");
+        let seq = if is_plain_win_shell {
+            "\x1b"
+        } else {
+            "\x15\x0b"
+        };
+        let _ = self.engine.write_input(session_id, seq);
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        self.show_notice(if is_zh {
+            "\u{2713} 已清除输入框内容".to_string()
+        } else {
+            "\u{2713} Input box cleared".to_string()
+        });
+        self.window.drawn_revision = None;
+    }
+
     fn toggle_git_panel(&mut self) {
         self.window.git_panel = match self.window.git_panel {
             Some(_) => None,
@@ -7771,7 +7923,7 @@ impl App {
                     .or_else(dirs_next::home_dir)
                     .unwrap_or_else(|| std::path::PathBuf::from("."));
                 Some(GitDock {
-                    panel: crate::git::read(&cwd),
+                    panel: crate::git::read_nonblocking(&cwd),
                     cwd,
                 })
             }
@@ -7806,10 +7958,8 @@ impl App {
             return;
         };
         if let Some(dock) = self.window.git_panel.as_mut() {
-            if dock.cwd != cwd {
-                dock.cwd = cwd.clone();
-                dock.panel = crate::git::read(&cwd);
-            }
+            dock.cwd = cwd.clone();
+            dock.panel = crate::git::read_nonblocking(&cwd);
         }
         let Some(status) = self.window.git_panel.as_ref().map(|dock| dock.panel.clone()) else {
             return;
@@ -7843,14 +7993,17 @@ impl App {
             height,
             color: chrome.outer_edge,
         });
+        let max_cols = ((width / metrics.width.max(1.0)) as usize).saturating_sub(2).max(8);
+        let fitted_heading = crate::sidebar::fit(&heading, max_cols);
         crate::terminal::append_text(
-            &heading,
+            &fitted_heading,
             &mut self.window.font,
             &mut self.window.atlas,
             foreground,
             (left + metrics.width, top),
             quads,
         );
+        let path_cols = max_cols.saturating_sub(4).max(6);
         for (index, entry) in entries.iter().take(MAX_GIT_ROWS).enumerate() {
             let row_top = top + metrics.height * (index + 1) as f32;
             let hovered = pointer.0 >= left
@@ -7881,8 +8034,9 @@ impl App {
                 (left + metrics.width, row_top),
                 quads,
             );
+            let fitted_path = crate::sidebar::fit(&entry.path, path_cols);
             crate::terminal::append_text(
-                &entry.path,
+                &fitted_path,
                 &mut self.window.font,
                 &mut self.window.atlas,
                 if hovered { foreground } else { chrome.dim_text },
@@ -8107,15 +8261,229 @@ impl App {
             footer_base = preview_top + preview_height + metrics.height * 0.15;
         }
         let footer_top = footer_base + text_nudge;
-        let fitted_footer = crate::sidebar::fit(&footer, columns.max(20));
-        crate::terminal::append_text(
-            &fitted_footer,
-            &mut self.window.font,
-            &mut self.window.atlas,
-            quiet,
-            (left + pad, footer_top),
-            quads,
-        );
+        let chips = self.inbox_action_chips(left, width, footer_top);
+        let chrome = self.chrome();
+        let ptr = self.window.pointer;
+        for (ch, label, c_left, c_top, c_w, c_h) in chips {
+            let hovered = ptr.0 >= c_left
+                && ptr.0 < c_left + c_w
+                && ptr.1 >= c_top
+                && ptr.1 < c_top + c_h;
+            let fill = if hovered {
+                chrome.hover_bg
+            } else {
+                mix(self.window.colors.background, foreground, 0.12)
+            };
+            let ink = match ch {
+                'y' => chrome.status_ok,
+                'n' => chrome.status_err,
+                _ if hovered => foreground,
+                _ => quiet,
+            };
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                c_left,
+                c_top,
+                c_w,
+                c_h,
+                (c_h * 0.35).max(3.0),
+                fill,
+            ));
+            crate::terminal::append_text(
+                &label,
+                &mut self.window.font,
+                &mut self.window.atlas,
+                ink,
+                (c_left + metrics.width * 0.8, footer_top),
+                quads,
+            );
+        }
+    }
+
+    fn inbox_action_chips(
+        &self,
+        left: f32,
+        width: f32,
+        footer_top: f32,
+    ) -> Vec<(char, String, f32, f32, f32, f32)> {
+        let metrics = self.window.font.metrics();
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let items: &[(char, &str, &str)] = &[
+            ('y', "✓ 允许(Y)", "✓ Allow(Y)"),
+            ('n', "✕ 拒绝(N)", "✕ Reject(N)"),
+            ('r', "↺ 回滚(R)", "↺ Rollback(R)"),
+            ('h', "⇄ 接力(H)", "⇄ Handoff(H)"),
+            ('w', "Worktree(W)", "Worktree(W)"),
+            ('d', "Diff(D)", "Diff(D)"),
+            ('c', "控制台(C)", "Console(C)"),
+            ('\x1b', "Esc 关闭", "Esc Close"),
+        ];
+        let pad = metrics.width * 1.5;
+        let mut pen = left + pad;
+        let max_right = left + width - pad;
+        let chip_h = (metrics.height * 1.24).round();
+        let chip_top = (footer_top - (chip_h - metrics.height) * 0.5).round();
+        let gap = (metrics.width * 0.8).round().max(4.0);
+        let mut out = Vec::new();
+        for &(ch, zh, en) in items {
+            let label = if is_zh { zh } else { en };
+            let cols = crate::sidebar::columns(label) as f32;
+            let chip_w = ((cols + 1.6) * metrics.width).round();
+            if pen + chip_w > max_right && !out.is_empty() {
+                break;
+            }
+            out.push((ch, label.to_string(), pen, chip_top, chip_w, chip_h));
+            pen += chip_w + gap;
+        }
+        out
+    }
+
+    fn hover_inbox(&mut self) -> bool {
+        if !self.window.inbox_open {
+            return false;
+        }
+        let rows = self.inbox_rows();
+        let shown = rows.len().min(MAX_INBOX_ROWS);
+        if shown == 0 {
+            return true;
+        }
+        let metrics = self.window.font.metrics();
+        let row_height = (metrics.height * 1.5).round();
+        let top = self.terminal_top() + metrics.height;
+        let first = top + row_height + metrics.height * 0.25;
+        let rel_y = self.window.pointer.1 - first;
+        if rel_y >= 0.0 {
+            let idx = (rel_y / row_height.max(1.0)) as usize;
+            if idx < shown && self.window.inbox_selected != idx {
+                self.window.inbox_selected = idx;
+            }
+        }
+        self.window.drawn_revision = None;
+        if let Some(live) = self.window.state.as_ref() {
+            live.window.request_redraw();
+        }
+        true
+    }
+
+    fn click_inbox(&mut self) -> bool {
+        if !self.window.inbox_open {
+            return false;
+        }
+        let rows = self.inbox_rows();
+        let shown = rows.len().min(MAX_INBOX_ROWS);
+        let metrics = self.window.font.metrics();
+        let row_height = (metrics.height * 1.5).round();
+        let top = self.terminal_top() + metrics.height;
+        let first = top + row_height + metrics.height * 0.25;
+        let rows_bottom = first + row_height * shown as f32;
+        if shown > 0 && self.window.pointer.1 >= first && self.window.pointer.1 < rows_bottom {
+            let idx = ((self.window.pointer.1 - first) / row_height.max(1.0)) as usize;
+            if let Some(selected) = rows.get(idx).cloned() {
+                self.window.inbox_selected = idx;
+                self.window.inbox_open = false;
+                let pane_id = selected.pane_id as usize;
+                let current_instance =
+                    unterm_services::server_info::current_instance_id().unwrap_or_default();
+                if selected.instance_id.is_empty() || selected.instance_id == current_instance {
+                    if self.window.tabs.tab_of_pane(pane_id).is_some() {
+                        self.focus_session(pane_id);
+                    }
+                }
+                self.window.drawn_revision = None;
+                return true;
+            }
+        }
+        // Check if an action chip in the footer was clicked.
+        let here = unterm_services::server_info::current_instance_id().unwrap_or_default();
+        let selected_tail_len = rows
+            .get(self.window.inbox_selected)
+            .filter(|row| row.instance_id.is_empty() || row.instance_id == here)
+            .and_then(|row| self.engine.read_styled_screen(row.pane_id as usize).ok())
+            .map(|snapshot| {
+                snapshot
+                    .lines
+                    .iter()
+                    .rev()
+                    .filter(|line| {
+                        line.cells
+                            .iter()
+                            .any(|cell| cell.width > 0 && !cell.ch.is_whitespace() && cell.ch != '\0')
+                    })
+                    .take(3)
+                    .count()
+            })
+            .unwrap_or(0);
+        let mut footer_base = first + row_height * shown.max(1) as f32;
+        if selected_tail_len > 0 {
+            let preview_top = footer_base + metrics.height * 0.25;
+            let preview_line_h = (metrics.height * 1.15).round();
+            let preview_height =
+                preview_line_h * selected_tail_len as f32 + metrics.height * 0.4;
+            footer_base = preview_top + preview_height + metrics.height * 0.15;
+        }
+        let text_nudge = (row_height - metrics.height) / 2.0;
+        let footer_top = footer_base + text_nudge;
+        let area_left = self.terminal_left();
+        let window_width = self.window_width();
+        let area = self.terminal_width().min(window_width).max(1.0);
+        let card_width = (area - metrics.width * 2.0).max(metrics.width * 20.0);
+        let card_left = (area_left + (area - card_width) / 2.0).max(0.0);
+        let ptr = self.window.pointer;
+        for (ch, _, c_left, c_top, c_w, c_h) in
+            self.inbox_action_chips(card_left, card_width, footer_top)
+        {
+            if ptr.0 >= c_left && ptr.0 < c_left + c_w && ptr.1 >= c_top && ptr.1 < c_top + c_h {
+                match ch {
+                    'y' | 'n' if shown > 0 => {
+                        let approve = ch == 'y';
+                        let selected = rows[self.window.inbox_selected.min(shown - 1)].clone();
+                        let pane_id = selected.pane_id as usize;
+                        if selected.instance_id.is_empty() || selected.instance_id == here {
+                            let payload = if approve { "y\r" } else { "n\r" };
+                            let verb = if approve { "Approved" } else { "Rejected" };
+                            crate::engine_backend::mcp_state::audit_gui_write(
+                                if approve {
+                                    "inbox.quick_approve"
+                                } else {
+                                    "inbox.quick_reject"
+                                },
+                                pane_id as u64,
+                                verb,
+                            );
+                            let _ = self.engine.write_input(pane_id, payload);
+                            self.show_notice(format!("\u{2713} {verb} \u{00b7} pane {pane_id}"));
+                        }
+                    }
+                    'r' => {
+                        self.window.inbox_open = false;
+                        self.open_checkpoints();
+                    }
+                    'h' => {
+                        self.window.inbox_open = false;
+                        self.open_agent_handoff();
+                    }
+                    'w' => {
+                        self.window.inbox_open = false;
+                        self.open_worktree_studio();
+                    }
+                    'd' => {
+                        self.window.inbox_open = false;
+                        self.open_git_diff_review();
+                    }
+                    'c' => {
+                        self.window.inbox_open = false;
+                        self.open_console();
+                    }
+                    _ => {
+                        self.window.inbox_open = false;
+                    }
+                }
+                self.window.drawn_revision = None;
+                return true;
+            }
+        }
+        self.window.inbox_open = false;
+        self.window.drawn_revision = None;
+        true
     }
 
     /// Start quick select, if there is anything worth labelling.
@@ -12070,6 +12438,373 @@ impl App {
         });
     }
 
+    fn send_search_match_to_agent(&mut self, search: &crate::search::Search) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let source_pane = self.focused_session();
+        let Ok(snapshot) = self.engine.read_scrollback_text(
+            source_pane,
+            unterm_engine::ScrollbackTextRequest {
+                start_line: None,
+                end_line: None,
+                tail_lines: None,
+                escapes: false,
+            },
+        ) else {
+            return;
+        };
+        let Some(prompt) = search.agent_context_prompt(&snapshot.lines, snapshot.first_row, is_zh) else {
+            self.show_notice(if is_zh {
+                "当前没有可投喂的搜索命中".to_string()
+            } else {
+                "No active search match to send to AI Agent".to_string()
+            });
+            return;
+        };
+        let statuses = unterm_services::cockpit::status::snapshot();
+        let target_pane = statuses
+            .iter()
+            .find(|s| s.pane_id as usize != source_pane)
+            .or_else(|| statuses.first())
+            .map(|s| s.pane_id as usize)
+            .unwrap_or(source_pane);
+        let _ = self.engine.write_input(target_pane, &prompt);
+        self.show_notice(if is_zh {
+            format!("\u{2726} 已将搜索命中上下文投喂至窗格 #{target_pane}")
+        } else {
+            format!("\u{2726} Sent search match context to pane #{target_pane}")
+        });
+    }
+
+    fn jump_to_last_failed_command(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane_id = self.focused_session();
+        let Ok(snapshot) = self.engine.read_scrollback_text(
+            pane_id,
+            unterm_engine::ScrollbackTextRequest {
+                start_line: None,
+                end_line: None,
+                tail_lines: Some(600),
+                escapes: false,
+            },
+        ) else {
+            return;
+        };
+        let Some(block) = crate::command_block::find_last_failed_block(&snapshot.lines) else {
+            self.show_notice(if is_zh {
+                "最近 600 行内未检测到失败的命令块".to_string()
+            } else {
+                "No failed command block found in recent scrollback".to_string()
+            });
+            return;
+        };
+        let target_row = snapshot.first_row as isize + block.line_index as isize;
+        let _ = self.engine.scroll_viewport_to(pane_id, target_row);
+        self.window.drawn_revision = None;
+        self.show_notice(if is_zh {
+            format!("✗ 已定位至失败命令: {}", block.command)
+        } else {
+            format!("✗ Jumped to failed command: {}", block.command)
+        });
+    }
+
+    fn open_command_blocks_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let pane_id = self.focused_session();
+        let Ok(snapshot) = self.engine.read_scrollback_text(
+            pane_id,
+            unterm_engine::ScrollbackTextRequest {
+                start_line: None,
+                end_line: None,
+                tail_lines: Some(800),
+                escapes: false,
+            },
+        ) else {
+            return;
+        };
+        let blocks = crate::command_block::extract_command_blocks(&snapshot.lines, 24);
+        let mut entries = Vec::new();
+        if blocks.is_empty() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "当前窗格暂无可识别的命令块".to_string()
+                } else {
+                    "No command blocks detected in this pane yet".to_string()
+                },
+                hint: "OSC 133".to_string(),
+                command: crate::palette::Command::Nothing,
+            });
+        } else {
+            for block in blocks {
+                let icon = if block.looks_failed { "✗" } else { "✓" };
+                let row = snapshot.first_row as isize + block.line_index as isize;
+                let hint = if block.preview.is_empty() {
+                    format!("{} lines", block.output_line_count)
+                } else {
+                    format!("{} lines · {}", block.output_line_count, block.preview)
+                };
+                entries.push(crate::palette::Entry {
+                    label: format!("{icon} {}", block.command),
+                    hint,
+                    command: crate::palette::Command::ScrollToRow { pane_id, row },
+                });
+            }
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn open_remote_cores_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let dir = unterm_protocol::state_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from(".").join(".unterm"))
+            .join("remote-cores");
+        let mut entries = Vec::new();
+        if let Ok(read_dir) = std::fs::read_dir(&dir) {
+            for entry in read_dir.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(raw) = std::fs::read_to_string(entry.path()) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        let name = val["name"].as_str().unwrap_or("remote");
+                        let target = val["ssh_target"].as_str().unwrap_or("");
+                        let local_port = val["local_port"].as_u64().unwrap_or(0);
+                        let pid = val["tunnel_pid"].as_u64().unwrap_or(0);
+                        entries.push(crate::palette::Entry {
+                            label: format!("🌐 {name} ({target})"),
+                            hint: format!("127.0.0.1:{local_port} · ssh pid {pid}"),
+                            command: crate::palette::Command::Nothing,
+                        });
+                    }
+                }
+            }
+        }
+        if entries.is_empty() {
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    "暂无活跃的 Remote Core SSH 隧道".to_string()
+                } else {
+                    "No active Remote Core SSH tunnels".to_string()
+                },
+                hint: "unterm-cli remote-core attach user@host".to_string(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn open_fleet_arena_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let mut entries = Vec::new();
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "⚔️ 启动双智能体竞速：Claude + Codex（各自独立 Worktree）".to_string()
+            } else {
+                "⚔️ Launch 2-Agent Arena: Claude + Codex (Isolated Worktrees)".to_string()
+            },
+            hint: "Fleet Arena".to_string(),
+            command: crate::palette::Command::LaunchFleetArena {
+                agents: vec!["claude".to_string(), "codex".to_string()],
+            },
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "⚔️ 启动双智能体竞速：Claude + Agy（各自独立 Worktree）".to_string()
+            } else {
+                "⚔️ Launch 2-Agent Arena: Claude + Agy (Isolated Worktrees)".to_string()
+            },
+            hint: "Fleet Arena".to_string(),
+            command: crate::palette::Command::LaunchFleetArena {
+                agents: vec!["claude".to_string(), "agy".to_string()],
+            },
+        });
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                "⚔️ 启动三智能体竞速：Claude + Codex + Agy".to_string()
+            } else {
+                "⚔️ Launch 3-Agent Arena: Claude + Codex + Agy".to_string()
+            },
+            hint: "Fleet Arena · 3x".to_string(),
+            command: crate::palette::Command::LaunchFleetArena {
+                agents: vec!["claude".to_string(), "codex".to_string(), "agy".to_string()],
+            },
+        });
+
+        let mut runs = crate::arena::load_runs();
+        for run in &mut runs {
+            run.refresh_all_diffs();
+            for member in &run.members {
+                entries.push(crate::palette::Entry {
+                    label: if is_zh {
+                        format!(
+                            "🏆 采纳胜出方案 [{} · {}] 并 Squash Merge",
+                            run.id, member.agent
+                        )
+                    } else {
+                        format!(
+                            "🏆 Pick Winner & Squash Merge [{} · {}]",
+                            run.id, member.agent
+                        )
+                    },
+                    hint: format!("{} · {}", member.branch, member.status_badge()),
+                    command: crate::palette::Command::PickArenaWinner {
+                        run_id: run.id.clone(),
+                        branch: member.branch.clone(),
+                    },
+                });
+            }
+            entries.push(crate::palette::Entry {
+                label: if is_zh {
+                    format!("🧹 清理竞速工作树 [{}] ({} 个分支)", run.id, run.members.len())
+                } else {
+                    format!("🧹 Cleanup Arena Run [{}] ({} branches)", run.id, run.members.len())
+                },
+                hint: run.repo_root.display().to_string(),
+                command: crate::palette::Command::CleanupArenaRun {
+                    run_id: run.id.clone(),
+                },
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn launch_fleet_arena(&mut self, agents: &[String]) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let repo_dir = self
+            .current_directory()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        match crate::arena::create_arena_run(&repo_dir, "parallel arena task", agents) {
+            Ok(run) => {
+                for member in &run.members {
+                    self.split(unterm_engine::next_core::layout::SplitAxis::Horizontal);
+                    let pane_id = self.focused_session();
+                    let cd_cmd = format!(
+                        "cd '{}' && {}\r",
+                        member.worktree_path.display().to_string().replace('\'', "'\\''"),
+                        member.agent
+                    );
+                    let _ = self.engine.write_input(pane_id, &cd_cmd);
+                }
+                self.show_notice(if is_zh {
+                    format!(
+                        "⚔️ 已启动 Fleet Arena {}（{} 个隔离 Worktree 分屏）",
+                        run.id,
+                        run.members.len()
+                    )
+                } else {
+                    format!(
+                        "⚔️ Launched Fleet Arena {} ({} isolated worktree panes)",
+                        run.id,
+                        run.members.len()
+                    )
+                });
+            }
+            Err(err) => {
+                self.show_notice(if is_zh {
+                    format!("Fleet Arena 启动失败：{err}")
+                } else {
+                    format!("Fleet Arena failed: {err}")
+                });
+            }
+        }
+    }
+
+    fn pick_arena_winner(&mut self, run_id: &str, branch: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match crate::arena::pick_winner(run_id, branch) {
+            Ok(msg) => self.show_notice(if is_zh {
+                format!("🏆 已择优合入 {branch} 并清理其余 Worktree")
+            } else {
+                format!("🏆 {msg}")
+            }),
+            Err(err) => self.show_notice(format!("Arena merge failed: {err}")),
+        }
+    }
+
+    fn cleanup_arena_run(&mut self, run_id: &str) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        match crate::arena::cleanup_run(run_id) {
+            Ok(count) => self.show_notice(if is_zh {
+                format!("🧹 已清理 {run_id} 的 {count} 个 Worktree 与临时分支")
+            } else {
+                format!("🧹 Cleaned up {count} worktrees for {run_id}")
+            }),
+            Err(err) => self.show_notice(format!("Arena cleanup failed: {err}")),
+        }
+    }
+
+    fn open_telemetry_summary_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let mut summary = crate::telemetry::DailyTelemetrySummary {
+            day_index: crate::telemetry::DailyTelemetrySummary::today_index(),
+            agents: Vec::new(),
+        };
+        let statuses = unterm_services::cockpit::status::snapshot();
+        for status in &statuses {
+            let pane_id = status.pane_id as usize;
+            let lines = self
+                .engine
+                .read_scrollback_text(
+                    pane_id,
+                    unterm_engine::ScrollbackTextRequest {
+                        start_line: None,
+                        end_line: None,
+                        tail_lines: Some(60),
+                        escapes: false,
+                    },
+                )
+                .map(|s| s.lines)
+                .unwrap_or_default();
+            let sample = crate::telemetry::extract_from_lines(&lines);
+            let outcome = if self
+                .window
+                .pane_notices
+                .get(&pane_id)
+                .and_then(|n| n.last_exit_code)
+                .is_some_and(|c| c != 0)
+            {
+                Some(false)
+            } else if matches!(status.state, unterm_services::cockpit::status::AgentState::Done) {
+                Some(true)
+            } else {
+                None
+            };
+            summary.record_sample(&status.agent, &sample, outcome);
+        }
+
+        let mut entries = Vec::new();
+        entries.push(crate::palette::Entry {
+            label: if is_zh {
+                format!(
+                    "📊 今日总计：{} tokens · 估算费用 ${:.2}（{} 个 Agent）",
+                    crate::telemetry::format_tokens(summary.total_tokens()),
+                    summary.total_cost_usd(),
+                    summary.agents.len()
+                )
+            } else {
+                format!(
+                    "📊 Today Total: {} tokens · Est. ${:.2} ({} agents)",
+                    crate::telemetry::format_tokens(summary.total_tokens()),
+                    summary.total_cost_usd(),
+                    summary.agents.len()
+                )
+            },
+            hint: "Live cross-session summary".to_string(),
+            command: crate::palette::Command::Nothing,
+        });
+        for agent in &summary.agents {
+            entries.push(crate::palette::Entry {
+                label: format!("  ✦ {} ({} panes)", agent.agent, agent.sessions_seen),
+                hint: agent.summary_line(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
     fn fix_failure_with_agent(&mut self, program: &str) {
         let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
         let source_pane = self.focused_session();
@@ -12586,6 +13321,7 @@ impl App {
                 t("settings.menu.split_right"),
                 crate::keys::Action::SplitRight,
             ),
+            action(t("command.clear_input"), crate::keys::Action::ClearInput),
             diagnose_entry,
             crate::palette::Entry {
                 label: if is_zh {
@@ -13249,6 +13985,18 @@ impl App {
         let Some(card) = self.palette_card() else {
             return false;
         };
+        if card.clear_button_at(self.window.pointer.0, self.window.pointer.1) {
+            if let Some(mut palette) = self.window.palette.take() {
+                if palette.view == crate::palette::View::Search && !palette.query.is_empty() {
+                    palette.query.clear();
+                    self.requery_palette(&mut palette);
+                    self.window.palette = Some(palette);
+                    self.window.drawn_revision = None;
+                    return true;
+                }
+                self.window.palette = Some(palette);
+            }
+        }
         if let Some(delta) = self.palette_scroll_arrow_at(card) {
             if let Some(palette) = self.window.palette.as_mut() {
                 palette.scroll(delta, crate::palette::MAX_ROWS);
@@ -13375,6 +14123,10 @@ impl App {
                 } else {
                     palette.query.pop();
                 }
+                self.requery_palette(&mut palette);
+            }
+            crate::palette::Key::Clear => {
+                palette.query.clear();
                 self.requery_palette(&mut palette);
             }
             crate::palette::Key::Type(text) => {
@@ -13624,6 +14376,26 @@ impl App {
             }
             crate::palette::Command::CopyLastCommandOutput => self.copy_last_command_output(),
             crate::palette::Command::SendLastCommandToAgent => self.send_last_command_to_agent(),
+            crate::palette::Command::JumpToLastFailedCommand => self.jump_to_last_failed_command(),
+            crate::palette::Command::ListCommandBlocks => self.open_command_blocks_palette(),
+            crate::palette::Command::ScrollToRow { pane_id, row } => {
+                let _ = self.engine.scroll_viewport_to(pane_id, row);
+                self.window.drawn_revision = None;
+            }
+            crate::palette::Command::OpenRemoteCores => self.open_remote_cores_palette(),
+            crate::palette::Command::OpenFleetArena => self.open_fleet_arena_palette(),
+            crate::palette::Command::LaunchFleetArena { agents } => {
+                self.launch_fleet_arena(&agents)
+            }
+            crate::palette::Command::PickArenaWinner { run_id, branch } => {
+                self.pick_arena_winner(&run_id, &branch)
+            }
+            crate::palette::Command::CleanupArenaRun { run_id } => {
+                self.cleanup_arena_run(&run_id)
+            }
+            crate::palette::Command::OpenTelemetrySummary => {
+                self.open_telemetry_summary_palette()
+            }
             crate::palette::Command::ConfirmSafePaste { pane_id, text } => {
                 self.perform_paste_input(pane_id, &text)
             }
@@ -14168,18 +14940,22 @@ impl App {
             return false;
         }
 
-        let controls_left = left + width - 13.0 * metrics.width;
+        let controls_left = left + width - 16.0 * metrics.width;
         let cell = ((self.window.pointer.0 - controls_left) / metrics.width).floor() as isize;
         let mut keep = true;
         let mut research = false;
         match cell {
-            0..=2 => search.step(-1),
-            3..=5 => search.step(1),
-            6..=9 => {
+            0..=2 => {
+                search.pattern.clear();
+                research = true;
+            }
+            3..=5 => search.step(-1),
+            6..=8 => search.step(1),
+            9..=12 => {
                 search.cycle_mode();
                 research = true;
             }
-            10..=12 => keep = false,
+            13..=15 => keep = false,
             _ => {}
         }
         if keep {
@@ -14235,6 +15011,15 @@ impl App {
             crate::search::Key::CycleMode => {
                 search.cycle_mode();
                 research = true;
+            }
+            crate::search::Key::SendToAgent => {
+                self.send_search_match_to_agent(&search);
+                self.window.search = Some(search);
+                self.window.drawn_revision = None;
+                if let Some(live) = self.window.state.as_ref() {
+                    live.window.request_redraw();
+                }
+                return true;
             }
             crate::search::Key::Type(text) => {
                 search.pattern.push_str(&text);
@@ -14641,8 +15426,37 @@ impl App {
             }
             // The query line, with a caret so an empty palette still looks
             // like something you type into.
-            let query = format!("> {}", palette.query);
+            let max_query_cols = columns
+                .saturating_sub(if palette.query.is_empty() { 3 } else { 6 })
+                .max(6);
+            let shown_query = if crate::terminal::text_columns(&palette.query) <= max_query_cols {
+                palette.query.clone()
+            } else {
+                let mut kept = Vec::new();
+                let mut used = 1usize;
+                for ch in palette.query.chars().rev() {
+                    let w = crate::terminal::column_width(ch);
+                    if used + w > max_query_cols {
+                        break;
+                    }
+                    kept.push(ch);
+                    used += w;
+                }
+                kept.reverse();
+                format!("\u{2026}{}", kept.into_iter().collect::<String>())
+            };
+            let query = format!("> {shown_query}");
+            let query_cols = crate::terminal::text_columns(&query);
             let query_top = top + metrics.height * usize::from(palette.title.is_some()) as f32;
+            let chrome = self.chrome();
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left + metrics.width * 0.5,
+                query_top + 1.0,
+                (width - metrics.width).max(1.0),
+                (metrics.height - 2.0).max(1.0),
+                self.corner_radius() * 0.65,
+                mix(self.window.colors.background, foreground, 0.06),
+            ));
             crate::terminal::append_text(
                 &query,
                 &mut self.window.font,
@@ -14652,12 +15466,34 @@ impl App {
                 quads,
             );
             quads.backgrounds.push(unterm_render::quads::Quad {
-                left: left + metrics.width * (query.chars().count() + 1) as f32,
-                top: query_top,
+                left: left + metrics.width * (query_cols + 1) as f32,
+                top: query_top + 2.0,
                 width: (metrics.width * 0.15).max(1.0),
-                height: metrics.height,
+                height: (metrics.height - 4.0).max(1.0),
                 color: foreground,
             });
+            if !palette.query.is_empty() {
+                let clear_hovered = card.clear_button_at(self.window.pointer.0, self.window.pointer.1);
+                let pill_left = left + width - metrics.width * 2.8;
+                let pill_w = metrics.width * 2.0;
+                quads.backgrounds.extend(unterm_render::rounded::panel(
+                    pill_left,
+                    query_top + 2.0,
+                    pill_w,
+                    (metrics.height - 4.0).max(1.0),
+                    self.corner_radius() * 0.6,
+                    if clear_hovered { chrome.hover_bg } else { chrome.surface },
+                ));
+                let ink = if clear_hovered { foreground } else { chrome.dim_text };
+                crate::terminal::append_text(
+                    "×",
+                    &mut self.window.font,
+                    &mut self.window.atlas,
+                    ink,
+                    (left + width - metrics.width * 2.2, query_top),
+                    quads,
+                );
+            }
         }
 
         let hint_ink = self.chrome().dim_text;
@@ -14667,12 +15503,12 @@ impl App {
                 let pt = self.chrome_pt();
                 let row_radius = crate::ui_tokens::CORNER_RADIUS * pt;
                 let row_left = left + metrics.width * 0.5;
-                let row_width = (width - metrics.width).max(1.0);
+                let row_width = (width - metrics.width * 1.4).max(1.0);
                 quads.backgrounds.extend(unterm_render::rounded::panel(
                     row_left,
-                    row_top,
+                    row_top + 0.5,
                     row_width,
-                    metrics.height,
+                    (metrics.height - 1.0).max(1.0),
                     row_radius,
                     match view {
                         crate::palette::View::ShellSelector => [0.176, 0.176, 0.176, 1.0],
@@ -14725,36 +15561,41 @@ impl App {
             }
         }
 
-        // Visible, clickable affordances for a result set larger than the
-        // card.  These share `top_row` with arrows, PageUp/PageDown and the
-        // wheel, so every navigation path shows the same slice.
-        let arrow_left = left + width - metrics.width * 1.6;
-        let arrow_color = mix(foreground, self.window.colors.background, 0.25);
-        if palette.can_scroll_up() && !rows.is_empty() {
-            crate::terminal::append_text(
-                "↑",
-                &mut self.window.font,
-                &mut self.window.atlas,
-                arrow_color,
-                (
-                    left + width - metrics.width * 1.6,
-                    top + metrics.height * card.leading_rows as f32,
-                ),
-                quads,
-            );
-        }
-        if palette.can_scroll_down(crate::palette::MAX_ROWS) && !rows.is_empty() {
-            crate::terminal::append_text(
-                "↓",
-                &mut self.window.font,
-                &mut self.window.atlas,
-                arrow_color,
-                (
-                    arrow_left,
-                    top + metrics.height * (card.leading_rows + rows.len() - 1) as f32,
-                ),
-                quads,
-            );
+        // Visible, clickable affordances and Fluent scrollbar thumb for a
+        // result set larger than the card.
+        let total_visible = palette.visible().len();
+        if total_visible > rows.len() && !rows.is_empty() {
+            let pt = self.chrome_pt();
+            let track_w = (4.0 * pt).round().max(4.0);
+            let track_left = left + width - track_w - (3.0 * pt).round().max(2.0);
+            let track_top = top + metrics.height * card.leading_rows as f32 + 2.0;
+            let track_h = (metrics.height * rows.len() as f32 - 4.0).max(8.0);
+            let mut track_color = foreground;
+            track_color[3] = crate::ui_tokens::CHROME_SCROLLBAR_TRACK_ALPHA;
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                track_left,
+                track_top,
+                track_w,
+                track_h,
+                track_w * 0.5,
+                track_color,
+            ));
+            let thumb_h = ((rows.len() as f32 / total_visible as f32) * track_h)
+                .max(18.0 * pt)
+                .min(track_h);
+            let max_start = total_visible.saturating_sub(rows.len()).max(1);
+            let ratio = (window_start.min(max_start) as f32) / (max_start as f32);
+            let thumb_top = track_top + ratio * (track_h - thumb_h);
+            let mut thumb_color = self.chrome().focus_rail;
+            thumb_color[3] = crate::ui_tokens::CHROME_SCROLLBAR_THUMB_ALPHA;
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                track_left,
+                thumb_top,
+                track_w,
+                thumb_h,
+                track_w * 0.5,
+                thumb_color,
+            ));
         }
 
         if view == crate::palette::View::ShellSelector {
@@ -14878,7 +15719,7 @@ impl App {
             color: self.window.colors.foreground,
         });
         let background = self.window.colors.background;
-        let button_cells = 13usize;
+        let button_cells = 21usize;
         let columns = (width / metrics.width.max(1.0)).floor().max(0.0) as usize;
         let label = crate::sidebar::fit(&label, columns.saturating_sub(button_cells + 2));
         crate::terminal::append_text(
@@ -14890,7 +15731,17 @@ impl App {
             quads,
         );
 
-        let buttons = [("↑", 3usize), ("↓", 3usize), (mode, 4usize), ("×", 3usize)];
+        let has_pattern = !search.pattern.is_empty();
+        let has_match = search.current().is_some();
+        let dim_ink = self.chrome().dim_text;
+        let buttons = [
+            ("✦AI", 5usize),
+            ("⌫", 3usize),
+            ("↑", 3usize),
+            ("↓", 3usize),
+            (mode, 4usize),
+            ("×", 3usize),
+        ];
         let mut pen = left + width - button_cells as f32 * metrics.width;
         for (text, cells) in buttons {
             let button_width = cells as f32 * metrics.width;
@@ -14902,11 +15753,16 @@ impl App {
                 color: self.window.colors.background,
             });
             let text_width = text.chars().count() as f32 * metrics.width;
+            let ink = if (text == "⌫" && !has_pattern) || (text == "✦AI" && !has_match) {
+                dim_ink
+            } else {
+                self.window.colors.foreground
+            };
             crate::terminal::append_text(
                 text,
                 &mut self.window.font,
                 &mut self.window.atlas,
-                self.window.colors.foreground,
+                ink,
                 (pen + ((button_width - text_width) / 2.0).max(0.0), top),
                 quads,
             );
@@ -15064,6 +15920,20 @@ impl App {
                 metrics,
             ));
         }
+        if let Some(composer) = self.window.composer.as_ref() {
+            let window_width = self.window.state.as_ref()?.width as f32;
+            let width = (window_width * 0.6)
+                .max(metrics.width * 30.0)
+                .min(window_width);
+            let left = ((window_width - width) / 2.0).max(0.0);
+            let shown = composer.queued().len().min(MAX_COMPOSER_ROWS);
+            let row_top = metrics.height * (2 + shown + 1) as f32;
+            let columns = crate::terminal::text_columns(&composer.typing);
+            return Some((
+                (left + metrics.width * (3 + columns) as f32, row_top),
+                metrics,
+            ));
+        }
         let live = self.window.state.as_ref()?;
         let snapshot = self.engine.read_styled_screen(live.session_id).ok()?;
         let placement = self
@@ -15111,6 +15981,11 @@ impl App {
                     .scroll_viewport_to(self.focused_session(), found.row as isize);
             }
             self.window.search = Some(search);
+            self.window.drawn_revision = None;
+            return true;
+        }
+        if let Some(composer) = self.window.composer.as_mut() {
+            composer.typing.push_str(text);
             self.window.drawn_revision = None;
             return true;
         }
@@ -15553,14 +16428,14 @@ impl App {
                 .unwrap_or_default();
             let label = if is_zh {
                 if exit_code != 0 {
-                    format!("●  AI 诊断 · exit {exit_code}{dur_suffix}")
+                    format!("●  AI 诊断 · exit {exit_code}{dur_suffix}  ×")
                 } else {
-                    format!("●  AI 诊断{dur_suffix}")
+                    format!("●  AI 诊断{dur_suffix}  ×")
                 }
             } else if exit_code != 0 {
-                format!("●  Diagnose · exit {exit_code}{dur_suffix}")
+                format!("●  Diagnose · exit {exit_code}{dur_suffix}  ×")
             } else {
-                format!("●  Diagnose{dur_suffix}")
+                format!("●  Diagnose{dur_suffix}  ×")
             };
             let text_w = self.chrome_width(&label);
             let pill_w = (text_w + 14.0 * pt).round();
@@ -15586,10 +16461,72 @@ impl App {
         pills
     }
 
-    fn pane_error_pill_at(&mut self, x: f32, y: f32) -> Option<usize> {
+    fn pane_error_pill_at(&mut self, x: f32, y: f32) -> Option<(usize, bool)> {
+        let pt = self.chrome_pt();
         self.pane_error_pills()
             .into_iter()
             .find(|(_, left, top, width, height, _)| {
+                x >= *left && x < left + width && y >= *top && y < top + height
+            })
+            .map(|(session_id, left, _, width, ..)| {
+                let dismiss = x >= left + width - 22.0 * pt;
+                (session_id, dismiss)
+            })
+    }
+
+    /// Quiet 1-click "⌫ 清空输入" micro-pill in the top-right corner of the
+    /// active pane, so clearing the terminal/Agent input line takes a single click.
+    fn pane_clear_input_pill(&mut self) -> Option<(usize, f32, f32, f32, f32, String)> {
+        let placements = self.placements();
+        if placements.is_empty() {
+            return None;
+        }
+        let active = self.focused_session();
+        let placement = placements.iter().find(|p| p.session_id == active)?.clone();
+        let metrics = self.window.font.metrics();
+        let pt = self.chrome_pt();
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let label = if is_zh {
+            "⌫ 清空输入".to_string()
+        } else {
+            "⌫ Clear".to_string()
+        };
+        let text_w = self.chrome_width(&label);
+        let pill_w = (text_w + 12.0 * pt).round();
+        let pill_h = (self.window.chrome_font.metrics().height + 6.0 * pt)
+            .round()
+            .max(20.0 * pt);
+        let max_grid_right = placements
+            .iter()
+            .map(|p| p.origin.0 + p.cols as f32 * metrics.width)
+            .fold(0.0_f32, f32::max);
+        let grid_right = placement.origin.0 + placement.cols as f32 * metrics.width;
+        let pane_right = if (grid_right - max_grid_right).abs() <= 0.5 {
+            self.terminal_left() + self.terminal_width()
+        } else {
+            grid_right
+        };
+        let has_split = placements.len() > 1;
+        let mut right_inset = if has_split {
+            metrics.width * 3.0 + 6.0 * pt
+        } else {
+            10.0 * pt
+        };
+        if let Some((_, err_left, ..)) = self
+            .pane_error_pills()
+            .into_iter()
+            .find(|(id, ..)| *id == active)
+        {
+            right_inset = (pane_right - err_left) + 6.0 * pt;
+        }
+        let left = (pane_right - right_inset - pill_w).max(placement.origin.0 + 4.0 * pt);
+        let top = placement.origin.1 + 6.0 * pt;
+        Some((active, left, top, pill_w, pill_h, label))
+    }
+
+    fn pane_clear_input_pill_at(&mut self, x: f32, y: f32) -> Option<usize> {
+        self.pane_clear_input_pill()
+            .filter(|(_, left, top, width, height, _)| {
                 x >= *left && x < left + width && y >= *top && y < top + height
             })
             .map(|(session_id, ..)| session_id)
@@ -15670,12 +16607,15 @@ impl App {
     fn append_pane_error_pills(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
         let pills = self.pane_error_pills();
         let unzoo_pills = self.pane_unzoo_pills();
-        if pills.is_empty() && unzoo_pills.is_empty() {
+        let clear_pill = self.pane_clear_input_pill();
+        if pills.is_empty() && unzoo_pills.is_empty() && clear_pill.is_none() {
             return;
         }
         let pt = self.chrome_pt();
         let chrome = self.chrome();
-        let hovered = self.pane_error_pill_at(self.window.pointer.0, self.window.pointer.1);
+        let hovered = self
+            .pane_error_pill_at(self.window.pointer.0, self.window.pointer.1)
+            .map(|(id, _)| id);
         for (session_id, left, top, width, height, label) in pills {
             let is_hovered = hovered == Some(session_id);
             let radius = height / 2.0;
@@ -15706,6 +16646,56 @@ impl App {
                     + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
                     .max(0.0);
             self.append_chrome(&label, chrome.status_err, (text_left, text_top), quads);
+        }
+
+        if let Some((session_id, left, top, width, height, label)) = clear_pill {
+            let is_hovered =
+                self.pane_clear_input_pill_at(self.window.pointer.0, self.window.pointer.1)
+                    == Some(session_id);
+            let radius = height / 2.0;
+            let mut fill = if is_hovered {
+                chrome.hover_bg
+            } else {
+                chrome.surface
+            };
+            fill[3] = if is_hovered { 0.92 } else { 0.42 };
+            let mut outline = if is_hovered {
+                chrome.focus_rail
+            } else {
+                chrome.outer_edge
+            };
+            outline[3] = if is_hovered { 0.72 } else { 0.28 };
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left - 1.0,
+                top - 1.0,
+                width + 2.0,
+                height + 2.0,
+                radius + 1.0,
+                outline,
+            ));
+            quads.backgrounds.extend(unterm_render::rounded::panel(
+                left,
+                top,
+                width,
+                height,
+                radius,
+                fill,
+            ));
+            let text_w = self.chrome_width(&label);
+            let text_left = left + ((width - text_w) / 2.0).max(4.0 * pt);
+            let text_top = top
+                + ((height - self.window.chrome_font.metrics().height) / 2.0
+                    + crate::ui_tokens::CHROME_TEXT_BASELINE_NUDGE * pt)
+                    .max(0.0);
+            let mut ink = if is_hovered {
+                self.chrome_foreground()
+            } else {
+                chrome.dim_text
+            };
+            if !is_hovered {
+                ink[3] *= 0.78;
+            }
+            self.append_chrome(&label, ink, (text_left, text_top), quads);
         }
 
         let hovered_unzoo = self.pane_unzoo_pill_at(self.window.pointer.0, self.window.pointer.1);
@@ -16820,6 +17810,9 @@ impl ApplicationHandler for App {
                 if self.hover_palette() {
                     return;
                 }
+                if self.hover_inbox() {
+                    return;
+                }
                 // A swallowed Ctrl+Left gesture keeps its motion too: the
                 // program never saw the press, so a drag report -- or a
                 // selection -- growing out of it would come from nowhere.
@@ -16945,6 +17938,14 @@ impl ApplicationHandler for App {
                 {
                     return;
                 }
+                if self.window.inbox_open
+                    && state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && !secondary
+                    && self.click_inbox()
+                {
+                    return;
+                }
                 // And so does the tab strip: a press on a row is a press on a
                 // row, not a click into the pane beside it.
                 #[cfg(target_os = "macos")]
@@ -17004,6 +18005,13 @@ impl ApplicationHandler for App {
                     && button == MouseButton::Left
                     && !secondary
                     && self.click_search_bar()
+                {
+                    return;
+                }
+                if state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && !secondary
+                    && self.click_composer()
                 {
                     return;
                 }
@@ -17096,6 +18104,49 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                if state == ElementState::Pressed
+                    && button == MouseButton::Left
+                    && !secondary
+                {
+                    if let Some(session_id) =
+                        self.pane_close_button_at(self.window.pointer.0, self.window.pointer.1)
+                    {
+                        self.close_pane(session_id);
+                        self.window.drawn_revision = None;
+                        return;
+                    }
+                    if let Some((session_id, dismiss)) =
+                        self.pane_error_pill_at(self.window.pointer.0, self.window.pointer.1)
+                    {
+                        if dismiss {
+                            if let Some(notice) = self.window.pane_notices.get_mut(&session_id) {
+                                notice.error = false;
+                                notice.last_exit_code = None;
+                            }
+                        } else {
+                            self.focus_session(session_id);
+                            self.open_failure_diagnosis();
+                        }
+                        self.window.drawn_revision = None;
+                        return;
+                    }
+                    if let Some(session_id) =
+                        self.pane_clear_input_pill_at(self.window.pointer.0, self.window.pointer.1)
+                    {
+                        self.focus_session(session_id);
+                        self.clear_input_box(session_id);
+                        self.window.drawn_revision = None;
+                        return;
+                    }
+                    if let Some(session_id) =
+                        self.pane_unzoo_pill_at(self.window.pointer.0, self.window.pointer.1)
+                    {
+                        self.focus_session(session_id);
+                        self.open_unzoo_hub();
+                        self.window.drawn_revision = None;
+                        return;
+                    }
+                }
                 if self.report_mouse(kind, engine_button) {
                     return;
                 }
@@ -17125,31 +18176,6 @@ impl ApplicationHandler for App {
                             let _ = live.window.drag_resize_window(direction);
                             return;
                         }
-                    }
-                }
-                if state == ElementState::Pressed && button == MouseButton::Left {
-                    if let Some(session_id) =
-                        self.pane_close_button_at(self.window.pointer.0, self.window.pointer.1)
-                    {
-                        self.close_pane(session_id);
-                        self.window.drawn_revision = None;
-                        return;
-                    }
-                    if let Some(session_id) =
-                        self.pane_error_pill_at(self.window.pointer.0, self.window.pointer.1)
-                    {
-                        self.focus_session(session_id);
-                        self.open_failure_diagnosis();
-                        self.window.drawn_revision = None;
-                        return;
-                    }
-                    if let Some(session_id) =
-                        self.pane_unzoo_pill_at(self.window.pointer.0, self.window.pointer.1)
-                    {
-                        self.focus_session(session_id);
-                        self.open_unzoo_hub();
-                        self.window.drawn_revision = None;
-                        return;
                     }
                 }
                 if self.window.sidebar_open && state == ElementState::Pressed {
@@ -18949,6 +19975,51 @@ fn command_entries() -> Vec<crate::palette::Entry> {
     });
     entries.push(crate::palette::Entry {
         label: if is_zh {
+            "✗ 一键跳转到上一个失败命令块 (OSC 133)".to_string()
+        } else {
+            "✗ Jump to Last Failed Command Block (OSC 133)".to_string()
+        },
+        hint: "OSC 133 · Error jump".to_string(),
+        command: crate::palette::Command::JumpToLastFailedCommand,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📜 命令块快览与跳转 (OSC 133 Command Blocks)".to_string()
+        } else {
+            "📜 Command Blocks Overview & Jump (OSC 133)".to_string()
+        },
+        hint: "Quick jump".to_string(),
+        command: crate::palette::Command::ListCommandBlocks,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "🌐 查看 Remote Core over SSH 远端隧道".to_string()
+        } else {
+            "🌐 Remote Core over SSH Tunnels".to_string()
+        },
+        hint: "unterm-cli remote-core".to_string(),
+        command: crate::palette::Command::OpenRemoteCores,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "⚔️ Native Fleet Arena — 多 Agent 独立 Worktree 并行竞速与择优合并".to_string()
+        } else {
+            "⚔️ Native Fleet Arena — Parallel Multi-Agent Worktree Competition".to_string()
+        },
+        hint: "Claude / Codex / Agy".to_string(),
+        command: crate::palette::Command::OpenFleetArena,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "📊 跨会话 Agent Telemetry 汇总（今日 Token / 费用 / 成功率）".to_string()
+        } else {
+            "📊 Cross-Session Agent Telemetry Summary (Tokens / Cost / Success Rate)".to_string()
+        },
+        hint: "Telemetry HUD".to_string(),
+        command: crate::palette::Command::OpenTelemetrySummary,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
             "📨 将上一条命令及输出直接投喂给当前活跃 AI Agent 窗格".to_string()
         } else {
             "📨 Send Last Command & Output to Active AI Agent Pane".to_string()
@@ -19177,6 +20248,7 @@ fn command_label_key(action: crate::keys::Action) -> Option<&'static str> {
         Action::FleetLaunch => Some("command.launch_fleet"),
         Action::ClearScrollback => Some("command.clear_scrollback"),
         Action::ClearScreen => Some("command.clear_screen"),
+        Action::ClearInput => Some("command.clear_input"),
         Action::SwapPane => Some("command.swap_pane"),
         Action::FocusPane(crate::keys::Direction::Left) => Some("command.focus_left"),
         Action::FocusPane(crate::keys::Direction::Right) => Some("command.focus_right"),

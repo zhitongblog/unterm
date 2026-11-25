@@ -97,3 +97,73 @@ pub mod process_stats;
 pub mod supervisor;
 pub mod upgrade;
 pub mod system_proxy;
+
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::ffi::OsString;
+    use std::ops::Deref;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const TRACKED_VARS: &[&str] = &[
+        "UNTERM_STATE_DIR",
+        "UNTERM_TASKS_DB",
+        "UNTERM_SCOPE_DRIFT",
+        "UNTERM_FLEETS_PATH",
+        "WEZTERM_STATE_DIR",
+    ];
+
+    pub(crate) fn lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(crate) struct IsolatedEnv {
+        _guard: MutexGuard<'static, ()>,
+        dir: tempfile::TempDir,
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl IsolatedEnv {
+        pub(crate) fn new() -> Self {
+            let guard = lock();
+            let saved = TRACKED_VARS
+                .iter()
+                .map(|&k| (k, std::env::var_os(k)))
+                .collect();
+            let dir = tempfile::tempdir().expect("create isolated test tempdir");
+            std::env::set_var("UNTERM_STATE_DIR", dir.path());
+            std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
+            std::env::remove_var("UNTERM_SCOPE_DRIFT");
+            std::env::remove_var("UNTERM_FLEETS_PATH");
+            crate::cockpit::fleet_store::reset_for_tests();
+            crate::providers::reset_for_tests();
+            Self {
+                _guard: guard,
+                dir,
+                saved,
+            }
+        }
+    }
+
+    impl Deref for IsolatedEnv {
+        type Target = tempfile::TempDir;
+
+        fn deref(&self) -> &Self::Target {
+            &self.dir
+        }
+    }
+
+    impl Drop for IsolatedEnv {
+        fn drop(&mut self) {
+            for (k, v) in self.saved.drain(..) {
+                match v {
+                    Some(val) => std::env::set_var(k, val),
+                    None => std::env::remove_var(k),
+                }
+            }
+            crate::cockpit::fleet_store::reset_for_tests();
+            crate::providers::reset_for_tests();
+        }
+    }
+}

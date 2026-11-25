@@ -177,6 +177,139 @@ fn parse_tokens_label(lower: &str) -> Option<String> {
     None
 }
 
+/// Parse a cost label like `"$1.28"` into USD (`1.28`).
+pub fn parse_cost_usd(label: &str) -> Option<f64> {
+    let trimmed = label.trim().trim_start_matches('$');
+    let val = trimmed.parse::<f64>().ok()?;
+    (val.is_finite() && val >= 0.0).then_some(val)
+}
+
+/// Parse a token label like `"142.5k"` or `"1.2m"` into an integer token count.
+pub fn parse_tokens_count(label: &str) -> Option<u64> {
+    let lower = label.trim().to_ascii_lowercase();
+    if let Some(num) = lower.strip_suffix('k') {
+        let v = num.parse::<f64>().ok()?;
+        return (v.is_finite() && v >= 0.0).then_some((v * 1_000.0).round() as u64);
+    }
+    if let Some(num) = lower.strip_suffix('m') {
+        let v = num.parse::<f64>().ok()?;
+        return (v.is_finite() && v >= 0.0).then_some((v * 1_000_000.0).round() as u64);
+    }
+    lower.replace(',', "").parse::<u64>().ok()
+}
+
+/// Format an aggregate token count concisely (`142.5k`, `1.2M`, `850`).
+pub fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.2}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// Cross-session daily aggregate telemetry for a single AI agent CLI.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct AgentDailyStats {
+    pub agent: String,
+    pub sessions_seen: usize,
+    pub total_tokens: u64,
+    pub total_cost_usd: f64,
+    pub max_context_percent: u8,
+    pub completed_tasks: usize,
+    pub failed_tasks: usize,
+}
+
+impl AgentDailyStats {
+    pub fn success_rate_pct(&self) -> Option<u8> {
+        let total = self.completed_tasks + self.failed_tasks;
+        if total == 0 {
+            return None;
+        }
+        Some(((self.completed_tasks * 100) / total).min(100) as u8)
+    }
+
+    pub fn summary_line(&self) -> String {
+        let mut parts = vec![format!("{} tok", format_tokens(self.total_tokens))];
+        if self.total_cost_usd > 0.0 {
+            parts.push(format!("${:.2}", self.total_cost_usd));
+        }
+        if self.max_context_percent > 0 {
+            parts.push(format!("peak ctx {}%", self.max_context_percent));
+        }
+        if let Some(rate) = self.success_rate_pct() {
+            parts.push(format!(
+                "success {rate}% ({}/{})",
+                self.completed_tasks,
+                self.completed_tasks + self.failed_tasks
+            ));
+        }
+        parts.join(" · ")
+    }
+}
+
+/// Cross-session daily telemetry summary across all agents.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct DailyTelemetrySummary {
+    pub day_index: u64,
+    pub agents: Vec<AgentDailyStats>,
+}
+
+impl DailyTelemetrySummary {
+    pub fn today_index() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() / 86_400)
+            .unwrap_or(0)
+    }
+
+    pub fn record_sample(
+        &mut self,
+        agent: &str,
+        sample: &PaneTelemetry,
+        outcome: Option<bool>,
+    ) {
+        let key = agent.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            return;
+        }
+        let entry = match self.agents.iter_mut().find(|a| a.agent == key) {
+            Some(existing) => existing,
+            None => {
+                self.agents.push(AgentDailyStats {
+                    agent: key.clone(),
+                    ..Default::default()
+                });
+                self.agents.last_mut().unwrap()
+            }
+        };
+        entry.sessions_seen += 1;
+        if let Some(tokens) = sample.tokens_label.as_deref().and_then(parse_tokens_count) {
+            entry.total_tokens = entry.total_tokens.saturating_add(tokens);
+        }
+        if let Some(cost) = sample.cost_label.as_deref().and_then(parse_cost_usd) {
+            entry.total_cost_usd += cost;
+        }
+        if let Some(pct) = sample.context_percent {
+            entry.max_context_percent = entry.max_context_percent.max(pct);
+        }
+        match outcome {
+            Some(true) => entry.completed_tasks += 1,
+            Some(false) => entry.failed_tasks += 1,
+            None => {}
+        }
+    }
+
+    pub fn total_tokens(&self) -> u64 {
+        self.agents.iter().map(|a| a.total_tokens).sum()
+    }
+
+    pub fn total_cost_usd(&self) -> f64 {
+        self.agents.iter().map(|a| a.total_cost_usd).sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +334,23 @@ mod tests {
         assert_eq!(t.context_percent, Some(88));
         assert_eq!(t.pressure(), ContextPressure::Critical);
         assert_eq!(t.summary_badge().as_deref(), Some("⚠ ctx 88%"));
+    }
+
+    #[test]
+    fn aggregates_daily_tokens_cost_and_success_rate_across_sessions() {
+        let mut summary = DailyTelemetrySummary {
+            day_index: 20000,
+            agents: Vec::new(),
+        };
+        let s1 = extract_from_lines(&["142.5k tokens · $1.20 · ctx: 72%".to_string()]);
+        let s2 = extract_from_lines(&["57.5k tokens · $0.80 · ctx: 88%".to_string()]);
+        summary.record_sample("claude", &s1, Some(true));
+        summary.record_sample("claude", &s2, Some(false));
+        assert_eq!(summary.total_tokens(), 200_000);
+        assert!((summary.total_cost_usd() - 2.0).abs() < 1e-6);
+        assert_eq!(summary.agents[0].max_context_percent, 88);
+        assert_eq!(summary.agents[0].success_rate_pct(), Some(50));
+        assert!(summary.agents[0].summary_line().contains("200.0k tok"));
+        assert!(summary.agents[0].summary_line().contains("$2.00"));
     }
 }

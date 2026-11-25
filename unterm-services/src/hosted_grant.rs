@@ -95,8 +95,7 @@ mod tests {
 
     #[test]
     fn a_grant_is_live_until_revoked_and_only_its_hash_is_kept() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let dir = crate::test_env::IsolatedEnv::new();
         let token = issue("ags_1").unwrap();
         let grant = verify(&token).expect("live");
         assert_eq!(grant.session_id, "ags_1");
@@ -117,8 +116,7 @@ mod tests {
 
     #[test]
     fn a_grant_whose_owner_is_gone_is_void() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let dir = crate::test_env::IsolatedEnv::new();
         let token = issue("ags_2").unwrap();
         let path = dir.path().join("hosted_grants").join(format!("{}.json", digest(&token)));
         let mut grant: Grant = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();

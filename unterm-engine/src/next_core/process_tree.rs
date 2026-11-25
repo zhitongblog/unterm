@@ -46,20 +46,65 @@ pub(super) fn resolve_cwd(
 }
 
 fn probed_cwd_cached(pid: u32) -> Option<String> {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     static CACHE: OnceLock<Mutex<HashMap<u32, (Instant, Option<String>)>>> = OnceLock::new();
+    static REFRESHING: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let now = Instant::now();
-    if let Ok(guard) = cache.lock() {
+    let cached = if let Ok(guard) = cache.lock() {
         if let Some((at, value)) = guard.get(&pid) {
-            if now.duration_since(*at) < Duration::from_millis(1000) {
+            if now.duration_since(*at) < Duration::from_millis(2000) {
                 return value.clone();
             }
+            Some(value.clone())
+        } else {
+            None
         }
+    } else {
+        None
+    };
+
+    if let Some(previous) = cached {
+        let refreshing = REFRESHING.get_or_init(|| Mutex::new(HashSet::new()));
+        if refreshing.lock().is_ok_and(|mut set| set.len() < 2 && set.insert(pid)) {
+            let spawned = std::thread::Builder::new()
+                .name("cwd-probe".into())
+                .spawn(move || {
+                    let probed = LocalProcessInfo::current_working_dir(pid)
+                        .as_deref()
+                        .and_then(path_to_non_empty_string);
+                    let finished = Instant::now();
+                    if let Some(lock) = CACHE.get() {
+                        if let Ok(mut guard) = lock.lock() {
+                            if guard.len() > 256 {
+                                guard.retain(|_, (at, _)| {
+                                    finished.duration_since(*at) < Duration::from_secs(30)
+                                });
+                            }
+                            let keep = probed.or_else(|| {
+                                guard.get(&pid).and_then(|(_, old)| old.clone())
+                            });
+                            guard.insert(pid, (finished, keep));
+                        }
+                    }
+                    if let Some(lock) = REFRESHING.get() {
+                        if let Ok(mut set) = lock.lock() {
+                            set.remove(&pid);
+                        }
+                    }
+                });
+            if spawned.is_err() {
+                if let Ok(mut set) = refreshing.lock() {
+                    set.remove(&pid);
+                }
+            }
+        }
+        return previous;
     }
+
     let probed = LocalProcessInfo::current_working_dir(pid)
         .as_deref()
         .and_then(path_to_non_empty_string);

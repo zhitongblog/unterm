@@ -207,11 +207,8 @@ pub fn should_stop() -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        let dir = crate::test_env::IsolatedEnv::new();
         STOPPING.store(false, Ordering::SeqCst);
         dir
     }

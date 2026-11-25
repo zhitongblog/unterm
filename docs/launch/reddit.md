@@ -1,80 +1,81 @@
-# Reddit 发帖包
+# Reddit 发帖包（v0.71+ Multi-Agent Cockpit 版）
 
-**规则**:每个 sub 间隔至少 1–2 天,别同日轰炸(会被标 spam)。先用账号在目标 sub 正常评论几天攒 karma 更稳。
-**时机**:美东工作日早上。
+**规则**：每个 Sub 间隔至少 1–2 天，避免同日群发被标 Spam。美东工作日上午发布效果最佳。
 
 ---
 
-## r/ClaudeAI(最对口,Claude Code 用户聚集地)
+## 1. `r/ClaudeAI`（最对口，Claude Code 重度用户聚集地）
 
-**Title**: `I built a terminal that Claude Code can fully drive over MCP — spawn panes, read the screen, take scrolling screenshots`
+**Title**: `I built an open-source Rust terminal cockpit for Claude Code: 155 MCP tools, zero-pollution Git checkpoints, 1-click error diagnosis, and LAN/Tailscale phone approvals`
 
 **Body**:
 
-```
-Claude Code is great at editing files, but it's blind to my actual terminal —
-the sessions, splits, and output history where my real work state lives.
+```text
+I use Claude Code all day alongside Codex and Gemini CLI, and kept running into the same friction:
+- Claude couldn't see or drive my actual terminal splits and live scrollback;
+- I wanted autonomous execution, but needed an instant, zero-pollution rollback if an edit went sideways;
+- Stepping away from my desk meant Claude would sit waiting on a permission prompt;
+- When a build command failed in a normal shell, I had to copy-paste the error output and git status into Claude manually.
 
-So I built Unterm: a cross-platform terminal with its own native Rust
-kernel and a local MCP server. On first launch it auto-registers
-itself into Claude Code's MCP config, so Claude can immediately:
+So I built **Unterm** (v0.71): a native GPU terminal in Rust (`<2ms` input latency, persistent `unterm-core` daemon) where the terminal itself is a 155-method MCP server and multi-agent cockpit:
 
-- list/spawn/focus tabs and panes
-- run commands and block on structured output (exit status + text, no scraping)
-- read any pane's screen or full scrollback as text
-- screenshot the window, or render the ENTIRE scrollback into one tall PNG
-- record sessions to markdown (with token/secret redaction)
+- **1-Click MCP Integration & Cross-Agent Delegation**: One click in the Web Settings panel wires Unterm's MCP into Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, and Windsurf. Claude can even call `agent_session.delegate` to hand a sub-task to Codex/Gemini and get a structured reply.
+- **Hidden Git Checkpoints (`refs/unterm/checkpoints`)**: Snapshots your working tree before agent edits without touching `HEAD` or dirtying `git status`. Diff or roll back in one click.
+- **Risk-Tiered Autonomy (`Cautious` / `Balanced` / `Autonomous`)**: Auto-approves safe work while always intercepting destructive commands (`rm -rf`, `git push --force`, `DROP TABLE`, etc.).
+- **Unterm Pocket (Mobile Remote over LAN / Tailscale)**: Scan a QR code in the terminal to watch live panes and tap Allow/Deny on your phone while away from your desk — 100% local/Tailscale, Ed25519 signed, zero cloud relay.
+- **1-Click Failure Diagnosis**: When any command exits non-zero, click "Diagnose Last Command Failure" to spawn Claude Code in a right-hand split pane pre-loaded with the exit code, `git status`, and last 40 lines of terminal output.
 
-There is deliberately NO AI inside the terminal — no chat box, no copilot.
-The whole bet is: you already have the best agent; it just needs hands.
-
-Local-only (127.0.0.1 + auth token), no account, MIT, macOS/Linux/Windows.
+100% local (`127.0.0.1` + bearer token + audit log), no account, no telemetry, MIT licensed for macOS, Linux, and Windows.
 
 GitHub: https://github.com/zhitongblog/unterm
 Site: https://unterm.app
 
-Would love feedback from people who drive Claude Code hard all day.
+Would love feedback from fellow heavy Claude Code users!
 ```
 
 ---
 
-## r/mcp(小但精准)
+## 2. `r/mcp`（MCP 开发者与重度玩家）
 
-**Title**: `Unterm: a desktop terminal that IS an MCP server — 103 authenticated methods (exec, screen, capture, session, profile…)`
+**Title**: `Unterm v0.71: A desktop terminal that IS a 155-method MCP server (plus multi-agent delegation, risk-tiered guardrails, and hidden Git checkpoints)`
 
-**Body**(短版):
+**Body**:
 
-```
-Most MCP servers wrap an API. This one wraps a real desktop app: the
-terminal itself. Any MCP client can spawn shells, run commands with
-structured results, read screens/scrollback, take (scrolling) screenshots,
-record sessions, switch identity profiles.
+```text
+Most MCP servers wrap a cloud API or a stateless CLI tool. Unterm wraps a real desktop application: the terminal itself.
 
-Auto-discovery: on install it registers itself into the global MCP configs
-of Claude Code / Codex / Gemini CLI / OpenCode / Aider.
+It's a native Rust terminal (macOS / Linux / Windows) that exposes 155 authenticated MCP methods across 16 namespaces (`session`, `exec`, `screen`, `capture`, `cockpit`, `orchestrate`, `governance`, `workspace`, `proxy`, etc.):
 
-MIT, local-first, macOS/Linux/Windows. Native Rust terminal kernel.
+- Spawn tabs & split panes, run commands with structured JSON results (`exit_code` + stdout), read screen & full scrollback as text
+- Headlessly re-render an entire scrollback buffer into a single tall PNG (`capture.scrolling_screenshot`)
+- Delegate sub-tasks across different CLI agents via `agent_session.delegate` and package cross-agent context handoffs (`handoff.create`)
+- Zero-pollution Git checkpoints under `refs/unterm/checkpoints` (`checkpoint.create` / `diff` / `restore`)
+- 1-click MCP config toggle for Claude Code, Claude Desktop, Codex, Gemini CLI, Cursor, Windsurf, and Antigravity
 
-https://github.com/zhitongblog/unterm
+MIT licensed, local-first (`127.0.0.1` + bearer token + per-call audit log).
+
+Repo: https://github.com/zhitongblog/unterm
 ```
 
 ---
 
-## r/commandline
+## 3. `r/commandline`（强调纯 Rust 性能、守护进程持久化与可脚本化）
 
-**Title**: `Unterm — a cross-platform terminal where every feature has a CLI and an API (and your AI agent can drive it)`
+**Title**: `Unterm — a pure-Rust GPU terminal where every feature has a CLI and JSON-RPC API (daemon persistence, split layout restore, scrolling screenshots)`
 
-角度调整:这个 sub 反感 AI 营销,主打 **CLI-first/可脚本化**,AI 只是顺带提。
+**Body**:
 
-```
-Every product feature ships with a CLI subcommand and a JSON-RPC method on
-day one: screenshots (incl. rendering the whole scrollback to one tall PNG),
-session recording → markdown, identity profiles, proxy management, theme
-switching. `unterm-cli reference` prints the full surface.
+```text
+Every feature in Unterm ships with a CLI subcommand (`unterm-cli`) and a local JSON-RPC method on day one (`unterm-cli reference` prints all 155 methods):
 
-It happens to make the terminal drivable by AI agents over MCP, but
-everything works equally well from a shell script or cron job.
+- Persistent `unterm-core` daemon: your shells survive UI restarts, and cold boots automatically restore all tabs, custom titles, split-pane layouts, and working directories
+- Native notifications when background commands running >=10s finish (with duration and exit code)
+- Headless scrolling screenshots: re-renders the entire scrollback into one tall PNG using your exact font and theme, even when the window is occluded
+- Session recording to Markdown with automatic secret/token redaction
+- Built-in per-window identity profiles (git/SSH/env credentials), proxy & Clash node switcher, and safe multi-line paste guard
 
-MIT, native Rust terminal kernel, macOS/Linux/Windows.
+It also speaks MCP for those who drive their terminal from AI agents, while keeping zero AI bloat inside the terminal itself.
+
+MIT licensed, native Rust kernel, macOS / Linux / Windows.
 https://github.com/zhitongblog/unterm
 ```

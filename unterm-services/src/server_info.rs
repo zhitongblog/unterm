@@ -1041,11 +1041,10 @@ fn claim_compat_files_if_needed(info: &InstanceInfo) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
 
     fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        LOCK.lock().unwrap()
+        crate::test_env::lock()
     }
 
     struct StateDirGuard {

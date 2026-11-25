@@ -346,15 +346,42 @@ pub fn set_unterm_proxy_enabled(enabled: bool) -> anyhow::Result<()> {
     }
     std::fs::write(&path, serde_json::to_string_pretty(&value)?)?;
     *PROXY_ENABLED_CACHE.lock().unwrap() = Some((path, std::time::Instant::now(), enabled));
+    invalidate_proxy_probe_cache();
     Ok(())
+}
+
+static PROXY_PROBE_CACHE: std::sync::Mutex<
+    Option<(std::path::PathBuf, std::time::Instant, Option<String>)>,
+> = std::sync::Mutex::new(None);
+
+fn invalidate_proxy_probe_cache() {
+    if let Ok(mut guard) = PROXY_PROBE_CACHE.lock() {
+        *guard = None;
+    }
 }
 
 /// The proxy the toggle would inject right now, probed. `None` means nothing
 /// answered — the caller should leave the toggle off rather than route every
 /// command in a new shell into a dead port.
+///
+/// Cached for 3 seconds (keyed by `proxy_config_path()`) so opening the GUI
+/// quick menu or native settings palette never stalls the render thread on
+/// repeated TCP connect probes.
 pub fn probe_unterm_proxy() -> Option<String> {
-    let (http, socks, _no_proxy) = resolve_reachable_proxy(&proxy_config_value())?;
-    http.or(socks)
+    const TTL: std::time::Duration = std::time::Duration::from_secs(3);
+    let path = proxy_config_path();
+    if let Ok(guard) = PROXY_PROBE_CACHE.lock() {
+        if let Some((cached_path, at, result)) = guard.as_ref() {
+            if *cached_path == path && at.elapsed() < TTL {
+                return result.clone();
+            }
+        }
+    }
+    let fresh = resolve_reachable_proxy(&proxy_config_value()).and_then(|(http, socks, _)| http.or(socks));
+    if let Ok(mut guard) = PROXY_PROBE_CACHE.lock() {
+        *guard = Some((path, std::time::Instant::now(), fresh.clone()));
+    }
+    fresh
 }
 
 pub fn read_unterm_proxy_env() -> Option<Vec<(String, String)>> {
@@ -616,10 +643,6 @@ mod proxy_env_tests {
     use std::ffi::OsStr;
     use std::net::TcpListener;
     use std::path::PathBuf;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     struct StateDirGuard {
         old: Option<std::ffi::OsString>,
         dir: PathBuf,
@@ -663,7 +686,7 @@ mod proxy_env_tests {
 
     #[test]
     fn enabled_manual_proxy_injects_upper_and_lowercase_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let (_listener, http_url) = loopback_listener();
         let state = StateDirGuard::new("manual");
         state.write_proxy_json(serde_json::json!({
@@ -702,7 +725,7 @@ mod proxy_env_tests {
 
     #[test]
     fn disabled_proxy_does_not_create_a_command_builder() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let state = StateDirGuard::new("disabled");
         state.write_proxy_json(serde_json::json!({
             "enabled": false,
@@ -718,7 +741,7 @@ mod proxy_env_tests {
 
     #[test]
     fn dead_proxy_endpoint_is_not_injected() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let (listener, http_url) = loopback_listener();
         let port = listener.local_addr().expect("listener address").port();
         drop(listener);

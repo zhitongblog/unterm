@@ -327,12 +327,8 @@ pub fn reconcile_after_crash() -> anyhow::Result<serde_json::Value> {
 mod tests {
     use super::*;
 
-    fn isolate() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
-        dir
+    fn isolate() -> crate::test_env::IsolatedEnv {
+        crate::test_env::IsolatedEnv::new()
     }
 
     fn write_core(dir: &tempfile::TempDir, record: serde_json::Value) {
@@ -346,20 +342,25 @@ mod tests {
 
     #[test]
     fn the_supervisor_reads_where_the_core_writes() {
+        let _lock = crate::test_env::lock();
+        let prev = std::env::var_os("UNTERM_STATE_DIR");
         // The guard for the bug this cost a release: the Core resolved its
         // discovery record one way and the supervisor another, and with
         // `UNTERM_STATE_DIR` set — as every test had it — the two agreed.
         // Without it they did not, and a running Core read as absent.
         std::env::remove_var("UNTERM_STATE_DIR");
-        assert_eq!(
-            unterm_protocol::core_discovery_path(),
-            unterm_protocol::core_state_dir().map(|dir| dir.join("core.json")),
-        );
+        let core_path = unterm_protocol::core_discovery_path();
+        let expected_path = unterm_protocol::core_state_dir().map(|dir| dir.join("core.json"));
+        let core_dir = unterm_protocol::core_state_dir();
+        let state_dir = unterm_protocol::state_dir();
+        if let Some(val) = prev {
+            std::env::set_var("UNTERM_STATE_DIR", val);
+        }
+        assert_eq!(core_path, expected_path);
         // And the two directories are genuinely different, so this is not a
         // tautology that would pass if somebody collapsed them by accident.
         assert_ne!(
-            unterm_protocol::core_state_dir(),
-            unterm_protocol::state_dir(),
+            core_dir, state_dir,
             "if these ever become the same, this test is no longer proving anything"
         );
     }

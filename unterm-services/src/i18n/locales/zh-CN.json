@@ -83,6 +83,7 @@
   "cockpit.state_idle": "空闲",
   "cockpit.state_waiting": "等你确认",
   "cockpit.state_working": "干活中",
+  "command.clear_input": "一键清除输入框内容",
   "command.capture_region": "区域截图",
   "command.capture_region.hint": "系统截图框选,窗口保持可见",
   "command.close_tab": "关闭标签页",

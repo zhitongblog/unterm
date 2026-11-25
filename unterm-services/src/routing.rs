@@ -310,9 +310,7 @@ mod tests {
         // by the layer above, checked here, expiring on its own. Not a
         // setting — an exception without a scope is a setting, and settings
         // are never turned back off.
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
+        let _dir = crate::test_env::IsolatedEnv::new();
 
         assert_eq!(exception_for(Some("codex"), Some("tsk_1")), None);
 
@@ -353,8 +351,7 @@ mod tests {
         use unterm_providers::Capability;
         use unterm_tasks::{NewLease, TaskStore};
 
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        let _dir = crate::test_env::IsolatedEnv::new();
 
         let store = Arc::new(TaskStore::in_memory().unwrap());
         let registry = Registry::new(Arc::clone(&store));

@@ -31,24 +31,27 @@ marketplace/
 ## Quick pitch for any listing
 
 > **Unterm** — *the terminal AI agents can drive.* A cross-platform
-> (macOS / Linux / Windows) terminal that exposes itself as an
-> MCP-controllable surface: 67 methods across 11 namespaces let any
-> external agent spawn shells, split panes, type into them, read
-> scrollback, capture screenshots, manage sessions. Local-first
-> (127.0.0.1 + auth-token + per-call audit), MIT, $0, signed +
-> notarized.
+> (macOS / Linux / Windows) pure-Rust GPU terminal and multi-agent cockpit
+> that exposes itself as an MCP-controllable surface: **155 methods across
+> 16 namespaces** let any external agent spawn shells, split panes, run
+> commands with structured JSON results, delegate sub-tasks across CLI
+> agents (`agent_session.delegate`), create zero-pollution Git checkpoints
+> (`refs/unterm/checkpoints`), read scrollback, capture headless scrolling
+> screenshots, and approve actions from your phone over LAN/Tailscale
+> (`Unterm Pocket`). Local-first (127.0.0.1 + auth-token + per-call audit),
+> MIT, $0, signed + notarized.
 
 ## Headline numbers (for marketplace cards)
 
 | | |
 | --- | --- |
-| Methods | 67 across 11 namespaces |
+| Methods | **155 across 16 namespaces** (`v0.71.26`) |
 | Transports | `unterm-cli mcp-stdio` (recommended) · raw TCP JSON-RPC on `127.0.0.1` |
 | Platforms | macOS (universal, signed + notarized DMG) · Linux x86_64 (`.deb` + AppImage) · Windows 10/11 (`.msi` + portable `.zip`) |
 | License | MIT |
 | Price | $0 forever — no paid tier, no subscription, no in-app purchase |
 | Telemetry | None |
-| Bundled agents | Claude Code · Codex CLI · Gemini CLI · OpenCode · Aider (one-click install + OAuth/BYO-key + auto-wire to this terminal's MCP) |
+| Supported AI clients | Claude Code · Claude Desktop · Codex CLI · Gemini CLI · Cursor · Windsurf · Antigravity (`agy`) · OpenCode · Aider (1-click MCP auto-wiring in Web Settings) |
 | Repo | <https://github.com/zhitongblog/unterm> |
 | Homepage | <https://unterm.app> |
 | Docs | <https://unterm.app/docs/mcp-reference> |

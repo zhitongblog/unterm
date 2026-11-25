@@ -207,11 +207,7 @@ mod tests {
         // A lease measures real time, so a machine that slept through one has
         // a key that is over. "Your agent's permission ran out at 3am" is a
         // different message from "your agent stopped working".
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("UNTERM_STATE_DIR", dir.path());
-        std::env::set_var("UNTERM_TASKS_DB", dir.path().join("tasks.db"));
-        crate::cockpit::fleet_store::reset_for_tests();
-        crate::providers::reset_for_tests();
+        let _dir = crate::test_env::IsolatedEnv::new();
 
         let store = crate::cockpit::fleet_store::tasks().unwrap();
         let lease = store

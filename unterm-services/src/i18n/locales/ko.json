@@ -81,6 +81,7 @@
   "cockpit.state_idle": "대기",
   "cockpit.state_waiting": "확인 대기",
   "cockpit.state_working": "작업 중",
+  "command.clear_input": "입력창 지우기",
   "composer.hint": "입력 후 Enter로 추가, Esc로 닫기",
   "composer.title": "프롬프트 대기열",
   "composer.waiting": "{n}개 대기 중",

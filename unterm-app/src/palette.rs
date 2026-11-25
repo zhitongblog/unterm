@@ -242,6 +242,24 @@ pub enum Command {
     CopyLastCommandOutput,
     /// Send the last command and its clean output directly to an active AI agent pane.
     SendLastCommandToAgent,
+    /// Jump viewport to the most recent failed command block in the focused pane's scrollback.
+    JumpToLastFailedCommand,
+    /// Open a native quick-pick list of recent OSC 133 / prompt command blocks in the focused pane.
+    ListCommandBlocks,
+    /// Scroll `pane_id` viewport directly to `row`.
+    ScrollToRow { pane_id: usize, row: isize },
+    /// Open the Remote Core over SSH tunnel manager palette.
+    OpenRemoteCores,
+    /// Open the Native Fleet Arena palette (parallel multi-agent worktree competition).
+    OpenFleetArena,
+    /// Launch a Fleet Arena run across `agents` in isolated Git worktrees.
+    LaunchFleetArena { agents: Vec<String> },
+    /// Select `branch` as the winner of `run_id`, squash-merge it, and clean up losing worktrees.
+    PickArenaWinner { run_id: String, branch: String },
+    /// Discard an arena run and remove all of its temporary worktrees.
+    CleanupArenaRun { run_id: String },
+    /// Open the cross-session Daily Agent Telemetry summary (Tokens, Cost, Success Rate).
+    OpenTelemetrySummary,
     /// A row that is information rather than a verb. The Insights card is a
     /// list to read, not a list to run, and pressing a line of it should do
     /// nothing rather than whatever a guess would be.
@@ -569,6 +587,7 @@ fn score(label: &str, query: &str) -> Option<i32> {
 pub enum Key {
     Type(String),
     Backspace,
+    Clear,
     Step(isize),
     Complete,
     Accept,
@@ -585,6 +604,7 @@ pub fn key_for(named: Option<&str>, character: Option<&str>, ctrl: bool) -> Key 
     match named {
         Some("Escape") => return Key::Close,
         Some("Enter") => return Key::Accept,
+        Some("Backspace") if ctrl => return Key::Clear,
         Some("Backspace") => return Key::Backspace,
         Some("ArrowDown") => return Key::Step(1),
         Some("ArrowUp") => return Key::Step(-1),
@@ -599,6 +619,7 @@ pub fn key_for(named: Option<&str>, character: Option<&str>, ctrl: bool) -> Key 
         _ => {}
     }
     match character {
+        Some(text) if ctrl && text.eq_ignore_ascii_case("u") => Key::Clear,
         Some(text) if !ctrl => Key::Type(text.to_string()),
         _ => Key::NotOurs,
     }
@@ -1025,6 +1046,17 @@ impl Geometry {
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.left && x < self.left + self.width && y >= self.top && y < self.top + self.height
     }
+
+    /// Whether a point lands on the 1-click clear (`×`) button on the query row.
+    pub fn clear_button_at(&self, x: f32, y: f32) -> bool {
+        if self.leading_rows == 0 || !self.contains(x, y) {
+            return false;
+        }
+        let query_top = self.top + self.row_height * (self.leading_rows - 1) as f32;
+        y >= query_top
+            && y < query_top + self.row_height
+            && x >= self.left + self.width - self.row_height * 2.0
+    }
 }
 
 #[cfg(test)]
@@ -1144,5 +1176,20 @@ mod typing_tests {
             palette.visible().first().map(|entry| entry.label.as_str()),
             Some("New Tab")
         );
+    }
+
+    #[test]
+    fn ctrl_u_and_ctrl_backspace_clear_the_query() {
+        assert_eq!(key_for(None, Some("u"), true), Key::Clear);
+        assert_eq!(key_for(None, Some("U"), true), Key::Clear);
+        assert_eq!(key_for(Some("Backspace"), None, true), Key::Clear);
+    }
+
+    #[test]
+    fn clear_button_hit_tests_right_end_of_query_row() {
+        let card = Geometry::new(1000.0, (10.0, 20.0), 4, false);
+        assert!(card.clear_button_at(card.left + card.width - 10.0, card.top + 5.0));
+        assert!(!card.clear_button_at(card.left + 10.0, card.top + 5.0));
+        assert!(!card.clear_button_at(card.left + card.width - 10.0, card.top + 25.0));
     }
 }

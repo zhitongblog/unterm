@@ -81,6 +81,7 @@
   "cockpit.state_idle": "निष्क्रिय",
   "cockpit.state_waiting": "आपकी प्रतीक्षा में",
   "cockpit.state_working": "काम कर रहा है",
+  "command.clear_input": "इनपुट बॉक्स साफ़ करें",
   "composer.hint": "टाइप करें, Enter से कतार में डालें, Esc से बंद करें",
   "composer.title": "प्रॉम्प्ट कतार",
   "composer.waiting": "{n} प्रतीक्षारत",

@@ -13,7 +13,11 @@ Legend: ☐ not yet submitted · ⏳ submitted, awaiting review · ✅ live
 | n/a | **Anthropic / MCP official registry** | <https://github.com/modelcontextprotocol/servers> | Checked — repo README only lists Anthropic-authored reference servers, no community section. Community discovery happens at the awesome-* lists below. Skip. | — |
 | ☐ | **Smithery.ai** | <https://smithery.ai/new> | `smithery.yaml` already at repo root for auto-discovery — see [submissions/01-smithery.md](submissions/01-smithery.md) for the sign-in + claim flow. | `smithery.yaml` (root) + `submissions/01-smithery.md` |
 | ☐ | **mcp.so** | <https://mcp.so/submit> | Form submission — paste-ready field values in [submissions/02-mcp-so.md](submissions/02-mcp-so.md) | `submissions/02-mcp-so.md` |
-| ☐ | **Glama.ai / mcp** | <https://glama.ai/mcp/servers> | Auto-indexes from GitHub topic `mcp-server`. Set repo topics first (see [submissions/00-github-repo-metadata.md](submissions/00-github-repo-metadata.md)). | GitHub topics — admin only, see `00-...md` |
+| ✅ | **Glama.ai / mcp** | <https://glama.ai/mcp/servers/zhitongblog/unterm> | Live & driving referrer traffic (`glama.ai/mcp/servers/zhitongblog/unterm`). | GitHub topics |
+| ✅ | **PulseMCP** | <https://www.pulsemcp.com> | Auto-indexed from GitHub `mcp-server` topic. | GitHub topics |
+| ⏳ | **awesome-opencode-market** | <https://github.com/awesome-market/awesome-opencode-market/issues/3185> | Review issue #3185 opened automatically on 2026-11-14. | (auto) |
+| ✅ | **sudosubin/agents.nix** | <https://github.com/sudosubin/agents.nix/pull/132785> | Automatically tracks Unterm releases (updated through `0.71.26`). | (auto) |
+| ✅ | **patelflow/scoop-bucket-tools** | <https://github.com/patelflow/scoop-bucket-tools> | Indexed in `bucket/unterm.json` for Windows Scoop users. | (auto) |
 | n/a | **wong2/awesome-mcp-servers** | <https://github.com/wong2/awesome-mcp-servers> | PRs disabled on repo (zero PR history of any state; `has_issues: false` too — maintainer accepts direct pushes only). Skip. | — |
 | ⏳ | **awesome-mcp-servers** (punkpeye) | <https://github.com/punkpeye/awesome-mcp-servers> | PR #7166 opened — adds Unterm to the Command Line section. <https://github.com/punkpeye/awesome-mcp-servers/pull/7166> | (auto) |
 | ☐ | **Claude Desktop catalog** | Built-in: Settings → MCP → Browse | Auto-discovers from `claude_desktop_config.json` snippet users paste in. No separate submission. | `marketplace/mcp/configs/claude-desktop.json` |

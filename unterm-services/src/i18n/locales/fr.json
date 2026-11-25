@@ -81,6 +81,7 @@
   "cockpit.state_idle": "inactif",
   "cockpit.state_waiting": "vous attend",
   "cockpit.state_working": "au travail",
+  "command.clear_input": "Effacer le champ de saisie",
   "composer.hint": "saisir, Entrée pour ajouter, Échap pour fermer",
   "composer.title": "File d'attente de prompts",
   "composer.waiting": "{n} en attente",

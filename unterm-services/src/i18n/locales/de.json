@@ -81,6 +81,7 @@
   "cockpit.state_idle": "inaktiv",
   "cockpit.state_waiting": "wartet auf dich",
   "cockpit.state_working": "arbeitet",
+  "command.clear_input": "Eingabefeld leeren",
   "composer.hint": "tippen, Enter zum Einreihen, Esc zum Schließen",
   "composer.title": "Prompt-Warteschlange",
   "composer.waiting": "{n} wartend",

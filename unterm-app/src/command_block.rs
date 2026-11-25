@@ -177,6 +177,96 @@ pub fn extract_last_command(
     }
 }
 
+/// A summary entry for one executed command block in a pane's scrollback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandBlockSummary {
+    /// Zero-based index of the prompt line within the supplied `lines` slice.
+    pub line_index: usize,
+    /// The command text typed after the prompt.
+    pub command: String,
+    /// Number of non-empty output lines belonging to this block.
+    pub output_line_count: usize,
+    /// Heuristic flag for whether this command block's output indicates a failure.
+    pub looks_failed: bool,
+    /// Short first-line preview of the output (or error line if failed).
+    pub preview: String,
+}
+
+fn line_looks_like_error(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("error[")
+        || lower.contains("error:")
+        || lower.contains("fatal:")
+        || lower.contains("panicked at")
+        || lower.contains("traceback (most recent")
+        || lower.contains("command not found")
+        || lower.contains("permission denied")
+        || lower.contains("failed (")
+        || lower.contains("test result: failed")
+        || lower.starts_with("err!")
+        || lower.contains("exit status ")
+        || lower.contains("exit code ")
+}
+
+/// Extract recent executed command blocks from scrollback/screen lines (newest first).
+pub fn extract_command_blocks(lines: &[String], max_blocks: usize) -> Vec<CommandBlockSummary> {
+    if lines.is_empty() || max_blocks == 0 {
+        return Vec::new();
+    }
+    let mut prompt_positions: Vec<(usize, Option<String>)> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if let Some(cmd) = parse_prompt_line(line) {
+            prompt_positions.push((idx, cmd));
+        }
+    }
+
+    let mut out = Vec::new();
+    for pos_idx in (0..prompt_positions.len()).rev() {
+        let (start_idx, ref maybe_cmd) = prompt_positions[pos_idx];
+        let Some(cmd) = maybe_cmd.as_ref() else {
+            continue;
+        };
+        let end_idx = prompt_positions
+            .get(pos_idx + 1)
+            .map(|(next_idx, _)| *next_idx)
+            .unwrap_or(lines.len());
+        let output_slice = if start_idx + 1 < end_idx {
+            &lines[start_idx + 1..end_idx]
+        } else {
+            &[]
+        };
+        let non_empty: Vec<&str> = output_slice
+            .iter()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let error_line = non_empty.iter().copied().find(|l| line_looks_like_error(l));
+        let looks_failed = error_line.is_some();
+        let preview_src = error_line
+            .or_else(|| non_empty.first().copied())
+            .unwrap_or("");
+        let preview: String = preview_src.chars().take(72).collect();
+        out.push(CommandBlockSummary {
+            line_index: start_idx,
+            command: cmd.clone(),
+            output_line_count: non_empty.len(),
+            looks_failed,
+            preview,
+        });
+        if out.len() >= max_blocks {
+            break;
+        }
+    }
+    out
+}
+
+/// Find the most recent command block in `lines` whose output looks like a failure.
+pub fn find_last_failed_block(lines: &[String]) -> Option<CommandBlockSummary> {
+    extract_command_blocks(lines, 64)
+        .into_iter()
+        .find(|block| block.looks_failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +305,28 @@ mod tests {
         let block = extract_last_command(&screen, Some(0), Some(2810));
         assert_eq!(block.command.as_deref(), Some("npm run build"));
         assert_eq!(block.clean_output(), "✓ built in 2.81s");
+    }
+
+    #[test]
+    fn extracts_multiple_command_blocks_and_finds_last_failed() {
+        let screen = vec![
+            "alex@mac ~/repo % cargo test".to_string(),
+            "error[E0425]: cannot find value `foo`".to_string(),
+            "test result: FAILED. 0 passed; 1 failed".to_string(),
+            "alex@mac ~/repo % git status".to_string(),
+            "On branch master".to_string(),
+            "alex@mac ~/repo % ".to_string(),
+        ];
+        let blocks = extract_command_blocks(&screen, 10);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].command, "git status");
+        assert!(!blocks[0].looks_failed);
+        assert_eq!(blocks[1].command, "cargo test");
+        assert!(blocks[1].looks_failed);
+        assert_eq!(blocks[1].line_index, 0);
+
+        let failed = find_last_failed_block(&screen).expect("should find failed block");
+        assert_eq!(failed.command, "cargo test");
+        assert_eq!(failed.line_index, 0);
     }
 }

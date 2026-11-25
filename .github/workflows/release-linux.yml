@@ -142,3 +142,14 @@ jobs:
             unterm-*.deb
             Unterm-*.AppImage
           fail_on_unmatched_files: true
+      - name: Trigger Cloudflare Pages deploy hook
+        if: ${{ matrix.arch == 'x86_64' && inputs.draft != 'true' }}
+        env:
+          CF_PAGES_DEPLOY_HOOK: ${{ secrets.CF_PAGES_DEPLOY_HOOK }}
+        run: |
+          if [ -n "${CF_PAGES_DEPLOY_HOOK:-}" ]; then
+            curl -fsS -X POST "$CF_PAGES_DEPLOY_HOOK" >/dev/null
+            echo "Triggered Cloudflare Pages rebuild for ${{ steps.tag.outputs.name }}"
+          else
+            echo "CF_PAGES_DEPLOY_HOOK secret not configured; skipping website rebuild."
+          fi

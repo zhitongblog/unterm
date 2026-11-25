@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.72.0 — 2026-11-24
+
+### Added
+
+- **Native Fleet Arena (`unterm-app/src/arena.rs`, `palette.rs`, `window.rs`).**
+  - Launch 2–3 AI coding agents (`Claude`, `Codex`, `Agy`) simultaneously in isolated Git worktrees from the native Command Palette, monitor live `+added -deleted` diff stats per branch, and 1-click **Pick Winner & Squash-Merge** with automatic cleanup of losing worktrees and temporary branches.
+- **Cross-Session Daily Agent Telemetry Summary (`unterm-app/src/telemetry.rs`, `window.rs`).**
+  - Aggregates token usage, estimated USD cost, peak context occupancy, and task success rate across all active agent panes into a native Daily Telemetry HUD.
+- **OSC 133 Command Block Navigation & Search-to-AI Context Feed (`command_block.rs`, `search.rs`, `window.rs`).**
+  - Added 1-click **Jump to Last Failed Command Block** and **Command Blocks Overview & Jump** in the Command Palette.
+  - Upgraded the terminal search bar with `Ctrl+S` and a `✦AI` action button to send the current search match and surrounding context lines directly into the active AI Agent pane.
+- **Remote Core over SSH MVP (`unterm-cli/src/remote_core.rs`, `window.rs`).**
+  - Added `unterm-cli remote-core attach / list / detach` to establish keepalive `ssh -N -L` port-forwarding tunnels to a remote `unterm-core --headless` (with automatic remote `core.json` probing), plus a native Command Palette tunnel viewer.
+- **Release Automation & Package Manifest Consistency (`ci/check-pkg-manifests.sh`, `ci/release-mac.sh`, `release-linux.yml`, `release-windows.yml`).**
+  - Added optional `CF_PAGES_DEPLOY_HOOK` website rebuild triggers to release scripts/workflows and a version-consistency gate across workspace crates, Windows MSI, website endpoints, and Homebrew/Scoop/winget templates.
+
+### Fixed
+
+- **100% Parallel Workspace Test Isolation (`unterm-services`, `unterm-settings`, `unterm-core`).**
+  - Introduced crate-wide RAII environment isolation (`test_env::IsolatedEnv` / `test_env::EnvGuard`) and `Send`-safe `TestServerWorker` gating so `cargo test --workspace` passes 100% in default multi-threaded mode without `--test-threads=1`.
+- **Windows CI & Build Cleanliness (`unterm-engine/verify-next-core-size-budget.ps1`, `unterm-settings/src/agent_run.rs`).**
+  - Recalibrated `MaxCoreSourceLines` to `18100` to reflect `v0.71.22`–`v0.71.32` ECMA-48/reflow/OSC-133 kernel additions, and removed the unused `skill_env` dead-code warning in `unterm-settings`.
+
+## v0.71.32 — 2026-11-23
+
+### Fixed
+
+- **Eliminated GUI UI-thread stalls across `unterm-app`, `unterm-core`, `unterm-engine`, and `unterm-services`.**
+  - Removed blocking process-tree and IPC `SessionEngine::activity` probes from the render, session-restore, and status hot paths, and hardened background cache refresh coalescing in `unterm-core`.
+- **Headless MCP E2E verification (`unterm-core/tests/process_e2e.rs`).**
+  - Updated `headless_mcp_serves_sessions_without_any_gui` to assert immediate fail-closed denial on above-ceiling destructive commands (`git push --force`) under the default `Balanced` autonomy policy.
+
+### Added
+
+- **1-Click Clear Input & Polished UI Overlays (`window.rs`, `palette.rs`, `keys.rs`, `i18n/locales/*.json`).**
+  - Added a 1-click **Clear Input** floating pane micro-pill and Command Palette action (`command.clear_input`) localized across all 9 supported languages, along with refined overlay hit-testing and visual polish.
+
 ## v0.71.31 — 2026-11-20
 
 ### Added
