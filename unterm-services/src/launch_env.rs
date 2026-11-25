@@ -772,7 +772,7 @@ mod proxy_env_tests {
 
     #[test]
     fn the_setting_is_the_whole_processs_and_off_gives_back_what_was_there() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env::lock();
         let (_listener, http_url) = loopback_listener();
         let state = StateDirGuard::new("sync");
         let before = std::env::var_os("HTTPS_PROXY");
