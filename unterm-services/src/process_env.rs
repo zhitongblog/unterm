@@ -9,8 +9,58 @@ use unterm_engine::next_core::config::{Config, Value};
 
 /// Apply `path_append` and the `[env]` section to this process.
 pub fn apply(config: &Config) {
+    drop_the_launchers_env();
     apply_path_append(config);
     apply_session_env(config);
+}
+
+/// What the program that started this process set for itself, not for the
+/// terminals here. An agent's shell turns colour off for its own transcript
+/// (`NO_COLOR`) and marks its session (`CLAUDECODE`, `CLAUDE_CODE_*`); a Core
+/// started from there handed both to every new pane, which then showed no
+/// colour at all and made `claude` typed in it refuse to start as "nested".
+const LAUNCHERS_OWN: &[&str] = &["NO_COLOR", "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"];
+const LAUNCHERS_OWN_PREFIXES: &[&str] = &["CLAUDE_CODE_"];
+
+fn is_launchers_own(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    LAUNCHERS_OWN.contains(&upper.as_str())
+        || LAUNCHERS_OWN_PREFIXES.iter().any(|prefix| upper.starts_with(prefix))
+}
+
+/// Remove those, unless the person set one for themselves (their own
+/// environment, or the config's `[env]`, which is applied after this).
+fn drop_the_launchers_env() {
+    let names: Vec<String> = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .filter(|name| is_launchers_own(name))
+        .collect();
+    for name in names {
+        if !set_by_the_person(&name) {
+            std::env::remove_var(&name);
+        }
+    }
+}
+
+/// Whether `name` is in the person's own Windows environment (user or
+/// machine), where a value they want everywhere lives.
+#[cfg(windows)]
+fn set_by_the_person(name: &str) -> bool {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    let user = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment");
+    let machine = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment");
+    [user, machine]
+        .into_iter()
+        .flatten()
+        .any(|key| key.get_raw_value(name).is_ok())
+}
+
+/// Elsewhere there is no one place to ask: keep what was inherited.
+#[cfg(not(windows))]
+fn set_by_the_person(_name: &str) -> bool {
+    true
 }
 
 /// Extend the environment inherited by every new pane.
@@ -145,6 +195,24 @@ mod tests {
             Ok("on")
         );
         assert!(std::env::var("UNTERM_TEST_ENV_BAD").is_err());
+    }
+
+    #[test]
+    fn the_launchers_own_session_markers_are_recognised() {
+        for name in ["NO_COLOR", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "claude_code_entrypoint"] {
+            assert!(is_launchers_own(name), "{name}");
+        }
+        for name in ["PATH", "TERM", "COLORTERM", "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY"] {
+            assert!(!is_launchers_own(name), "{name}");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_no_color_from_the_launcher_does_not_reach_the_panes() {
+        std::env::set_var("CLAUDE_CODE_UNTERM_TEST_MARKER", "1");
+        drop_the_launchers_env();
+        assert!(std::env::var_os("CLAUDE_CODE_UNTERM_TEST_MARKER").is_none());
     }
 
     #[test]

@@ -187,7 +187,13 @@ fn unregistered_bridge_pids(dir: &Path, min_age: std::time::Duration) -> Vec<u32
                 .unwrap_or(entry.szExeFile.len());
             let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
             let pid = entry.th32ProcessID;
-            if name.eq_ignore_ascii_case("unterm-cli.exe")
+            // The bridge runs under the product's name when installed as one
+            // (Nissewyn's `nissewyn-cli.exe`), the runtime's otherwise.
+            let product_cli = format!(
+                "{}.exe",
+                unterm_protocol::program_stem(unterm_protocol::Program::Cli)
+            );
+            if (name.eq_ignore_ascii_case("unterm-cli.exe") || name.eq_ignore_ascii_case(&product_cli))
                 && pid != std::process::id()
                 && !dir.join(format!("{pid}.json")).exists()
             {

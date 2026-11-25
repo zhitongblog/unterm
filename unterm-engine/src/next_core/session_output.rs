@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use std::{io::Write, sync::Arc, time::Instant};
 
 pub(super) struct OutputHandles<'a> {
-    pub(super) output: &'a Arc<Mutex<String>>,
+    pub(super) output: &'a Arc<Mutex<pty_io::OutputLog>>,
     pub(super) screen: &'a Arc<Mutex<NextCoreScreen>>,
     pub(super) recording: &'a Arc<Mutex<Option<NextCoreRecording>>>,
     pub(super) activity: &'a Arc<Mutex<SessionIoActivity>>,
@@ -29,8 +29,7 @@ pub(super) fn apply_chunk(
     let chunk = chunk.as_ref();
     let started_at = Instant::now();
     {
-        let mut output = handles.output.lock();
-        pty_io::append_bounded_output(&mut output, chunk, MAX_OUTPUT_BYTES);
+        handles.output.lock().append(chunk, MAX_OUTPUT_BYTES);
     }
 
     {
@@ -96,7 +95,7 @@ mod tests {
 
     #[test]
     fn apply_chunk_updates_output_screen_activity_and_queries() {
-        let output = Arc::new(Mutex::new(String::new()));
+        let output = Arc::new(Mutex::new(pty_io::OutputLog::default()));
         let screen = Arc::new(Mutex::new(NextCoreScreen::new(80, 24)));
         let recording = Arc::new(Mutex::new(None));
         let activity = Arc::new(Mutex::new(SessionIoActivity::new()));
@@ -119,7 +118,7 @@ mod tests {
             &mut pending,
         );
 
-        assert_eq!(output.lock().as_str(), "hello\x1b[6n");
+        assert_eq!(output.lock().text.as_str(), "hello\x1b[6n");
         assert_eq!(screen.lock().snapshot_viewport_lines()[0], "hello");
         assert_eq!(bytes.lock().as_slice(), b"\x1b[1;6R");
         assert_eq!(

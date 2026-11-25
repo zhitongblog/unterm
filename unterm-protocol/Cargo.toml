@@ -11,7 +11,8 @@ serde = { workspace = true, features = ["derive"] }
 # lives, and that answer belongs at the compatibility boundary rather
 # than being re-derived (and re-diverged) in each crate.
 dirs-next.workspace = true
+# For `term_program()`: the person's choice is kept in compat.json.
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 toml.workspace = true

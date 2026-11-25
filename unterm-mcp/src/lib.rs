@@ -11,5 +11,7 @@ pub mod handler;
 pub mod meta;
 mod server;
 pub mod upload;
+#[cfg(windows)]
+mod win_capture;
 
 pub use server::{start_headless_mcp_server, start_mcp_server, start_mcp_server_with_version};

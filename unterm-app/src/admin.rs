@@ -99,7 +99,7 @@ pub fn launch(directory: Option<&std::path::Path>) -> anyhow::Result<Launch> {
     if error.raw_os_error() == Some(1223) {
         return Ok(Launch::Declined);
     }
-    Err(anyhow::anyhow!("could not start an elevated Unterm: {error}"))
+    Err(anyhow::anyhow!(unterm_services::i18n::branded(format!("could not start an elevated Unterm: {error}"))))
 }
 
 #[cfg(not(windows))]

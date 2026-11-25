@@ -47,7 +47,7 @@ fn wait_for_the_shell_to_settle(handles: &runtime::test_facade::TestSessionHandl
 pub(super) fn set_output_for_test(pane_id: usize, text: &str) -> Result<()> {
     let handles = runtime::test_facade::session_handles(pane_id)?;
     let started_at = Instant::now();
-    *handles.output.lock() = text.to_string();
+    *handles.output.lock() = super::pty_io::OutputLog { text: text.to_string(), dropped: 0 };
     let mut screen = handles.screen.lock();
     let revision = screen.revision();
     *screen = NextCoreScreen::new(handles.cols, handles.rows);

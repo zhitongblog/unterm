@@ -10,10 +10,17 @@ mod agent_run;
 mod browser;
 pub mod clients;
 mod console_tasks;
+pub mod tell_rules;
 pub use console_tasks::{run_settings, set_run_settings, RunSettings};
+mod console_watch;
+mod watch_calendar;
+mod watch_mail;
 pub mod helpers;
 mod local_agents;
+mod mobile_one;
 mod skills;
+pub mod plugins;
+mod agent_models;
 
 /// Whether the console has work that needs this process to stay: a task run
 /// in progress, or a scheduled task that is not paused. A Core started by a

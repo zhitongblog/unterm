@@ -191,10 +191,58 @@ fn warning_prefix_is_at_end(text: &str, warning: &str) -> bool {
 /// Letting the buffer overshoot by a quarter and then cutting back to
 /// `max_bytes` turns one memmove per chunk into one per quarter-buffer, for a
 /// bounded amount of extra memory per session.
-pub(super) fn append_bounded_output(output: &mut String, chunk: &str, max_bytes: usize) {
+///
+/// Returns how many bytes were cut from the front (0 almost always).
+pub(super) fn append_bounded_output(output: &mut String, chunk: &str, max_bytes: usize) -> usize {
     output.push_str(chunk);
     if output.len() > trim_threshold(max_bytes) {
-        trim_to_utf8_boundary(output, max_bytes);
+        return trim_to_utf8_boundary(output, max_bytes);
+    }
+    0
+}
+
+/// What a session printed, as it arrived, with the count of bytes already
+/// cut from the front: `dropped + text.len()` is everything it ever printed,
+/// so a byte offset into that whole stream stays valid across trims. A viewer
+/// that replays the output in an emulator asks "from byte N" and gets exactly
+/// the bytes it has not seen -- carriage returns, trailing spaces and all.
+#[derive(Debug, Default)]
+pub(super) struct OutputLog {
+    pub(super) text: String,
+    pub(super) dropped: u64,
+}
+
+impl OutputLog {
+    pub(super) fn append(&mut self, chunk: &str, max_bytes: usize) {
+        self.dropped += append_bounded_output(&mut self.text, chunk, max_bytes) as u64;
+    }
+
+    /// Offset (in the whole stream) just past the last byte printed.
+    pub(super) fn end(&self) -> u64 {
+        self.dropped + self.text.len() as u64
+    }
+
+    /// The bytes from `from` on, at most `max_bytes` of the newest, starting
+    /// on a char boundary; with the offset the returned text starts at. Older
+    /// than what is kept starts at the oldest kept byte instead.
+    pub(super) fn since(&self, from: Option<u64>, max_bytes: usize) -> (u64, &str) {
+        let end = self.end();
+        let wanted = from.unwrap_or(0).clamp(self.dropped, end);
+        let mut start = (wanted - self.dropped) as usize;
+        if self.text.len() - start > max_bytes {
+            start = self.text.len() - max_bytes;
+        }
+        while !self.text.is_char_boundary(start) {
+            start += 1;
+        }
+        (self.dropped + start as u64, &self.text[start..])
+    }
+}
+
+impl std::ops::Deref for OutputLog {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.text
     }
 }
 
@@ -220,9 +268,9 @@ pub(super) fn strip_powershell_startup_noise(text: &str) -> std::borrow::Cow<'_,
     }
 }
 
-pub(super) fn trim_to_utf8_boundary(text: &mut String, max_bytes: usize) {
+pub(super) fn trim_to_utf8_boundary(text: &mut String, max_bytes: usize) -> usize {
     if text.len() <= max_bytes {
-        return;
+        return 0;
     }
     // Walk forward from the cut to the next char boundary -- three bytes at
     // most. The scan this replaces started at the front and decoded every
@@ -233,11 +281,40 @@ pub(super) fn trim_to_utf8_boundary(text: &mut String, max_bytes: usize) {
         keep_from += 1;
     }
     text.drain(..keep_from);
+    keep_from
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_log_offsets_survive_trims() {
+        let mut log = OutputLog::default();
+        log.append("abcd", 4);
+        assert_eq!(log.since(None, 100), (0, "abcd"));
+        // Past four plus slack: trims to the newest four, two bytes dropped.
+        log.append("\r\nx", 4);
+        assert_eq!(log.text, "d\r\nx");
+        assert_eq!(log.dropped, 3);
+        assert_eq!(log.end(), 7);
+        // Exactly what came after byte 5, carriage return and all.
+        assert_eq!(log.since(Some(5), 100), (5, "\nx"));
+        // Older than what is kept: from the oldest kept byte.
+        assert_eq!(log.since(Some(1), 100), (3, "d\r\nx"));
+        // Caught up: nothing.
+        assert_eq!(log.since(Some(7), 100), (7, ""));
+        // A cap keeps the newest bytes.
+        assert_eq!(log.since(Some(3), 2), (5, "\nx"));
+    }
+
+    #[test]
+    fn output_log_starts_on_a_char_boundary() {
+        let mut log = OutputLog::default();
+        log.append("a\u{4f60}b", 100);
+        // Byte 2 is inside the three-byte character: start after it.
+        assert_eq!(log.since(Some(2), 100), (4, "b"));
+    }
 
     #[test]
     fn waits_for_incomplete_utf8_sequence() {

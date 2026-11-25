@@ -22,10 +22,15 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
-/// The client name agents run here present to Unzoo.
-pub const CLIENT: &str = "unzoo-one-agent";
+/// The client name agents run here present to Unzoo: the product's, so two
+/// products shipping the runtime keep their agents' browsing apart.
+pub fn client() -> String {
+    format!("{}-agent", unterm_protocol::product_slug())
+}
 /// The profile Unzoo keeps for that client.
-pub const RESERVED_PROFILE: &str = "mcp-unzoo-one-agent";
+pub fn reserved_profile() -> String {
+    format!("mcp-{}", client())
+}
 
 fn endpoint() -> String {
     std::env::var("UNZOO_ENDPOINT")
@@ -89,11 +94,18 @@ fn snapshot() -> Result<(Vec<Value>, Value)> {
     Ok((profiles, license))
 }
 
+/// The browser identities a plugin role can be bound to; empty when Unzoo
+/// is not running.
+pub(crate) fn profile_list() -> Vec<Value> {
+    snapshot().map(|(profiles, _)| profiles).unwrap_or_default()
+}
+
 /// Make the agents' own profile if it is not there and the plan has room.
 /// Ok(true) when it exists afterwards.
 pub fn ensure_reserved() -> Result<bool> {
     let (profiles, license) = snapshot()?;
-    if profiles.iter().any(|p| p["id"] == RESERVED_PROFILE) {
+    let reserved = reserved_profile();
+    if profiles.iter().any(|p| p["id"] == reserved.as_str()) {
         return Ok(true);
     }
     let room = license
@@ -103,9 +115,9 @@ pub fn ensure_reserved() -> Result<bool> {
     if !room {
         return Ok(false);
     }
-    call("POST", "/api/v1/profiles/create", Some(&json!({"name": RESERVED_PROFILE})))?;
+    call("POST", "/api/v1/profiles/create", Some(&json!({"name": reserved})))?;
     let (profiles, _) = snapshot()?;
-    Ok(profiles.iter().any(|p| p["id"] == RESERVED_PROFILE))
+    Ok(profiles.iter().any(|p| p["id"] == reserved.as_str()))
 }
 
 /// What the console shows about the agents' browser: whether Unzoo is here
@@ -121,7 +133,7 @@ pub fn status(installed: bool, chosen: &str) -> Value {
     match snapshot() {
         Err(error) => json!({"installed": true, "reachable": false, "error": format!("{error:#}")}),
         Ok((profiles, license)) => {
-            let reserved = profiles.iter().any(|p| p["id"] == RESERVED_PROFILE);
+            let reserved = profiles.iter().any(|p| p["id"] == reserved_profile().as_str());
             let chosen_ok = !chosen.is_empty() && profiles.iter().any(|p| p["id"] == chosen);
             let max = license.pointer("/limits/max_profiles").and_then(Value::as_u64);
             json!({
@@ -130,7 +142,7 @@ pub fn status(installed: bool, chosen: &str) -> Value {
                 "plan": license.get("tier_name").cloned().unwrap_or(Value::Null),
                 "max_profiles": max,
                 "profiles": profiles,
-                "reserved_profile": RESERVED_PROFILE,
+                "reserved_profile": reserved_profile(),
                 "reserved": reserved,
                 "chosen": if chosen.is_empty() { Value::Null } else { json!(chosen) },
                 "chosen_missing": !chosen.is_empty() && !chosen_ok,
@@ -172,6 +184,52 @@ pub fn activate_tab(tab: &str) -> Result<Value> {
     let id = tab_number(tab)?;
     call("POST", "/api/v1/tabs/activate", Some(&json!({"tab_id": id})))?;
     Ok(json!({"tab_id": tab, "activated": true}))
+}
+
+/// The identity a watched page is read in: the one the run settings chose
+/// for the agents, else their own when it exists. Never the person's
+/// default profile, where a tab would open in front of them.
+pub fn watch_profile(chosen: &str) -> Result<String> {
+    if !chosen.trim().is_empty() {
+        return Ok(chosen.trim().to_string());
+    }
+    let (profiles, _) = snapshot()?;
+    let reserved = reserved_profile();
+    if profiles.iter().any(|p| p["id"] == reserved.as_str()) {
+        return Ok(reserved);
+    }
+    bail!("the agents have no browser identity to read the page in; choose one in Settings › Agents")
+}
+
+/// What a page says now: opened in a tab of its own in `profile`, read once
+/// its text stops changing, and closed again.
+pub fn page_text(profile: &str, url: &str) -> Result<String> {
+    let created = call("POST", "/api/v1/tabs/create", Some(&json!({"url": url, "profile_id": profile})))?;
+    let id = created
+        .pointer("/data/tab_id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("Unzoo Browser opened no tab"))?;
+    let read = (|| -> Result<String> {
+        let mut last = String::new();
+        for attempt in 0..8 {
+            std::thread::sleep(Duration::from_secs(if attempt == 0 { 3 } else { 2 }));
+            let text = call("POST", "/api/v1/get-text", Some(&json!({"tab_id": id})))?
+                .pointer("/data/result/text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if !text.trim().is_empty() && text == last {
+                return Ok(text);
+            }
+            last = text;
+        }
+        if last.trim().is_empty() {
+            bail!("the page showed no text");
+        }
+        Ok(last)
+    })();
+    let _ = call("POST", "/api/v1/tabs/close", Some(&json!({"tab_id": id})));
+    read
 }
 
 /// Whether a profile folder is one Unzoo keeps for an MCP client
@@ -237,7 +295,7 @@ mod tests {
 
     #[test]
     fn the_reserved_profile_is_the_one_unzoo_keeps_for_the_client() {
-        assert_eq!(RESERVED_PROFILE, format!("mcp-{CLIENT}"));
+        assert_eq!(reserved_profile(), format!("mcp-{}", client()));
     }
 
     #[test]

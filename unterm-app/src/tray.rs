@@ -169,7 +169,7 @@ fn build_menu(labels: &Labels) -> Result<(tray_icon::menu::Menu, tray_icon::menu
 /// neighbour in their tray.
 fn icon() -> Option<tray_icon::Icon> {
     const MENU_BAR: &[u8] = include_bytes!("../../assets/icon/unterm-tray-44.png");
-    const APP: &[u8] = include_bytes!("../../assets/icon/unterm-icon-256.png");
+    const APP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app-icon-256.png"));
     let source = if cfg!(target_os = "macos") { MENU_BAR } else { APP };
     let image = image::load_from_memory(source).ok()?.to_rgba8();
     let (width, height) = image.dimensions();

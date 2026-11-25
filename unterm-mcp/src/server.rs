@@ -114,13 +114,7 @@ fn maybe_register_ai_agents() {
             // pattern as the Web Settings "copy launch command" path).
             // EXE_SUFFIX makes this find `unterm-cli.exe` on Windows, not just
             // bare `unterm-cli`. Fall back to a PATH lookup otherwise.
-            let cli_name = format!("unterm-cli{}", std::env::consts::EXE_SUFFIX);
-            let cli = std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(|d| d.join(&cli_name)))
-                .filter(|p| p.exists())
-                .map(|p| p.into_os_string())
-                .unwrap_or_else(|| std::ffi::OsString::from(cli_name));
+            let cli = unterm_protocol::program_path(unterm_protocol::Program::Cli).into_os_string();
 
             let mut cmd = std::process::Command::new(&cli);
             cmd.arg("setup-ai")

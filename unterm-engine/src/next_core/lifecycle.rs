@@ -131,7 +131,7 @@ mod tests {
             master: parking_lot::Mutex::new(pair.master),
             child: parking_lot::Mutex::new(child),
             writer,
-            output: Arc::new(parking_lot::Mutex::new(String::new())),
+            output: Arc::new(parking_lot::Mutex::new(super::super::pty_io::OutputLog::default())),
             screen: Arc::new(parking_lot::Mutex::new(super::super::NextCoreScreen::new(
                 80, 24,
             ))),

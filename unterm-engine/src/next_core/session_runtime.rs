@@ -121,7 +121,7 @@ pub(super) fn spawn(
     let root_pid = child.process_id();
     let reader = pair.master.try_clone_reader()?;
     let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
-    let output = Arc::new(Mutex::new(String::new()));
+    let output = Arc::new(Mutex::new(pty_io::OutputLog::default()));
     let screen = Arc::new(Mutex::new(NextCoreScreen::new(cols, rows)));
     let recording = Arc::new(Mutex::new(None));
     let activity = Arc::new(Mutex::new(SessionIoActivity::new()));
@@ -181,7 +181,7 @@ pub(super) fn spawn(
 
 fn spawn_reader_thread(
     pane_id: usize,
-    output: Arc<Mutex<String>>,
+    output: Arc<Mutex<pty_io::OutputLog>>,
     screen: Arc<Mutex<NextCoreScreen>>,
     recording: Arc<Mutex<Option<NextCoreRecording>>>,
     activity: Arc<Mutex<SessionIoActivity>>,

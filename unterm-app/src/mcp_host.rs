@@ -124,7 +124,7 @@ pub fn remember_window(id: u64, handle: std::sync::Arc<winit::window::Window>) {
             held.push(KnownWindow {
                 id,
                 handle,
-                title: String::from("Unterm"),
+                title: unterm_protocol::product_name(),
                 tabs: 1,
                 panes: Vec::new(),
             });

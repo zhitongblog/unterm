@@ -25,14 +25,7 @@ use unterm_tasks::{Artifact, NewArtifact};
 
 /// Where the blobs live.
 pub fn store_dir() -> PathBuf {
-    let base = std::env::var_os("UNTERM_STATE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".unterm"))
-        })
-        .unwrap_or_else(|| PathBuf::from(".unterm"));
+    let base = unterm_protocol::state_dir().unwrap_or_else(|| PathBuf::from(".unterm"));
     base.join("artifacts").join("sha256")
 }
 

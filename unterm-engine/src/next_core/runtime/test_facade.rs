@@ -42,7 +42,7 @@ impl RuntimeTestGuard {
 }
 
 pub(in crate::next_core) struct TestSessionHandles {
-    pub(in crate::next_core) output: Arc<Mutex<String>>,
+    pub(in crate::next_core) output: Arc<Mutex<super::super::pty_io::OutputLog>>,
     pub(in crate::next_core) screen: Arc<Mutex<super::super::NextCoreScreen>>,
     pub(in crate::next_core) recording: Arc<Mutex<Option<super::super::NextCoreRecording>>>,
     pub(in crate::next_core) activity: Arc<Mutex<super::super::activity::SessionIoActivity>>,

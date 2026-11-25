@@ -51,6 +51,58 @@ pub struct McpStdioCommand {
     pub tools: Vec<String>,
 }
 
+/// What a product that ships this bridge says to the agents that connect:
+/// `mcp-instructions.md` beside the executable, when it put one there.
+///
+/// The bridge is started by the person's own clients (Claude Code, Cursor,
+/// Codex) from a config line with no environment of the product's, so it
+/// cannot be told who installed it any other way. The file may start with
+/// `<!-- product: Name -->`, which names the product in the message an agent
+/// gets while the service is not running.
+struct Shipped {
+    product: Option<String>,
+    instructions: String,
+}
+
+fn shipped() -> Option<Shipped> {
+    let path = std::env::current_exe().ok()?.parent()?.join("mcp-instructions.md");
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_shipped(&text)
+}
+
+fn parse_shipped(text: &str) -> Option<Shipped> {
+    let text = text.trim_start_matches('\u{feff}').trim();
+    // Instructions go into every request the agent makes; a file that has
+    // grown past a few thousand tokens is a mistake, not a manual.
+    if text.is_empty() || text.len() > 16 * 1024 {
+        return None;
+    }
+    let mut product = None;
+    let mut body = text;
+    if let Some(rest) = text.strip_prefix("<!--") {
+        if let Some((comment, after)) = rest.split_once("-->") {
+            product = comment
+                .trim()
+                .strip_prefix("product:")
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty() && name.len() <= 64);
+            body = after.trim_start();
+        }
+    }
+    Some(Shipped { product, instructions: body.to_string() })
+}
+
+/// What a call gets while the service is not running.
+fn not_running(product: Option<&str>) -> String {
+    match product {
+        Some(product) => format!(
+            "{product}'s terminal service is not running. Ask the user to open {product}, then retry. \
+             The tools are still listed so you know what will be available once it is up."
+        ),
+        None => GUI_NOT_RUNNING.to_string(),
+    }
+}
+
 /// Is `name` served under `only` (empty: everything)?
 fn served(only: &[String], name: &str) -> bool {
     only.is_empty() || only.iter().any(|kept| kept == name)
@@ -111,6 +163,7 @@ pub fn run(cmd: McpStdioCommand) -> Result<()> {
         .filter(|tool| served(&only, tool.get("name").and_then(Value::as_str).unwrap_or("")))
         .collect();
 
+    let shipped = shipped();
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
 
@@ -194,7 +247,10 @@ pub fn run(cmd: McpStdioCommand) -> Result<()> {
                         // is and which tools drive it. Shared with the text
                         // `setup-ai` writes into context files, so the two
                         // discovery channels stay in sync.
-                        "instructions": super::setup_ai::MCP_INSTRUCTIONS,
+                        // A product that ships the bridge replaces it with its own.
+                        "instructions": shipped
+                            .as_ref()
+                            .map_or(super::setup_ai::MCP_INSTRUCTIONS, |own| own.instructions.as_str()),
                     }),
                 )?;
             }
@@ -252,7 +308,7 @@ pub fn run(cmd: McpStdioCommand) -> Result<()> {
                         &mut stdout,
                         id,
                         json!({
-                            "content": [ { "type": "text", "text": GUI_NOT_RUNNING } ],
+                            "content": [ { "type": "text", "text": not_running(shipped.as_ref().and_then(|own| own.product.as_deref())) } ],
                             "isError": true,
                         }),
                     )?;
@@ -433,6 +489,22 @@ fn normalize_input_line(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_product_names_itself_and_its_instructions() {
+        let own = parse_shipped("\u{feff}<!-- product: Unzoo One -->\n\nUse session.create first.\n").unwrap();
+        assert_eq!(own.product.as_deref(), Some("Unzoo One"));
+        assert_eq!(own.instructions, "Use session.create first.");
+        assert!(not_running(own.product.as_deref()).contains("open Unzoo One"));
+
+        let plain = parse_shipped("Just the text.").unwrap();
+        assert_eq!(plain.product, None);
+        assert_eq!(plain.instructions, "Just the text.");
+        assert_eq!(not_running(None), GUI_NOT_RUNNING);
+
+        assert!(parse_shipped("  \n").is_none());
+        assert!(parse_shipped(&"x".repeat(20_000)).is_none(), "too long to send with every request");
+    }
 
     #[test]
     fn a_short_list_serves_only_what_it_names() {

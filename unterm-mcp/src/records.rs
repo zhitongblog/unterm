@@ -78,8 +78,13 @@ fn task_context(params: &Value) -> unterm_services::agent_session::TaskContext {
         step_id: field("step_id"),
         idempotency_key: field("idempotency_key"),
         lease_id: field("lease_id"),
+        person_words: field("person_words"),
     }
 }
+
+/// Fields only the console may set: what the person said. An agent that
+/// starts or feeds a session over MCP cannot speak for the person.
+const PERSON_FIELDS: &[&str] = &["person_words", "from_person"];
 
 fn text(params: &Value, key: &str) -> Result<String> {
     params
@@ -110,6 +115,15 @@ pub fn dispatch_with(
     }
     if method == "agent_session.handover" {
         return handover(params);
+    }
+    if connection.conn_id != 0 && PERSON_FIELDS.iter().any(|field| params.get(*field).is_some()) {
+        let mut params = params.clone();
+        if let Some(map) = params.as_object_mut() {
+            for field in PERSON_FIELDS {
+                map.remove(*field);
+            }
+        }
+        return dispatch(method, &params);
     }
     dispatch(method, params)
 }
@@ -525,7 +539,8 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
 
         "agent_session.submit_input" => {
             let id = text(params, "session_id")?;
-            unterm_services::agent_session::submit_input(&id, &text(params, "text")?)?;
+            let from_person = params.get("from_person").and_then(Value::as_bool).unwrap_or(false);
+            unterm_services::agent_session::submit_input_as(&id, &text(params, "text")?, from_person)?;
             Ok(json!({"session_id": id, "submitted": true}))
         }
 
@@ -574,7 +589,10 @@ pub fn dispatch(method: &str, params: &Value) -> Result<Value> {
                 .unwrap_or_default();
             // The task ids the caller gives win; otherwise the old session's.
             let context = task_context(params);
-            let given = context.task_id.is_some() || context.run_id.is_some() || context.step_id.is_some();
+            let given = context.task_id.is_some()
+                || context.run_id.is_some()
+                || context.step_id.is_some()
+                || context.person_words.is_some();
             let id = unterm_services::agent_session::resume(
                 &text(params, "session_id")?,
                 params.get("prompt").and_then(Value::as_str),

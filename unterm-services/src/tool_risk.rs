@@ -89,6 +89,20 @@ pub fn asks_the_person(tool: &str) -> bool {
     matches!(tool, "AskUserQuestion")
 }
 
+/// A call to write into one of Unterm's terminals that came without the
+/// command it writes. OpenCode asks for an MCP tool before it has its
+/// arguments (its permission request carries an empty input), so the host
+/// cannot judge the command; the terminal judges it instead, when the
+/// write arrives with the command in it -- see `agent_session::Standing`.
+pub fn command_judged_by_terminal(tool: &str, input: &Value) -> bool {
+    let Some(("unterm", name)) = mcp_parts(tool) else { return false };
+    let name = name.replace('.', "_");
+    let writes = matches!(name.as_str(), "exec_run" | "exec_run_wait" | "exec_send" | "session_input" | "session_paste");
+    let says = command_of(input).is_some()
+        || ["text", "input", "data"].iter().any(|key| input.get(*key).is_some());
+    writes && !says
+}
+
 /// The servers whose tools are read here by name.
 const KNOWN_SERVERS: &[&str] = &["unterm", "unzoo"];
 
@@ -107,8 +121,58 @@ pub fn mcp_parts(tool: &str) -> Option<(&str, &str)> {
     })
 }
 
+/// Where the Core writes what each enabled plugin's tools do, in the state
+/// folder: `{"servers": {"plugin_x": {"tools": {"t": "read"}, "default": "send"}}}`.
+pub const PLUGIN_RISKS_FILE: &str = "plugins/tool-risks.json";
+
+/// A plugin's word for what a tool does, as a risk.
+pub fn plugin_word_risk(word: &str) -> Risk {
+    match word {
+        "read" => Risk::Read,
+        "change" => Risk::LocalMutation,
+        "run" => Risk::Exec,
+        "pay" => Risk::Financial,
+        "delete" => Risk::Destructive,
+        // "send", and anything a plugin did not say: it may leave the machine.
+        _ => Risk::ExternalSideEffect,
+    }
+}
+
+/// A plugin tool's risk, as its manifest declared it. Plugin servers are
+/// named `plugin_<id>`; CLIs call their tools `mcp__plugin_<id>__<tool>`
+/// (Claude Code) or `plugin_<id>_<tool>` (OpenCode). `None` when the tool is
+/// not a plugin's.
+pub fn plugin_risk(tool: &str) -> Option<Risk> {
+    let rest = tool.strip_prefix("mcp__").unwrap_or(tool);
+    if !rest.starts_with("plugin_") {
+        return None;
+    }
+    let path = unterm_protocol::state_path(PLUGIN_RISKS_FILE)?;
+    let table: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let servers = table.get("servers")?.as_object()?;
+    // The longest server name that prefixes the call: plugin_x and plugin_x_y
+    // may both exist.
+    let (server, spec) = servers
+        .iter()
+        .filter(|(name, _)| {
+            rest.strip_prefix(name.as_str())
+                .is_some_and(|after| after.starts_with("__") || after.starts_with('_') || after.starts_with('.'))
+        })
+        .max_by_key(|(name, _)| name.len())?;
+    let name = rest[server.len()..].trim_start_matches(['_', '.']);
+    let word = spec
+        .pointer(&format!("/tools/{name}"))
+        .or_else(|| spec.get("default"))
+        .and_then(Value::as_str)
+        .unwrap_or("send");
+    Some(plugin_word_risk(word))
+}
+
 /// The risk of one tool call, or `None` for a tool this does not know.
 pub fn classify(tool: &str, input: &Value, cwd: Option<&str>) -> Option<Risk> {
+    if let Some(risk) = plugin_risk(tool) {
+        return Some(risk);
+    }
     if tool.starts_with("mcp__") || mcp_parts(tool).is_some() {
         let (server, name) = mcp_parts(tool)?;
         return match server {
@@ -458,7 +522,7 @@ fn describe_full(tool: &str, input: &Value) -> (Verb, String) {
         if server == "unterm" {
             if name.replace('.', "_") == "agent_session_delegate" {
                 let task = field(&["prompt"]);
-                let agent = field(&["agent", "session_id"]);
+                let agent = field(&["helper", "agent", "session_id"]);
                 return (Verb::Delegate, if task.is_empty() { agent } else { format!("{agent}: {task}") });
             }
             if name.replace('.', "_") == "agent_session_handover" {
@@ -538,7 +602,41 @@ fn clip(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_plugins_tools_carry_the_risk_its_manifest_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("UNTERM_STATE_DIR", dir.path());
+        std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+        std::fs::write(
+            dir.path().join(PLUGIN_RISKS_FILE),
+            r#"{"servers": {"plugin_xtools": {"tools": {"drafts": "read", "publish": "send"}, "default": "send"},
+                            "plugin_xtools_lab": {"tools": {"wipe": "delete"}}}}"#,
+        )
+        .unwrap();
+        let none = serde_json::json!({});
+        // Claude Code's names and OpenCode's.
+        assert_eq!(classify("mcp__plugin_xtools__drafts", &none, None), Some(Risk::Read));
+        assert_eq!(classify("plugin_xtools_publish", &none, None), Some(Risk::ExternalSideEffect));
+        // A tool it did not describe may leave the machine.
+        assert_eq!(classify("mcp__plugin_xtools__whatever", &none, None), Some(Risk::ExternalSideEffect));
+        // The longer server name wins.
+        assert_eq!(classify("mcp__plugin_xtools_lab__wipe", &none, None), Some(Risk::Destructive));
+        // Not a plugin, not known: still None.
+        assert_eq!(classify("mcp__plugin_gone__x", &none, None), None);
+        assert_eq!(classify("mcp__other__x", &none, None), None);
+        std::env::remove_var("UNTERM_STATE_DIR");
+    }
     use super::*;
+
+    #[test]
+    fn a_terminal_write_without_its_command_is_left_to_the_terminal() {
+        assert!(command_judged_by_terminal("unterm_exec_run_wait", &json!({})), "OpenCode asks before it has the arguments");
+        assert!(command_judged_by_terminal("mcp__unterm__session_input", &Value::Null));
+        assert!(!command_judged_by_terminal("unterm_exec_run_wait", &json!({"command": "rm -rf x"})), "the host judges what it can see");
+        assert!(!command_judged_by_terminal("unterm_session_create", &json!({})), "not a write");
+        assert!(!command_judged_by_terminal("bash", &json!({})), "not Unterm's terminal");
+    }
     use serde_json::json;
 
     const CWD: &str = if cfg!(windows) { r"C:\Users\me\Documents\Unzoo One\report" } else { "/home/me/Documents/Unzoo One/report" };

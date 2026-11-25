@@ -20,8 +20,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
-/// The plugin's name; Claude Code shows its skills as `unzoo-one:<skill>`.
-const PLUGIN: &str = "unzoo-one";
+/// The plugin's name, the product's; Claude Code shows its skills as
+/// `<product>:<skill>`.
+fn plugin() -> String {
+    unterm_protocol::product_slug()
+}
 /// Where an agent writes a skill it is asked to save, inside its folder.
 pub const SAVE_DIR: &str = ".unzoo-skill";
 
@@ -146,7 +149,9 @@ pub fn set_enabled(name: &str, enabled: bool) -> Result<()> {
     if !enabled {
         off.push(name.to_string());
     }
-    write_disabled(&off)
+    write_disabled(&off)?;
+    resync();
+    Ok(())
 }
 
 /// Remove a skill of the person's own. Built-in ones can only be switched
@@ -165,7 +170,9 @@ pub fn delete(name: &str) -> Result<()> {
     std::fs::remove_dir_all(&dir).with_context(|| format!("could not remove {}", dir.display()))?;
     let mut off = disabled();
     off.retain(|known| known != name);
-    write_disabled(&off)
+    write_disabled(&off)?;
+    resync();
+    Ok(())
 }
 
 fn copy_dir(from: &Path, to: &Path, depth: usize) -> Result<()> {
@@ -205,6 +212,7 @@ pub fn import(from: &Path, replace: bool) -> Result<String> {
         std::fs::remove_dir_all(&target)?;
     }
     copy_dir(from, &target, 0)?;
+    resync();
     Ok(name)
 }
 
@@ -237,7 +245,7 @@ pub fn prepare_plugin() -> Result<Option<PathBuf>> {
     }
     let root = unterm_protocol::state_path("agent-plugin")
         .context("could not resolve the state directory")?
-        .join(PLUGIN);
+        .join(plugin());
     // Rebuilt every time: a skill switched off or deleted must not linger.
     // A run that is reading the old copy keeps its open files on Unix; on
     // Windows a busy file makes the removal fail, and the old copy is reused.
@@ -248,15 +256,93 @@ pub fn prepare_plugin() -> Result<Option<PathBuf>> {
     std::fs::write(
         root.join(".claude-plugin").join("plugin.json"),
         serde_json::to_vec_pretty(&json!({
-            "name": PLUGIN,
+            "name": plugin(),
             "version": "1.0.0",
-            "description": "Skills for working on this computer through Unzoo One: its terminal, its browser, and the person's own saved skills.",
+            "description": format!("Skills for working on this computer through {}: its terminal, its browser, and the person's own saved skills.", unterm_protocol::product_name()),
         }))?,
     )?;
     for (name, _, _, path) in enabled {
         copy_dir(&path, &root.join("skills").join(name), 0)?;
     }
     Ok(Some(root))
+}
+
+/// Left in every skill folder copied into another client's skills, so the
+/// copies can be told from the person's own and only they are replaced or
+/// removed.
+fn mark() -> String {
+    format!(".{}-skill", unterm_protocol::product_slug())
+}
+
+/// Built-in skills that only mean something in a run the product hosts (where
+/// a task has a work folder and its outputs are collected).
+const HOSTED_ONLY: &[&str] = &["unzoo-deliverables"];
+
+/// Put the enabled skills into a client's own skills folder (`~/.claude/skills`,
+/// `~/.codex/skills`...), for the person's clients that use this terminal.
+///
+/// Only copies made here are touched: a folder of the person's with the same
+/// name is left alone and reported as skipped, and a copy of a skill since
+/// switched off or deleted is removed. Returns (installed, skipped).
+pub fn install_into(dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
+    let off = disabled();
+    let wanted: Vec<_> = all()
+        .into_iter()
+        .filter(|skill| !off.contains(&skill.0) && !HOSTED_ONLY.contains(&skill.0.as_str()))
+        .collect();
+    std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.path().join(mark()).is_file() && !wanted.iter().any(|skill| skill.0 == name) {
+            std::fs::remove_dir_all(entry.path())
+                .with_context(|| format!("could not remove {}", entry.path().display()))?;
+        }
+    }
+    let (mut installed, mut skipped) = (Vec::new(), Vec::new());
+    for (name, _, _, path) in wanted {
+        let target = dir.join(&name);
+        if target.exists() {
+            if !target.join(mark()).is_file() {
+                skipped.push(name);
+                continue;
+            }
+            std::fs::remove_dir_all(&target)
+                .with_context(|| format!("could not replace {}", target.display()))?;
+        }
+        copy_dir(&path, &target, 0)?;
+        std::fs::write(
+            target.join(mark()),
+            format!(
+                "Copied here by {}, which keeps it up to date and removes it when this client is disconnected.\n",
+                unterm_protocol::product_name()
+            ),
+        )?;
+        installed.push(name);
+    }
+    Ok((installed, skipped))
+}
+
+/// Take back every copy [`install_into`] made in `dir`; nothing else there is
+/// touched. Returns how many were removed.
+pub fn remove_from(dir: &Path) -> Result<usize> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(0) };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if entry.path().join(mark()).is_file() {
+            std::fs::remove_dir_all(entry.path())
+                .with_context(|| format!("could not remove {}", entry.path().display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// After the skills changed: bring the connected clients' copies up to date.
+/// Best effort -- the change itself has already been made.
+fn resync() {
+    if let Err(error) = super::clients::sync_skills() {
+        log::warn!("could not update the skills in connected clients: {error:#}");
+    }
 }
 
 /// What an agent is asked when a person saves a conversation as a skill.
@@ -268,7 +354,8 @@ Write it as `{SAVE_DIR}/<short-kebab-case-name>/SKILL.md` in the current folder.
 steps that worked, in order: the commands, URLs and page actions, exactly. Write what changes from one use to the next \
 as named inputs, and leave out anything that was specific to this one time. Never include passwords, tokens, cookies or \
 personal data. If a small script makes the steps reliable, put it next to SKILL.md and say how to run it. Reply with \
-the skill's name and one line on what it does; do not mention the folder, Unzoo One files the skill away itself."
+the skill's name and one line on what it does; do not mention the folder, {product} files the skill away itself.",
+        product = unterm_protocol::product_name()
     )
 }
 

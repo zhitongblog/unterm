@@ -1117,6 +1117,16 @@ pub struct ScrollbackTextSnapshot {
     pub viewport_rows: usize,
 }
 
+/// A stretch of a pane's raw output. `start` and `end` are byte offsets into
+/// everything the pane ever printed; `start` is later than asked for when the
+/// bytes asked for were already dropped, and the reader then starts over.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputSince {
+    pub text: String,
+    pub start: u64,
+    pub end: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputActivitySnapshot {
     pub total_writes: u64,
@@ -1482,6 +1492,17 @@ pub trait ScreenEngine {
         pane_id: usize,
         request: ScrollbackTextRequest,
     ) -> Result<ScrollbackTextSnapshot>;
+    /// What the pane printed from byte `from` of its whole output on (all
+    /// that is kept without one), exactly as it arrived, at most `max_bytes`
+    /// of the newest. For a viewer replaying the pane in its own emulator.
+    fn read_output_since(
+        &self,
+        _pane_id: usize,
+        _from: Option<u64>,
+        _max_bytes: usize,
+    ) -> Result<OutputSince> {
+        anyhow::bail!("this engine does not keep the raw output")
+    }
     #[allow(dead_code)]
     fn read_styled_scrollback(
         &self,

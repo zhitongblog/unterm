@@ -111,7 +111,7 @@ pub fn offer(message: &str) {
         const MB_YESNO: u32 = 0x04;
         const IDYES: i32 = 6;
         let answer = unsafe {
-            MessageBoxW(0, wide(&question).as_ptr(), wide("Unterm").as_ptr(), MB_ICONERROR | MB_YESNO)
+            MessageBoxW(0, wide(&question).as_ptr(), wide(&unterm_protocol::product_name()).as_ptr(), MB_ICONERROR | MB_YESNO)
         };
         if answer == IDYES {
             open(&url);

@@ -29,6 +29,9 @@ pub fn notify(text: String) {
 
 /// The newer release the background check found, if it found one.
 pub fn available() -> Option<String> {
+    if !unterm_protocol::self_updating() {
+        return None;
+    }
     let state = unterm_settings::update_check::read_state();
     if !state.get("upgrade_available").and_then(|v| v.as_bool()).unwrap_or(false) {
         return None;

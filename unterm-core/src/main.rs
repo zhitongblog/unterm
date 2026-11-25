@@ -3,6 +3,14 @@ use unterm_core::lifetime::{self, CoreMode};
 use unterm_core::{clear_discovery, try_acquire_instance_lock, write_discovery, CoreServer};
 
 fn main() -> Result<()> {
+    // A copy of this program reaches other consoles for it (Ctrl+C in a
+    // terminal), so the Core never gives up its own hidden console.
+    if let Some(code) = unterm_services::interrupt::run_console_helper() {
+        std::process::exit(code);
+    }
+    if let Ok(program) = std::env::current_exe() {
+        unterm_services::interrupt::use_console_helper(program);
+    }
     let args = CoreArgs::parse(std::env::args_os().skip(1))?;
     if args.version {
         println!("unterm-core {}", unterm_protocol::PRODUCT_VERSION);
@@ -78,6 +86,9 @@ fn main() -> Result<()> {
     // this process's environment -- a Core started by the CLI or headless
     // inherits nothing from any window that would otherwise have set them.
     unterm_services::process_env::apply(&config);
+    // The proxy setting is the whole app's: everything started from here
+    // (terminals, agents, plugins, git) inherits it from this process.
+    unterm_services::launch_env::sync_proxy_to_process_env();
     unterm_engine::next_core::NextCoreEngine::set_new_session_scrollback_lines(
         unterm_services::settings::scrollback_lines(&config),
     );
@@ -122,9 +133,13 @@ fn main() -> Result<()> {
     // sessions, and two versions can migrate the same database differently.
     // Said at startup, once, because it explains a class of failure nobody
     // would otherwise connect to having installed Unterm twice.
-    let installs = unterm_services::install::survey();
-    for conflict in unterm_services::install::conflicts(&installs) {
-        eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
+    // A product shipping the runtime has its own state directory, so a
+    // standalone Unterm beside it is no conflict.
+    if unterm_protocol::is_standalone() {
+        let installs = unterm_services::install::survey();
+        for conflict in unterm_services::install::conflicts(&installs) {
+            eprintln!("unterm-core: {} — {}", conflict.reason, conflict.advice);
+        }
     }
 
     write_discovery(&endpoint.to_string(), &token, mcp_port, http_port, server.started_at())?;
@@ -202,6 +217,9 @@ fn main() -> Result<()> {
     // However `run` ended -- `core.shutdown`, a finished drain, the orphan
     // watchdog -- the sessions end with it, the ordinary way.
     unterm_core::destroy_all_sessions();
+    // The plugins' programs too: the job is disarmed below, and they would
+    // otherwise outlive the Core.
+    unterm_settings::plugins::stop_all();
     let _ = clear_discovery();
     // An orderly exit: every session has been closed. What is left in the job
     // is what the user launched from a shell to keep (an editor window), and

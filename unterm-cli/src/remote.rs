@@ -139,7 +139,7 @@ pub fn run(cmd: RemoteCommand, json_out: bool) -> Result<()> {
                     p["scope_label"].as_str().unwrap_or("完全控制"),
                     p["scope"].as_str().unwrap_or("full")
                 );
-                println!("  端口       :  {}", p["port"].as_u64().unwrap_or(19880));
+                println!("  端口       :  {}", p["port"].as_u64().unwrap_or(unterm_settings::remote::default_remote_port() as u64));
                 println!(
                     "  机器指纹   :  {}",
                     p["fingerprint"].as_str().unwrap_or("")
@@ -231,7 +231,7 @@ pub fn run(cmd: RemoteCommand, json_out: bool) -> Result<()> {
             Ok(())
         }
         RemoteSubCommand::Ports => {
-            let ports = unterm_settings::harness::discover_listening_ports(&[19880]);
+            let ports = unterm_settings::harness::discover_listening_ports(&[unterm_settings::remote::default_remote_port()]);
             if json_out {
                 println!("{}", serde_json::to_string_pretty(&ports)?);
             } else if ports.is_empty() {
@@ -373,7 +373,7 @@ pub fn run(cmd: RemoteCommand, json_out: bool) -> Result<()> {
 fn print_status(s: &Value) {
     let enabled = s.get("enabled").and_then(Value::as_bool).unwrap_or(false);
     let running = s.get("running").and_then(Value::as_bool).unwrap_or(false);
-    let port = s.get("port").and_then(Value::as_u64).unwrap_or(19880);
+    let port = s.get("port").and_then(Value::as_u64).unwrap_or(unterm_settings::remote::default_remote_port() as u64);
     println!(
         "状态       : {}",
         if enabled && running {

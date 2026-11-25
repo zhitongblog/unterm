@@ -24,6 +24,7 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use unterm_brain::runtime::{self, Running, Spec};
 use unterm_brain::host::{self, Decision, HostProtocol};
@@ -145,6 +146,12 @@ pub struct TaskContext {
     pub step_id: Option<String>,
     pub idempotency_key: Option<String>,
     pub lease_id: Option<String>,
+    /// What the person said that started this turn: their request, or the
+    /// task they saved. Only an in-process caller (the console) can set it;
+    /// an agent asking for a session never can. The reviewer of a sending
+    /// step takes only this as the person's word.
+    #[serde(skip)]
+    pub person_words: Option<String>,
 }
 
 impl TaskContext {
@@ -197,6 +204,52 @@ struct Live {
     grant: Option<String>,
     /// How much it answers on its own, for a helper it hands work to.
     autonomy: Option<crate::tool_risk::Autonomy>,
+    /// Set once the CLI has asked to write to a terminal without saying
+    /// what: from then on Unterm's terminal judges its commands.
+    terminal_judges: Arc<AtomicBool>,
+    /// Sending steps asked about and done, so the same one is never
+    /// answered unasked twice.
+    commits: Arc<Mutex<Commits>>,
+    /// What the person has said in this session, oldest first.
+    person: Arc<Mutex<Vec<String>>>,
+}
+
+/// Sending steps of one session: asked (by request id) and done (by what
+/// they were).
+#[derive(Default)]
+struct Commits {
+    asked: HashMap<String, String>,
+    done: HashMap<String, std::time::Instant>,
+}
+
+impl Commits {
+    /// The same send was already let through in this session lately.
+    fn repeats(&self, fingerprint: &str) -> bool {
+        self.done
+            .get(fingerprint)
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(6 * 3600))
+    }
+
+    fn allowed(&mut self, request_id: &str) {
+        if let Some(fingerprint) = self.asked.remove(request_id) {
+            self.done.insert(fingerprint, std::time::Instant::now());
+        }
+    }
+}
+
+thread_local! {
+    /// The person's earlier words of a conversation being resumed, handed
+    /// from [`resume`] to [`start_with`] without widening every caller.
+    static EARLIER_WORDS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// How long the reviewer may take before the person is asked instead.
+const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Whether sending steps are reviewed before the person is asked. On unless
+/// `UNZOO_REVIEWER=off`; the tests that drive fake agents switch it off.
+fn reviewer_on() -> bool {
+    !matches!(std::env::var("UNZOO_REVIEWER").as_deref(), Ok("off" | "0" | "false"))
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
@@ -430,6 +483,10 @@ pub struct ResumeRecord {
     pub run_id: Option<String>,
     pub step_id: Option<String>,
     pub written_at: String,
+    /// What the person has said in this conversation so far, so the
+    /// reviewer of a later turn sees the request and not only "ok, send it".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub person: Vec<String>,
 }
 
 fn resume_path(session_id: &str) -> Result<std::path::PathBuf> {
@@ -511,6 +568,7 @@ pub fn resume(
         },
     };
     let command = command.filter(|c| !c.is_empty()).unwrap_or_else(|| record.command.clone());
+    EARLIER_WORDS.with(|earlier| *earlier.borrow_mut() = record.person.clone());
     start_with(
         &command,
         record.cwd.as_deref(),
@@ -625,6 +683,14 @@ fn start_with(
         None
     };
     let pending: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+    let terminal_judges = Arc::new(AtomicBool::new(false));
+    let commits = Arc::new(Mutex::new(Commits::default()));
+    let mut said: Vec<String> = EARLIER_WORDS.with(|earlier| std::mem::take(&mut *earlier.borrow_mut()));
+    if let Some(words) = context.person_words.as_deref().filter(|w| !w.trim().is_empty()) {
+        said.push(words.to_string());
+    }
+    let person = Arc::new(Mutex::new(said));
+    let review_base = command.clone();
     let turn = TurnTracker::default();
     let tap: Option<runtime::Tap> = host.as_ref().map(|host| {
         let host = Arc::clone(host);
@@ -672,11 +738,16 @@ fn start_with(
             let context = context.clone();
             let id = id.clone();
             let pending = Arc::clone(&pending);
+            let terminal_judges = Arc::clone(&terminal_judges);
             let turn = turn.clone();
             let host = host.clone();
             let writer = running.stdin_writer();
             let cwd = cwd.map(str::to_string);
             let watch = running.external_id_watch();
+            let commits = Arc::clone(&commits);
+            let person = Arc::clone(&person);
+            let mut page = crate::consequence::PageMemory::default();
+            let mut recent = String::new();
             let mut resume_written: Option<String> = None;
             let resume_base = host.as_ref().map(|_| ResumeRecord {
                 session_id: id.clone(),
@@ -690,6 +761,7 @@ fn start_with(
                 run_id: context.run_id.clone(),
                 step_id: context.step_id.clone(),
                 written_at: String::new(),
+                person: person.lock().unwrap().clone(),
             });
             move || {
                 for event in stream {
@@ -707,12 +779,35 @@ fn start_with(
                             }
                         }
                     }
+                    match &event {
+                        BrainEvent::ToolResult { output: Some(output), .. } => {
+                            page.observe_result(output);
+                            remember_evidence(&mut recent, output);
+                        }
+                        BrainEvent::ToolRequested { name, arguments, .. } => page.observe_request(name, arguments),
+                        BrainEvent::Text { text } => remember_evidence(&mut recent, text),
+                        _ => {}
+                    }
+                    let mut commit: Option<crate::consequence::Commit> = None;
+                    let mut repeat = false;
+                    let mut review_job: Option<(String, String)> = None;
                     let mut ruled = None;
                     let mut judged = None;
                     let mut redirected = None;
                     let mut asked_risk = None;
+                    let mut left_to_terminal = None;
                     if let BrainEvent::PermissionRequested { request_id, tool, input, .. } = &event {
-                        let risk = crate::tool_risk::classify(tool, input, cwd.as_deref());
+                        let mut risk = crate::tool_risk::classify(tool, input, cwd.as_deref());
+                        // A step that sends, pays or deletes is judged by
+                        // what it commits, not as one more click.
+                        commit = crate::consequence::commit_of(tool, input, &page);
+                        page.observe_request(tool, input);
+                        if let Some(found) = &commit {
+                            risk = Some(risk.map_or(found.risk, |r| r.max(found.risk)));
+                            let mut commits = commits.lock().unwrap();
+                            repeat = commits.repeats(&found.fingerprint);
+                            commits.asked.insert(request_id.clone(), found.fingerprint.clone());
+                        }
                         asked_risk = risk;
                         // The CLI's own "ask the user" tool has no screen
                         // here: put to a person it is a permission card with
@@ -722,16 +817,35 @@ fn start_with(
                         // person answers in their next message.
                         if let (Some(host), true) = (&host, crate::tool_risk::asks_the_person(tool)) {
                             redirected = Some((request_id.clone(), host.clone(), input.clone()));
+                        } else if let (Some(host), true, true) =
+                            (&host, governed, crate::tool_risk::command_judged_by_terminal(tool, input))
+                        {
+                            // Nothing to judge here: the command comes with
+                            // the write itself, and Unterm's terminal --
+                            // told so before the agent hears yes -- puts it
+                            // to the autonomy level, a rule or a person.
+                            terminal_judges.store(true, Ordering::SeqCst);
+                            left_to_terminal = Some((request_id.clone(), host.clone(), input.clone()));
                         } else if let (Some(host), Some(rule)) = (
                             &host,
-                            crate::agent_policy::evaluate(cwd.as_deref(), tool, input),
+                            // "Always allow clicks" was said about a click;
+                            // a standing no still holds for a send.
+                            crate::agent_policy::evaluate(cwd.as_deref(), tool, input).filter(|rule| {
+                                commit.is_none() || matches!(rule.decision, crate::agent_policy::RuleDecision::Deny)
+                            }),
                         ) {
                             ruled = Some((request_id.clone(), host.clone(), rule, input.clone()));
                         } else if let (Some(host), Some(level), Some(risk)) = (&host, autonomy, risk) {
-                            if level.allows(risk) {
+                            // The same send again is never answered unasked:
+                            // the first one may already have gone out.
+                            if level.allows(risk) && !repeat {
                                 judged = Some((request_id.clone(), host.clone(), risk, input.clone()));
                             } else {
                                 pending.lock().unwrap().insert(request_id.clone(), input.clone());
+                                let reviewable = commit.as_ref().is_some_and(|c| c.risk == unterm_gateway::Risk::ExternalSideEffect);
+                                if reviewable && !repeat && governed && reviewer_on() && !person.lock().unwrap().is_empty() {
+                                    review_job = Some((request_id.clone(), json!({"tool": tool, "input": input}).to_string()));
+                                }
                             }
                         } else {
                             // Recorded before the event is published, so a
@@ -746,14 +860,44 @@ fn start_with(
                     {
                         approval.insert("risk".into(), json!(risk.as_str()));
                     }
+                    if let (Some(found), Some(approval)) =
+                        (&commit, described.get_mut("approval").and_then(Value::as_object_mut))
+                    {
+                        approval.insert("consequence".into(), json!(found.what));
+                        approval.insert("commit".into(), found.parts());
+                        if repeat {
+                            approval.insert("repeat".into(), json!(true));
+                        }
+                        if review_job.is_some() {
+                            approval.insert("review".into(), json!({"state": "running"}));
+                        }
+                    }
                     turn.stamp(&event, &mut described);
                     push(&events, &context, &id, described);
+                    if let (Some((request_id, call)), Some(found)) = (review_job, &commit) {
+                        let case = crate::reviewer::Case {
+                            person: person.lock().unwrap().clone(),
+                            action: found.what.clone(),
+                            call,
+                            evidence: recent.clone(),
+                        };
+                        spawn_review(id.clone(), request_id, case, review_base.clone(), adapter_id, Arc::clone(&events), context.clone());
+                    }
                     if let Some((request_id, host, risk, input)) = judged {
+                        commits.lock().unwrap().allowed(&request_id);
                         for line in host.permission_reply(&request_id, &Decision::Allow, &input) {
                             let _ = writer.write_line(&line);
                         }
                         let mut resolved = resolution(&request_id, &Decision::Allow, "autonomy");
                         resolved["approval"]["risk"] = json!(risk.as_str());
+                        turn.stamp_now(&mut resolved);
+                        push(&events, &context, &id, resolved);
+                    }
+                    if let Some((request_id, host, input)) = left_to_terminal {
+                        for line in host.permission_reply(&request_id, &Decision::Allow, &input) {
+                            let _ = writer.write_line(&line);
+                        }
+                        let mut resolved = resolution(&request_id, &Decision::Allow, "terminal");
                         turn.stamp_now(&mut resolved);
                         push(&events, &context, &id, resolved);
                     }
@@ -807,9 +951,63 @@ fn start_with(
             cwd: cwd.map(str::to_string),
             grant,
             autonomy,
+            terminal_judges,
+            commits,
+            person,
         },
     );
     Ok(id)
+}
+
+fn remember_evidence(recent: &mut String, text: &str) {
+    recent.push_str(text);
+    recent.push('\n');
+    let count = recent.chars().count();
+    if count > 6000 {
+        *recent = recent.chars().skip(count - 6000).collect();
+    }
+}
+
+/// Review a sending step in the background. A clear yes answers for the
+/// person; anything else stays with them, with the reason on the question.
+fn spawn_review(
+    id: String,
+    request_id: String,
+    case: crate::reviewer::Case,
+    base: Vec<String>,
+    adapter: &'static str,
+    events: Arc<Mutex<Vec<Value>>>,
+    context: TaskContext,
+) {
+    let _ = std::thread::Builder::new().name("agent-session-review".into()).spawn(move || {
+        let outcome = crate::reviewer::command_for(&base, adapter)
+            .ok_or_else(|| anyhow!("this agent has no reviewer"))
+            .and_then(|(argv, file)| {
+                crate::reviewer::run(&argv, file.as_deref(), &crate::reviewer::prompt(&case), REVIEW_TIMEOUT)
+            })
+            .map(|reply| crate::reviewer::verdict(&reply));
+        let reason = match outcome {
+            Ok(review) if review.allow => {
+                match decide_as(&id, &request_id, true, None, false, "reviewer", Some(&review.reason)) {
+                    Ok(_) => return,
+                    // Answered by the person meanwhile, or the session is gone.
+                    Err(_) => return,
+                }
+            }
+            Ok(review) => review.reason,
+            Err(error) => format!("The reviewer could not run ({error}); please decide."),
+        };
+        let review = json!({"state": "ask", "reason": reason});
+        {
+            let mut events = events.lock().unwrap();
+            if let Some(asked) = events.iter_mut().rev().find(|e| {
+                e["event"] == "approval.requested" && e["approval"]["request_id"] == request_id.as_str()
+            }) {
+                asked["approval"]["review"] = review.clone();
+            }
+        }
+        push(&events, &context, &id, json!({"event": "approval.reviewed", "approval": {"request_id": request_id, "review": review}}));
+    });
 }
 
 /// What a live session works under: its workspace, how much it answers on
@@ -821,6 +1019,11 @@ pub struct Standing {
     pub autonomy: Option<crate::tool_risk::Autonomy>,
     pub governed: bool,
     pub context: TaskContext,
+    /// The host could not see the commands this session writes to a
+    /// terminal ([`crate::tool_risk::command_judged_by_terminal`]): the
+    /// terminal judges each one when it arrives, under [`Self::autonomy`],
+    /// instead of taking the host's word for it.
+    pub terminal_judges: bool,
 }
 
 pub fn standing(id: &str) -> Option<Standing> {
@@ -831,6 +1034,7 @@ pub fn standing(id: &str) -> Option<Standing> {
         autonomy: live.autonomy,
         governed: live.grant.is_some(),
         context: live.context.clone(),
+        terminal_judges: live.terminal_judges.load(Ordering::SeqCst),
     })
 }
 
@@ -978,10 +1182,19 @@ fn write_lines(running: &runtime::Running, lines: Vec<String>) -> Result<()> {
 
 /// Put something on the agent's stdin.
 pub fn submit_input(id: &str, text: &str) -> Result<()> {
+    submit_input_as(id, text, false)
+}
+
+/// [`submit_input`], saying whether the person typed it (the console) or
+/// another program did; only the person's words count when a send is reviewed.
+pub fn submit_input_as(id: &str, text: &str, from_person: bool) -> Result<()> {
     let sessions = sessions().lock().unwrap();
     let live = sessions
         .get(id)
         .ok_or_else(|| anyhow!("no such session: {id}"))?;
+    if from_person {
+        live.person.lock().unwrap().push(text.to_string());
+    }
     if let Some(host) = &live.host {
         // A hosted session reads stdin as a stream of user turns.
         return write_lines(&live.running, host.user_message(text));
@@ -1047,7 +1260,7 @@ pub fn decide_and_remember(
             .get(id)
             .and_then(|live| live.pending.lock().unwrap().get(request_id).cloned())
     };
-    let mut resolved = decide_inner(id, request_id, allow, message, interrupt)?;
+    let mut resolved = decide_as(id, request_id, allow, message, interrupt, "caller", None)?;
     if let (Some((tool, cwd)), Some(input)) = (asked_tool, pending_input) {
         match crate::agent_policy::remember(cwd.as_deref(), &tool, &input) {
             Ok(rule) => resolved["remembered"] = serde_json::to_value(rule)?,
@@ -1057,12 +1270,14 @@ pub fn decide_and_remember(
     Ok(resolved)
 }
 
-fn decide_inner(
+fn decide_as(
     id: &str,
     request_id: &str,
     allow: bool,
     message: Option<&str>,
     interrupt: bool,
+    decided_by: &str,
+    reason: Option<&str>,
 ) -> Result<Value> {
     let sessions = sessions().lock().unwrap();
     let live = sessions
@@ -1087,7 +1302,13 @@ fn decide_inner(
         }
     };
     write_lines(&live.running, host.permission_reply(request_id, &decision, &input))?;
-    let mut resolved = resolution(request_id, &decision, "caller");
+    if allow {
+        live.commits.lock().unwrap().allowed(request_id);
+    }
+    let mut resolved = resolution(request_id, &decision, decided_by);
+    if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+        resolved["approval"]["reason"] = json!(reason);
+    }
     live.turn.stamp_now(&mut resolved);
     push(&live.events, &live.context, id, resolved.clone());
     Ok(resolved)
@@ -1227,6 +1448,9 @@ pub fn close(id: &str) -> Result<Value> {
         cwd: _,
         grant,
         autonomy: _,
+        terminal_judges: _,
+        commits: _,
+        person: _,
     } = live;
     // First thing: from here on nothing this session's agent sends through
     // Unterm counts as already approved.
@@ -2419,6 +2643,70 @@ read -r rest || exit 0
         close(&id).unwrap();
     }
 
+    /// Reads a page, then clicks its Send button; asked again on the next turn.
+    const SENDS_MAIL: &str = r#"
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+read -r prompt
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__unzoo__browser_a11y_snapshot","input":{}}]}}'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Page: Inbox (https://mail.example.com/inbox)\nref:7 div role=textbox ops=TYPE_TEXT \"Message Body\"\nref:9 button ops=CLICK \"Send\""}]}}'
+printf '%s\n' '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"mcp__unzoo__browser_click","input":{"selector":"ref=9"}}}'
+read -r reply
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"clicked"}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
+read -r followup || exit 0
+printf '%s\n' '{"type":"system","subtype":"init","model":"m","session_id":"s1"}'
+printf '%s\n' '{"type":"control_request","request_id":"r2","request":{"subtype":"can_use_tool","tool_name":"mcp__unzoo__browser_click","input":{"selector":"ref=9"}}}'
+read -r reply
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
+"#;
+
+    fn sends_mail(level: crate::tool_risk::Autonomy) -> String {
+        start_with_autonomy(
+            &a_codex_like_agent(SENDS_MAIL),
+            None,
+            &[],
+            Some("tidy my inbox"),
+            Some("claude"),
+            TaskContext::default(),
+            false,
+            level,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn clicking_send_is_asked_at_the_balanced_level_and_says_what_it_sends() {
+        let _dir = isolate();
+        let id = sends_mail(crate::tool_risk::Autonomy::Balanced);
+        let events = wait_for(&id, |e| e.iter().any(|e| e["event"] == "approval.requested"));
+        let asked = events.iter().find(|e| e["event"] == "approval.requested").expect("asked");
+        assert_eq!(asked["approval"]["risk"], "external_side_effect", "{asked}");
+        assert_eq!(asked["approval"]["consequence"], "Click “Send” on mail.example.com", "{asked}");
+        assert!(!events.iter().any(|e| e["event"] == "approval.resolved"), "{events:#?}");
+        assert_eq!(pending_approvals(&id).unwrap(), ["r1"]);
+        close(&id).unwrap();
+    }
+
+    #[test]
+    fn the_same_send_a_second_time_is_asked_even_when_the_first_ran_unasked() {
+        let _dir = isolate();
+        let id = sends_mail(crate::tool_risk::Autonomy::Autonomous);
+        wait_for(&id, |e| said(e, "clicked"));
+        submit_input(&id, "again").unwrap();
+        let events = wait_for(&id, |e| {
+            e.iter().any(|e| e["event"] == "approval.requested" && e["approval"]["request_id"] == "r2")
+        });
+        let first = events.iter().find(|e| e["event"] == "approval.resolved").expect("the first ran");
+        assert_eq!(first["approval"]["decided_by"], "autonomy");
+        let second = events
+            .iter()
+            .find(|e| e["event"] == "approval.requested" && e["approval"]["request_id"] == "r2")
+            .unwrap();
+        assert_eq!(second["approval"]["repeat"], true, "{second}");
+        assert_eq!(pending_approvals(&id).unwrap(), ["r2"]);
+        close(&id).unwrap();
+    }
+
     #[test]
     fn a_call_above_the_autonomy_level_is_still_asked() {
         let _dir = isolate();
@@ -2632,6 +2920,7 @@ read -r rest || exit 0
             step_id: Some("stp_upstream".into()),
             idempotency_key: Some("idem-1".into()),
             lease_id: Some("lse_1".into()),
+            person_words: None,
         };
         let id = start(&a_codex_like_agent(A_TURN), None, &[], None, Some("codex"), context).unwrap();
         close(&id).unwrap();

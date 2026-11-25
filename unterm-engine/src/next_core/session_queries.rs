@@ -12,11 +12,15 @@ pub(super) fn shell_snapshot(pane_id: usize) -> Result<ShellSnapshot> {
     Ok(shell)
 }
 
-pub(super) fn output(pane_id: usize) -> Result<String> {
+pub(super) fn output(pane_id: usize, from: Option<u64>, max_bytes: usize) -> Result<crate::OutputSince> {
     let output = session_handles::output_current(pane_id)?;
-
-    let text = output.lock().clone();
-    Ok(text)
+    let log = output.lock();
+    let (start, text) = log.since(from, max_bytes);
+    Ok(crate::OutputSince {
+        text: text.to_string(),
+        start,
+        end: log.end(),
+    })
 }
 
 #[cfg(test)]
@@ -33,7 +37,7 @@ mod tests {
 
     #[test]
     fn output_reports_missing_session() {
-        let err = output(404).expect_err("missing session should fail");
+        let err = output(404, None, usize::MAX).expect_err("missing session should fail");
 
         assert!(err.to_string().contains("next-core session 404 not found"));
     }

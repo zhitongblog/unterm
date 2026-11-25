@@ -131,14 +131,151 @@ fn protocol_major(version: &str) -> Option<&str> {
 /// stayed hidden: every test that set it saw the two agree.
 /// The product name a window shows (its title bar, the window title an agent
 /// reads back). `Unterm`, unless the host that launched it says otherwise
-/// with `UNTERM_PRODUCT_NAME` -- an application that ships this terminal as
-/// one of its own features names its windows after itself.
+/// with `UNTERM_PRODUCT_NAME`, or the install it runs from says so in
+/// [`PRODUCT_FILE`] beside the program -- an application that ships this
+/// terminal as one of its own features names its windows after itself.
+///
+/// The name also decides where state lives ([`state_dir`],
+/// [`core_state_dir`]): a product that ships the runtime keeps its own, so
+/// it and a standalone Unterm run side by side, each with its own Core.
 pub fn product_name() -> String {
     std::env::var("UNTERM_PRODUCT_NAME")
         .ok()
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
+        .and_then(|name| valid_product_name(&name))
+        .or_else(installed_product_name)
         .unwrap_or_else(|| "Unterm".to_string())
+}
+
+/// Whether this install updates itself from Unterm's releases. Only a
+/// standalone Unterm does: a product that ships the runtime as one of its
+/// features brings its own installer and updates, and Unterm's releases are
+/// a different product -- installing one there would put a second program
+/// on the person's computer, downloaded and run in the background.
+pub fn self_updating() -> bool {
+    product_name() == "Unterm"
+}
+
+/// The file beside the programs that names the product they were installed
+/// as, for the processes nobody hands `UNTERM_PRODUCT_NAME` to: the MCP
+/// bridge an AI client starts, the terminal opened from a shortcut.
+pub const PRODUCT_FILE: &str = "unterm-product.txt";
+
+fn valid_product_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control)).then(|| name.to_string())
+}
+
+fn installed_product_name() -> Option<String> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        let text = std::fs::read_to_string(exe.parent()?.join(PRODUCT_FILE)).ok()?;
+        valid_product_name(text.lines().next()?)
+    })
+    .clone()
+}
+
+/// The terminal's name as programs inside it see it (`TERM_PROGRAM`): the
+/// person's choice in `compat.json` (some tools only recognise a few
+/// terminals), else the product's name as one word -- `Unterm`, or
+/// `UnzooOne` for Unzoo One.
+pub fn term_program() -> String {
+    state_path("compat.json")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("term_program").and_then(|v| v.as_str()).map(str::trim).map(str::to_string))
+        .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
+        .unwrap_or_else(default_term_program)
+}
+
+/// [`term_program`] when the person has not chosen one.
+pub fn default_term_program() -> String {
+    let name: String = product_name().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
+    if name.is_empty() {
+        "Unterm".into()
+    } else {
+        name
+    }
+}
+
+/// Whether this process is the standalone Unterm, not a product shipping it.
+pub fn is_standalone() -> bool {
+    product_name() == "Unterm"
+}
+
+/// The product's name as one lowercase word for paths and identifiers:
+/// `Unzoo One` -> `unzoo-one`; `unterm` when nothing is left.
+pub fn product_slug() -> String {
+    let slug: String = product_name()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+    if slug.is_empty() {
+        "unterm".into()
+    } else {
+        slug
+    }
+}
+
+/// The runtime's own programs, installed side by side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Program {
+    /// The terminal windows.
+    Terminal,
+    /// The command line, and the MCP bridge AI clients start.
+    Cli,
+    /// The background service that keeps the sessions.
+    Core,
+}
+
+impl Program {
+    fn standalone_stem(self) -> &'static str {
+        match self {
+            Program::Terminal => "unterm",
+            Program::Cli => "unterm-cli",
+            Program::Core => "unterm-core",
+        }
+    }
+
+    fn role(self) -> &'static str {
+        match self {
+            Program::Terminal => "terminal",
+            Program::Cli => "cli",
+            Program::Core => "service",
+        }
+    }
+}
+
+/// A program's file name without its extension. A product shipping the
+/// runtime names them after itself -- `<product>-terminal`, `<product>-cli`,
+/// `<product>-service` -- so nothing it installs is called Unterm; the
+/// standalone Unterm keeps `unterm`, `unterm-cli`, `unterm-core`.
+pub fn program_stem(program: Program) -> String {
+    if is_standalone() {
+        program.standalone_stem().to_string()
+    } else {
+        format!("{}-{}", product_slug(), program.role())
+    }
+}
+
+/// Where `program` is: beside the running one, under this product's name or
+/// (a build tree, which has only the runtime's names) the runtime's own;
+/// else the bare product name, for a PATH lookup.
+pub fn program_path(program: Program) -> std::path::PathBuf {
+    let file = |stem: &str| format!("{stem}{}", std::env::consts::EXE_SUFFIX);
+    let names = [file(&program_stem(program)), file(program.standalone_stem())];
+    let dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    if let Some(dir) = dir {
+        for name in &names {
+            let path = dir.join(name);
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+    std::path::PathBuf::from(&names[0])
 }
 
 pub fn core_state_dir() -> Option<std::path::PathBuf> {
@@ -147,7 +284,8 @@ pub fn core_state_dir() -> Option<std::path::PathBuf> {
             return Some(std::path::PathBuf::from(dir));
         }
     }
-    dirs_next::data_local_dir().map(|dir| dir.join("Unterm"))
+    let name = if is_standalone() { "Unterm".to_string() } else { product_name() };
+    dirs_next::data_local_dir().map(|dir| dir.join(name))
 }
 
 /// The Core's discovery record: where it is listening, and who it is.
@@ -161,7 +299,8 @@ pub fn state_dir() -> Option<std::path::PathBuf> {
             return Some(std::path::PathBuf::from(dir));
         }
     }
-    dirs_next::home_dir().map(|home| home.join(".unterm"))
+    let name = if is_standalone() { ".unterm".to_string() } else { format!(".{}", product_slug()) };
+    dirs_next::home_dir().map(|home| home.join(name))
 }
 
 /// [`state_dir`] joined with `name`, for the common one-liner case.
@@ -185,6 +324,41 @@ mod tests {
         std::env::set_var("UNTERM_PRODUCT_NAME", "x".repeat(65));
         assert_eq!(product_name(), "Unterm");
         std::env::remove_var("UNTERM_PRODUCT_NAME");
+    }
+
+    /// A product that ships the runtime keeps its state apart from a
+    /// standalone Unterm's, so both can be installed and running at once.
+    #[test]
+    fn a_product_keeps_its_own_state_beside_a_standalone_unterm() {
+        let saved = std::env::var_os("UNTERM_STATE_DIR");
+        std::env::remove_var("UNTERM_STATE_DIR");
+        std::env::remove_var("UNTERM_PRODUCT_NAME");
+        let (unterm_core, unterm_home) = (core_state_dir(), state_dir());
+        assert_eq!(
+            [Program::Terminal, Program::Cli, Program::Core].map(program_stem),
+            ["unterm", "unterm-cli", "unterm-core"]
+        );
+        std::env::set_var("UNTERM_PRODUCT_NAME", "Unzoo One");
+        let (product_core, product_home) = (core_state_dir(), state_dir());
+        assert_eq!(product_slug(), "unzoo-one");
+        // Nothing a product installs is called Unterm.
+        assert_eq!(
+            [Program::Terminal, Program::Cli, Program::Core].map(program_stem),
+            ["unzoo-one-terminal", "unzoo-one-cli", "unzoo-one-service"]
+        );
+        // A build tree has only the runtime's names: those are found, or the
+        // product's name is handed to the PATH.
+        assert!(program_path(Program::Cli).file_stem().is_some_and(|s| s == "unzoo-one-cli" || s == "unterm-cli"));
+        std::env::remove_var("UNTERM_PRODUCT_NAME");
+        if let Some(value) = saved {
+            std::env::set_var("UNTERM_STATE_DIR", value);
+        }
+        if let (Some(unterm), Some(product)) = (unterm_core, product_core) {
+            assert!(unterm.ends_with("Unterm") && product.ends_with("Unzoo One"), "{unterm:?} {product:?}");
+        }
+        if let (Some(unterm), Some(product)) = (unterm_home, product_home) {
+            assert!(unterm.ends_with(".unterm") && product.ends_with(".unzoo-one"), "{unterm:?} {product:?}");
+        }
     }
 
     /// The Core's record and the user state directory are two places.

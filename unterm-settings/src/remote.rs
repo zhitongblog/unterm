@@ -34,11 +34,39 @@ use unterm_mcp::handler::{ConnectionContext, McpHandler};
 use unterm_services::server_info;
 
 pub const DEFAULT_REMOTE_PORT: u16 = 19880;
+
+/// The port phones reach this install on. A product shipping the runtime
+/// listens on its own, so a standalone Unterm's remote access and the
+/// product's can be on at once (a paired phone keeps its address).
+pub const PRODUCT_REMOTE_PORT: u16 = 19890;
+
+pub fn default_remote_port() -> u16 {
+    if unterm_protocol::is_standalone() {
+        DEFAULT_REMOTE_PORT
+    } else {
+        PRODUCT_REMOTE_PORT
+    }
+}
 pub const PAIRING_TTL_MS: u64 = 120_000; // 2 minutes
 pub const NETWORK_SCOPE_NOTICE: &str =
     "仅支持同一局域网（Wi-Fi / 有线）或 Tailscale 连接，已拦截所有公网来源访问";
 
 const MOBILE_INDEX_HTML: &str = include_str!("../assets/mobile/index.html");
+/// The phone page of a product built on this runtime: its conversations,
+/// questions and handovers rather than the terminal cockpit.
+const PRODUCT_MOBILE_HTML: &str = include_str!("../assets/mobile/product.html");
+/// Wrong guesses a pairing code survives. Six digits are a million codes;
+/// five guesses at one of them is no way in.
+pub const MAX_PAIRING_ATTEMPTS: u32 = 5;
+
+/// The page a phone is served: the terminal's own, or the product's.
+fn mobile_page() -> &'static str {
+    if unterm_protocol::product_name() == "Unterm" {
+        MOBILE_INDEX_HTML
+    } else {
+        PRODUCT_MOBILE_HTML
+    }
+}
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -74,6 +102,9 @@ pub struct PairingRecord {
     pub scope: String,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
+    /// Wrong codes tried against this one so far.
+    #[serde(default)]
+    pub attempts: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -301,7 +332,7 @@ fn load_or_init_config_unlocked() -> RemoteConfig {
     let secret = random_bytes::<32>();
     let cfg = RemoteConfig {
         enabled: false,
-        port: DEFAULT_REMOTE_PORT,
+        port: default_remote_port(),
         machine_id: uuid::Uuid::new_v4().to_string(),
         signing_key_hex: hex::encode(secret),
     };
@@ -380,6 +411,7 @@ pub fn generate_pairing_code_with_scope(scope: Option<&str>) -> Result<PairingBu
         scope: norm_scope,
         created_at_ms,
         expires_at_ms,
+        attempts: 0,
     };
     std::fs::write(pairing_path(), serde_json::to_string_pretty(&rec)?)?;
     Ok(build_pairing_bundle(&cfg, &rec))
@@ -506,13 +538,21 @@ pub fn redeem_pairing_code(
     }
     let raw = std::fs::read_to_string(pairing_path())
         .map_err(|_| anyhow!("当前没有生效中的配对码，请在电脑端重新生成"))?;
-    let rec: PairingRecord =
+    let mut rec: PairingRecord =
         serde_json::from_str(&raw).map_err(|_| anyhow!("配对码记录已损坏"))?;
     if now_ms() >= rec.expires_at_ms {
         let _ = std::fs::remove_file(pairing_path());
         return Err(anyhow!("配对码已过期（有效期 2 分钟），请在电脑端重新生成"));
     }
     if rec.code != code {
+        // Every wrong code counts against this one; enough of them and it
+        // is gone, so it cannot be found by trying them all.
+        rec.attempts += 1;
+        if rec.attempts >= MAX_PAIRING_ATTEMPTS {
+            let _ = std::fs::remove_file(pairing_path());
+            return Err(anyhow!("配对码错误次数过多，已作废，请在电脑端重新生成"));
+        }
+        let _ = std::fs::write(pairing_path(), serde_json::to_string_pretty(&rec)?);
         return Err(anyhow!("配对码不正确"));
     }
     // Single-use: consume immediately
@@ -933,7 +973,7 @@ fn handle_remote_conn(mut stream: TcpStream, handler: &Arc<McpHandler>) -> Resul
             200,
             "OK",
             "text/html; charset=utf-8",
-            MOBILE_INDEX_HTML.as_bytes(),
+            mobile_page().as_bytes(),
             &[],
         );
     }
@@ -1053,6 +1093,14 @@ fn handle_remote_conn(mut stream: TcpStream, handler: &Arc<McpHandler>) -> Resul
         );
     };
 
+    if req.path.starts_with("/api/one/") {
+        if let Some(resp) =
+            crate::mobile_one::route(handler, &device.scope, &req.method, &req.path, &req.body)
+        {
+            return crate::server::write_response(&mut stream, &resp);
+        }
+    }
+
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/api/remote/overview") => {
             let watched_inst = query_param(&req.query, "instance");
@@ -1114,7 +1162,7 @@ pub fn dispatch_mobile_rpc(
     // Built-in T3 Code-inspired Agent Harness methods
     match method {
         "ports.list" => {
-            let port = current_bound_port(DEFAULT_REMOTE_PORT);
+            let port = current_bound_port(default_remote_port());
             let ports = crate::harness::discover_listening_ports(&[
                 port,
                 current_info.mcp_port,
@@ -1532,7 +1580,7 @@ pub fn collect_mobile_overview(
         watched_cwd = current_info.cwd.clone().unwrap_or_default();
     }
 
-    let port = current_bound_port(DEFAULT_REMOTE_PORT);
+    let port = current_bound_port(default_remote_port());
     let ports = crate::harness::discover_listening_ports(&[
         port,
         current_info.mcp_port,
@@ -1988,5 +2036,27 @@ mod tests {
         // Revoking removes device and invalidates token immediately
         assert!(revoke_device(&dev.device_id).unwrap());
         assert!(authenticate_device_token(&token, "192.168.1.88").is_none());
+    }
+
+    #[test]
+    fn a_pairing_code_cannot_be_guessed() {
+        let temp = tempfile::tempdir().unwrap();
+        TEST_REMOTE_DIR.with(|c| *c.borrow_mut() = Some(temp.path().join("remote")));
+
+        let bundle = generate_pairing_code().unwrap();
+        let wrong = if bundle.code == "000000" { "000001" } else { "000000" };
+        for _ in 0..MAX_PAIRING_ATTEMPTS {
+            assert!(redeem_pairing_code(wrong, "Guesser", "web", "192.168.1.66").is_err());
+        }
+        // Spent by the guesses: even the right code no longer pairs.
+        assert!(redeem_pairing_code(&bundle.code, "Owner", "web", "192.168.1.88").is_err());
+
+        // A fresh code survives fewer wrong guesses than the limit.
+        let bundle = generate_pairing_code().unwrap();
+        let wrong = if bundle.code == "000000" { "000001" } else { "000000" };
+        for _ in 1..MAX_PAIRING_ATTEMPTS {
+            assert!(redeem_pairing_code(wrong, "Typo", "web", "192.168.1.88").is_err());
+        }
+        assert!(redeem_pairing_code(&bundle.code, "Owner", "web", "192.168.1.88").is_ok());
     }
 }

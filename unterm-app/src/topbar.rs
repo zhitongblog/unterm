@@ -72,7 +72,9 @@ pub fn density(logical_width: f32) -> Density {
 
 /// The name in the corner. Not clickable; it is there so a window with no
 /// title bar says what it is.
-pub const WORDMARK: &str = "Unterm";
+pub fn wordmark() -> String {
+    unterm_protocol::product_name()
+}
 
 /// Whether the platform lays its own window buttons over the chrome.
 ///
