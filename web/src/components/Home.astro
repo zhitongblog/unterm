@@ -245,11 +245,11 @@ unterm-cli agent inbox`;
     </h1>
     <p class="mt-6 text-lg sm:text-xl text-notion-muted max-w-2xl mx-auto leading-relaxed text-balance">{t("home.hero.sub")}</p>
     <div class="mt-6 flex flex-wrap items-center justify-center gap-2 text-xs font-mono">
-      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-sky-300">🌿 {isZhCN ? "原生 Git Worktree 并行工作台" : "Native Git Worktree Studio"}</span>
-      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-amber-300">🔍 {isZhCN ? "内嵌 Diff 审查 · 单文件打回 Agent" : "Inline Diff Review · 1-Click Revert"}</span>
-      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-purple-300">📊 {isZhCN ? "Token 水位预警 · 一键 /compact" : "Context HUD · 1-Click /compact"}</span>
-      <a href="#unzoo" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-amber-400/40 hover:border-amber-300 text-amber-200 transition">🦁 {isZhCN ? "Unzoo Browser 受管预览 ↗" : "Unzoo Browser Synergy ↗"}</a>
-      <a href="#themes" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border hover:border-sky-400/50 text-emerald-300 transition">🎨 {isZhCN ? "7 套原生主题 · 110ms 阻尼动效 ↗" : "7 Native Themes · 110ms Motion ↗"}</a>
+      <a href="#pain-points" class="px-2.5 py-1 rounded-md bg-rose-500/15 border border-rose-400/40 hover:border-rose-300 text-rose-200 transition">⚡ {isZhCN ? "根治原生终端 8 大痛点 ↓" : "8 Native Terminal Pain Points Solved ↓"}</a>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-sky-300">⚔️ {isZhCN ? "Fleet Arena · Worktree 零冲突并发" : "Fleet Arena · Zero-Conflict Worktrees"}</span>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-purple-300">📊 {isZhCN ? "Token / 费用水位预警 · 一键 /compact" : "Token & Cost HUD · 1-Click /compact"}</span>
+      <span class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-notion-border text-amber-300">🔍 {isZhCN ? "内嵌 Diff 审查 · 隐藏检查点无损回滚" : "Inline Diff · Hidden Checkpoints"}</span>
+      <a href="#unzoo" class="px-2.5 py-1 rounded-md bg-notion-surface/90 border border-amber-400/40 hover:border-amber-300 text-amber-200 transition">🦁 {isZhCN ? "Unzoo Browser 前端自愈联动 ↗" : "Unzoo Browser Self-Healing ↗"}</a>
     </div>
     <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
       <!-- /api/download picks the right file for the visitor's platform at the edge (GitHub Release). -->
@@ -289,6 +289,197 @@ unterm-cli agent inbox`;
          width="2000" height="1360" alt={t("home.hero.alt")}
          class="relative w-full h-auto rounded-2xl ring-1 ring-white/15 shadow-2xl shadow-black/70"
          fetchpriority="high" />
+  </div>
+</section>
+
+<!-- ============== 8 NATIVE TERMINAL PAIN POINTS SOLVED ============== -->
+<section id="pain-points" class="py-20 border-t border-notion-border relative overflow-hidden">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="max-w-3xl">
+      <div class="text-xs font-mono uppercase tracking-widest text-rose-400">
+        {isZhCN ? "WHY UNTERM · 专为 CLAUDE CODE / CODEX / AGY CLI 而生" : "WHY UNTERM · PURPOSE-BUILT FOR CLAUDE CODE, CODEX & AGY CLI"}
+      </div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight text-notion-ink text-balance">
+        {isZhCN
+          ? "传统原生终端跑 AI Coding CLI 的 8 大痛点，Unterm 逐个根治。"
+          : "8 native terminal pain points when running AI Coding CLIs—solved at the kernel."}
+      </h2>
+      <p class="mt-4 text-notion-muted leading-relaxed">
+        {isZhCN
+          ? "Terminal.app、Windows Terminal、iTerm2 和传统 Electron 终端都是为“人工敲一行、看一屏输出”设计的。当你全天候运行 Claude Code、Codex CLI 与 Antigravity (agy) 时，底层瓶颈立刻暴露——下面每一项，都是 Unterm 实打实修掉的核心痛点。"
+          : "Terminal.app, Windows Terminal, iTerm2, and Electron terminals were designed for one command at a time. The moment you run Claude Code, Codex CLI, and Antigravity (agy) all day, every legacy bottleneck surfaces—here is every pain point Unterm eliminates."}
+      </p>
+    </div>
+
+    <div class="mt-10 grid md:grid-cols-2 gap-4">
+      <!-- 01 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 01 · 打字卡顿 / 掉字 / IME 吞字" : "PAIN 01 · TYPING LAG, DROPPED KEYS & IME GLITCHES"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ &lt;2ms 输入</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "在 Windows 与高负载多会话下，传统终端打字发粘、快敲掉字、中文输入法切窗后残留幽灵拼音。"
+            : "Under heavy agent output or Windows 15.6ms timer quantization, typing feels sticky, rapid keystrokes drop, and CJK IME compositions get stranded."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "独立非阻塞合并输入线程（unterm-input-tx）+ Windows 1ms 系统时钟 + DX12 Mailbox 零帧排队 + Win32 WM_CHAR 孤儿字符回收与 IME 自动自愈，后台跑满 8 个 Agent 打字依然跟手。"
+            : "Dedicated non-blocking coalescing input worker (unterm-input-tx), Windows 1ms timer resolution, DX12 Mailbox 1-frame latency, Win32 WM_CHAR recovery, and automatic orphan IME cleanup."}
+        </p>
+      </div>
+
+      <!-- 02 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 02 · 全屏 TUI 闪屏、撕裂与快捷键失效" : "PAIN 02 · TUI TEARING, FLICKER & BROKEN CHORDS"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ ?2026 + Kitty</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "Claude Code / Agy 高频刷屏时边框错位重影、拖窄窗口文字被截断、Shift+Enter 换行直接误发送。"
+            : "High-frequency TUI redraws tear boxes and flicker, resizing clips wrapped lines, and Shift+Enter accidentally submits prompts instead of inserting newlines."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "纯 Rust GPU 渲染引擎完整实现 ?2026 同步输出（原子帧提交）、主屏软换行 Reflow、ECMA-48 宽字符精确切分与 Kitty 键盘协议 / modifyOtherKeys。"
+            : "Pure-Rust GPU renderer with global ?2026 synchronized output, main-screen resize reflow, ECMA-48 CJK wide-cell splitting, and Kitty keyboard protocol + modifyOtherKeys."}
+        </p>
+      </div>
+
+      <!-- 03 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 03 · Windows 后台狂闪黑窗与 Ctrl+C 崩服务" : "PAIN 03 · WINDOWS CONSOLE FLASHES & CTRL+C CRASHES"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ 0 弹窗静默</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "Windows 下打开 Agent、跑 MCP 或后台查 Git 状态时桌面频繁一闪而过 cmd 黑框，甚至按 Ctrl+C 带崩后台会话。"
+            : "Launching agents, MCP bridges, or background Git probes flashes stray cmd/OpenConsole windows on Windows, and Ctrl+C can drop the background Core."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "全链路强制 CREATE_NO_WINDOW 静默执行 + 独立隐藏控制台 Ctrl+C 助手 + 零子进程侧边栏 Git 缓存，全天候静默零干扰。"
+            : "Enforced CREATE_NO_WINDOW across every background subprocess and MCP CLI probe, dedicated hidden-console Ctrl+C helper, and zero-spawn sidebar Git state caching."}
+        </p>
+      </div>
+
+      <!-- 04 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 04 · 多 Agent 并发改同一仓库互相踩踏" : "PAIN 04 · PARALLEL AGENTS OVERWRITING EACH OTHER"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ Fleet Arena</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "同时让 Claude、Codex、Agy 在同一个目录改代码，文件互相覆盖、.git/index.lock 报错、根本没法横向对比方案。"
+            : "Running Claude, Codex, and Agy in the same checkout causes clobbered edits, .git/index.lock failures, and no clean way to compare competing solutions."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "原生 Git Worktree 工作台与 Fleet Arena 竞速面板：一键为每个 Agent 分配隔离分支与 Worktree，实时看 +added -deleted，一键择优 Squash 合并并自动清理其余分支。"
+            : "Native Git Worktree Studio & Fleet Arena: spin up 2–3 agents in isolated worktrees in one click, compare live +added -deleted diffs, and 1-click squash-merge the winner."}
+        </p>
+      </div>
+
+      <!-- 05 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 05 · 开一堆 Tab 不知道谁卡在 [y/n] 等审批" : "PAIN 05 · LOST IN TABS WAITING ON [Y/N] PROMPTS"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ 巡检 + 手机审批</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "并行跑 6 个 Agent，切来切去才知道某个后台窗格已经干等了 10 分钟；离开工位更是完全失去掌控。"
+            : "With 6 agents running across tabs, you waste minutes hunting for the pane blocked on an approval prompt—and lose visibility the moment you step away."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "Agent Cockpit 实时状态点 + 侧边栏悬停 6 行预览 + Ctrl+Shift+I 巡检浮层直接按 Y/N 跨窗格放行；离座扫码打开 Unterm Pocket，在手机上实时看屏审批。"
+            : "Live Agent Cockpit status dots, 6-line sidebar hover peeks, Ctrl+Shift+I cross-pane Y/N quick-approve without switching tabs, plus Unterm Pocket QR mobile approvals."}
+        </p>
+      </div>
+
+      <!-- 06 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 06 · 上下文爆窗、费用黑盒与换 Agent 重讲需求" : "PAIN 06 · CONTEXT OVERFLOW & RE-EXPLAINING WORK"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ HUD + Handoff</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "Agent 跑到一半上下文突然超限失忆、各窗口 Token 账单散落各处；想从 Claude 换给 Codex 接手得手动复制半天上下文。"
+            : "Agents silently hit context limits mid-task, costs scatter across panes, and handing a half-finished task from Claude to Codex means manual copy-paste."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "跨会话 Daily Telemetry HUD 实时汇总 Token、估算费用与成功率；上下文达 85% 自动高亮预警，支持一键 /compact 或按 H 打包终端输出与 Git 状态一键接力给下一个 Agent。"
+            : "Cross-session Daily Telemetry HUD aggregates tokens, USD cost, and success rate; 85%+ context pressure triggers 1-click /compact or portable Handoff (H) to another agent."}
+        </p>
+      </div>
+
+      <!-- 07 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 07 · 报错刷屏难定位，复制日志喂 AI 太繁琐" : "PAIN 07 · DIGGING THROUGH LOGS TO FEED AI"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ OSC 133 + Unzoo</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "编译/测试报错刷出几百行，往上翻找失败位置、拖选复制再粘贴给 AI，前端浏览器控制台报错还得来回切屏。"
+            : "Scrolling up hundreds of lines to drag-select build errors—or copy-pasting browser console crashes back into your CLI agent—breaks your flow constantly."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "OSC 133 一键跳至上一个失败命令块、一键复制纯净输出或直投 AI 窗格；搜索条按 Ctrl+S（✦AI）直接投喂命中上下文；配合 Unzoo Browser 前端报错一键回流终端自愈。"
+            : "OSC 133 1-click jump to last failed command block, clean output copy, Ctrl+S (✦AI) search-to-agent context feed, plus 1-click Unzoo Browser frontend error self-healing."}
+        </p>
+      </div>
+
+      <!-- 08 -->
+      <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+            {isZhCN ? "痛点 08 · AI 改乱工作区难撤销，高危命令无护栏" : "PAIN 08 · RISKY AI EDITS & UNSAFE PASTE"}
+          </span>
+          <span class="text-xs font-mono text-emerald-400">✓ 检查点 + 护栏</span>
+        </div>
+        <p class="text-sm text-notion-muted leading-relaxed">
+          {isZhCN
+            ? "Agent 一次改了十几个文件却引入回归，没建 commit 根本撤不回；误把多行脚本或 rm -rf 粘进终端直接回车执行。"
+            : "An agent edits 12 uncommitted files and breaks the build with no clean undo—or a multi-line paste with destructive commands executes immediately on Enter."}
+        </p>
+        <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+          <strong class="text-emerald-300">{isZhCN ? "Unterm 解法：" : "Unterm Fix: "}</strong>
+          {isZhCN
+            ? "零污染隐藏 Git 检查点（refs/unterm/checkpoints/）一键无损回滚、Cmd+Shift+G 内嵌 Diff 单文件打回、多行高危粘贴安全拦截条，以及 3 档风险自治策略与完整审计日志。"
+            : "Zero-pollution hidden Git checkpoints for 1-click rollback, inline Diff single-file revert (Cmd+Shift+G), safe multi-line paste guard, and 3-tier risk-graded autonomy with audit logs."}
+        </p>
+      </div>
+    </div>
   </div>
 </section>
 
