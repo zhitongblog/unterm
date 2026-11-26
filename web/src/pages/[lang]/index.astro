@@ -2,39 +2,11 @@
 import Base from "../../layouts/Base.astro";
 import Home from "../../components/Home.astro";
 import { LOCALES, alternates } from "../../i18n/locales";
+import { DICTS, NON_DEFAULT_LANGS } from "../../i18n/dicts";
 import { fetchStats } from "../../lib/stats";
 
-import zhCN from "../../i18n/zh-CN.json";
-import zhTW from "../../i18n/zh-TW.json";
-import jaJP from "../../i18n/ja-JP.json";
-import koKR from "../../i18n/ko-KR.json";
-import deDE from "../../i18n/de-DE.json";
-import frFR from "../../i18n/fr-FR.json";
-import itIT from "../../i18n/it-IT.json";
-import hiIN from "../../i18n/hi-IN.json";
-
-const DICTS: Record<string, Record<string, string>> = {
-  "zh-CN": zhCN,
-  "zh-TW": zhTW,
-  "ja-JP": jaJP,
-  "ko-KR": koKR,
-  "de-DE": deDE,
-  "fr-FR": frFR,
-  "it-IT": itIT,
-  "hi-IN": hiIN,
-};
-
 export function getStaticPaths() {
-  return [
-    { params: { lang: "zh-CN" } },
-    { params: { lang: "zh-TW" } },
-    { params: { lang: "ja-JP" } },
-    { params: { lang: "ko-KR" } },
-    { params: { lang: "de-DE" } },
-    { params: { lang: "fr-FR" } },
-    { params: { lang: "it-IT" } },
-    { params: { lang: "hi-IN" } },
-  ];
+  return NON_DEFAULT_LANGS.map((lang) => ({ params: { lang } }));
 }
 
 const { lang } = Astro.params;

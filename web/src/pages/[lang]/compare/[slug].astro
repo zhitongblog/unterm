@@ -3,15 +3,8 @@
 import Base from "../../../layouts/Base.astro";
 import ComparePage from "../../../components/ComparePage.astro";
 import { LOCALES } from "../../../i18n/locales";
+import { DICTS, NON_DEFAULT_LANGS } from "../../../i18n/dicts";
 import enUS from "../../../i18n/en-US.json";
-import zhCN from "../../../i18n/zh-CN.json";
-import zhTW from "../../../i18n/zh-TW.json";
-import jaJP from "../../../i18n/ja-JP.json";
-import koKR from "../../../i18n/ko-KR.json";
-import deDE from "../../../i18n/de-DE.json";
-import frFR from "../../../i18n/fr-FR.json";
-import itIT from "../../../i18n/it-IT.json";
-import hiIN from "../../../i18n/hi-IN.json";
 import {
   COMPETITORS,
   getCompetitor,
@@ -19,20 +12,8 @@ import {
   compareJsonLd,
 } from "../../../data/competitors";
 
-const DICTS: Record<string, Record<string, string>> = {
-  "zh-CN": zhCN,
-  "zh-TW": zhTW,
-  "ja-JP": jaJP,
-  "ko-KR": koKR,
-  "de-DE": deDE,
-  "fr-FR": frFR,
-  "it-IT": itIT,
-  "hi-IN": hiIN,
-};
-
 export function getStaticPaths() {
-  const langs = ["zh-CN", "zh-TW", "ja-JP", "ko-KR", "de-DE", "fr-FR", "it-IT", "hi-IN"];
-  return langs.flatMap((lang) =>
+  return NON_DEFAULT_LANGS.flatMap((lang) =>
     COMPETITORS.map((c) => ({ params: { lang, slug: c.slug } })),
   );
 }

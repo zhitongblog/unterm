@@ -114,7 +114,7 @@ const jsonLd = seo?.jsonLd ?? defaultJsonLd;
 ---
 
 <!doctype html>
-<html lang={lang} class="bg-notion-bg scroll-smooth">
+<html lang={lang} dir={lang.startsWith("ar") ? "rtl" : "ltr"} class="bg-notion-bg scroll-smooth">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

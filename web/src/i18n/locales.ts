@@ -9,15 +9,22 @@ export interface LocaleEntry {
 }
 
 export const LOCALES: LocaleEntry[] = [
-  { code: "en-US", name: "English",   href: "/" },
-  { code: "zh-CN", name: "简体中文",  href: "/zh-CN/" },
-  { code: "zh-TW", name: "繁體中文",  href: "/zh-TW/" },
-  { code: "ja-JP", name: "日本語",    href: "/ja-JP/" },
-  { code: "ko-KR", name: "한국어",    href: "/ko-KR/" },
-  { code: "de-DE", name: "Deutsch",   href: "/de-DE/" },
-  { code: "fr-FR", name: "Français",  href: "/fr-FR/" },
-  { code: "it-IT", name: "Italiano",  href: "/it-IT/" },
-  { code: "hi-IN", name: "हिन्दी",     href: "/hi-IN/" },
+  { code: "en-US", name: "English",            href: "/" },
+  { code: "zh-CN", name: "简体中文",           href: "/zh-CN/" },
+  { code: "zh-TW", name: "繁體中文",           href: "/zh-TW/" },
+  { code: "ja-JP", name: "日本語",             href: "/ja-JP/" },
+  { code: "ko-KR", name: "한국어",             href: "/ko-KR/" },
+  { code: "es-ES", name: "Español",            href: "/es-ES/" },
+  { code: "pt-BR", name: "Português (Brasil)", href: "/pt-BR/" },
+  { code: "de-DE", name: "Deutsch",            href: "/de-DE/" },
+  { code: "fr-FR", name: "Français",           href: "/fr-FR/" },
+  { code: "it-IT", name: "Italiano",           href: "/it-IT/" },
+  { code: "ru-RU", name: "Русский",            href: "/ru-RU/" },
+  { code: "ar-SA", name: "العربية",            href: "/ar-SA/" },
+  { code: "hi-IN", name: "हिन्दी",              href: "/hi-IN/" },
+  { code: "vi-VN", name: "Tiếng Việt",         href: "/vi-VN/" },
+  { code: "id-ID", name: "Bahasa Indonesia",   href: "/id-ID/" },
+  { code: "tr-TR", name: "Türkçe",             href: "/tr-TR/" },
 ];
 
 /** hreflang link tags, absolute URLs. */
