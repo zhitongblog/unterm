@@ -25,10 +25,68 @@ use unterm_engine::{
     StyledScrollbackSnapshot, ViewportScrollResult, WindowEngine, WindowFocusResult,
 };
 
+#[derive(Debug)]
+enum QueuedInput {
+    Write { pane_id: usize, text: String },
+    Paste { pane_id: usize, text: String },
+}
+
+fn spawn_input_worker(
+    client: std::sync::Arc<CoreEngineClient>,
+) -> std::sync::mpsc::Sender<QueuedInput> {
+    let (tx, rx) = std::sync::mpsc::channel::<QueuedInput>();
+    let _ = std::thread::Builder::new()
+        .name("unterm-input-tx".into())
+        .spawn(move || {
+            let mut pending: Option<QueuedInput> = None;
+            loop {
+                let first = match pending.take() {
+                    Some(item) => item,
+                    None => match rx.recv() {
+                        Ok(item) => item,
+                        Err(_) => break,
+                    },
+                };
+                match first {
+                    QueuedInput::Write { pane_id, mut text } => {
+                        // Coalesce consecutive keystrokes targeting the same pane
+                        // while the previous ConPTY/IPC write was in flight.
+                        while let Ok(next) = rx.try_recv() {
+                            match next {
+                                QueuedInput::Write {
+                                    pane_id: next_pane,
+                                    text: next_text,
+                                } if next_pane == pane_id && text.len() + next_text.len() <= 4096 => {
+                                    text.push_str(&next_text);
+                                }
+                                other => {
+                                    pending = Some(other);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Err(err) = client.write_input(pane_id, &text) {
+                            log::debug!("async write_input failed for pane {pane_id}: {err:#}");
+                        }
+                    }
+                    QueuedInput::Paste { pane_id, text } => {
+                        if let Err(err) = client.paste_input(pane_id, &text) {
+                            log::debug!("async paste_input failed for pane {pane_id}: {err:#}");
+                        }
+                    }
+                }
+            }
+        });
+    tx
+}
+
 pub enum AppEngine {
     Local(NextCoreEngine),
     Core {
         client: std::sync::Arc<CoreEngineClient>,
+        /// Dedicated non-blocking input sender so interactive typing on the
+        /// GUI thread never stalls waiting for a TCP round-trip or ConPTY write.
+        input_tx: std::sync::mpsc::Sender<QueuedInput>,
         /// Serves every styled read from local memory. The benchmark
         /// that mandates this: a full styled screen over IPC costs
         /// ~5ms and this window reads 20+ per frame.
@@ -409,8 +467,16 @@ impl AppEngine {
                     )
                     .map(std::sync::Arc::new)
                     .unwrap_or_else(|_| shared.client.clone());
+                    let input_client = CoreEngineClient::connect(
+                        shared.endpoint.as_str(),
+                        shared.token.clone(),
+                    )
+                    .map(std::sync::Arc::new)
+                    .unwrap_or_else(|_| ui_client.clone());
+                    let input_tx = spawn_input_worker(input_client);
                     return AppEngine::Core {
                         client: ui_client,
+                        input_tx,
                         cache,
                     };
                 }
@@ -470,7 +536,7 @@ impl AppEngine {
     pub fn pane_modes(&self, pane_id: usize) -> Result<PaneModesSnapshot> {
         match self {
             Self::Local(engine) => engine.pane_modes(pane_id),
-            Self::Core { client, cache } => {
+            Self::Core { client, cache, .. } => {
                 use std::collections::HashMap;
                 use std::sync::{Mutex, OnceLock};
                 use std::time::{Duration, Instant};
@@ -530,7 +596,7 @@ impl AppEngine {
     pub fn scroll_viewport_to(&self, pane_id: usize, target: isize) -> Result<()> {
         match self {
             Self::Local(engine) => engine.scroll_viewport_to(pane_id, target),
-            Self::Core { client, cache } => {
+            Self::Core { client, cache, .. } => {
                 if target == isize::MAX && cache.is_viewport_at_bottom(pane_id) == Some(true) {
                     return Ok(());
                 }
@@ -567,7 +633,7 @@ impl SessionEngine for AppEngine {
     fn create_session(&self, request: CreateSessionRequest) -> Result<SessionSnapshot> {
         match self {
             Self::Local(engine) => engine.create_session(request),
-            Self::Core { client, cache } => {
+            Self::Core { client, cache, .. } => {
                 let session = client.create_session(request)?;
                 cache.upsert_session(session.clone());
                 Ok(session)
@@ -578,7 +644,7 @@ impl SessionEngine for AppEngine {
     fn split_session(&self, request: SplitSessionRequest) -> Result<SessionSnapshot> {
         match self {
             Self::Local(engine) => engine.split_session(request),
-            Self::Core { client, cache } => {
+            Self::Core { client, cache, .. } => {
                 let session = client.split_session(request)?;
                 cache.upsert_session(session.clone());
                 Ok(session)
@@ -609,7 +675,7 @@ impl SessionEngine for AppEngine {
     fn destroy_session(&self, pane_id: usize) -> Result<()> {
         match self {
             Self::Local(engine) => engine.destroy_session(pane_id),
-            Self::Core { client, cache } => {
+            Self::Core { client, cache, .. } => {
                 let res = client.destroy_session(pane_id);
                 cache.remove_session(pane_id);
                 res
@@ -663,7 +729,7 @@ impl ScreenEngine for AppEngine {
     fn read_styled_screen(&self, pane_id: usize) -> Result<StyledScreenSnapshot> {
         match self {
             Self::Local(engine) => engine.read_styled_screen(pane_id),
-            Self::Core { client, cache } => match cache.styled_screen(pane_id) {
+            Self::Core { client, cache, .. } => match cache.styled_screen(pane_id) {
                 Some(screen) => Ok(screen),
                 None => client.read_styled_screen(pane_id),
             },
@@ -682,7 +748,7 @@ impl ScreenEngine for AppEngine {
     ) -> Result<unterm_engine::PanePulse> {
         match self {
             Self::Local(engine) => engine.read_pane_pulse(pane_id, since_revision, tail_rows),
-            Self::Core { client, cache } => {
+            Self::Core { client, cache, .. } => {
                 if let Some(screen) = cache.styled_screen(pane_id) {
                     return Ok(unterm_engine::PanePulse::from_snapshot(
                         &screen,
@@ -748,11 +814,45 @@ impl ScreenEngine for AppEngine {
 
 impl InputEngine for AppEngine {
     fn write_input(&self, pane_id: usize, input: &str) -> Result<()> {
-        route!(self, engine => engine.write_input(pane_id, input))
+        match self {
+            AppEngine::Local(engine) => engine.write_input(pane_id, input),
+            AppEngine::Core {
+                client, input_tx, ..
+            } => {
+                if input_tx
+                    .send(QueuedInput::Write {
+                        pane_id,
+                        text: input.to_string(),
+                    })
+                    .is_ok()
+                {
+                    Ok(())
+                } else {
+                    client.write_input(pane_id, input)
+                }
+            }
+        }
     }
 
     fn paste_input(&self, pane_id: usize, text: &str) -> Result<()> {
-        route!(self, engine => engine.paste_input(pane_id, text))
+        match self {
+            AppEngine::Local(engine) => engine.paste_input(pane_id, text),
+            AppEngine::Core {
+                client, input_tx, ..
+            } => {
+                if input_tx
+                    .send(QueuedInput::Paste {
+                        pane_id,
+                        text: text.to_string(),
+                    })
+                    .is_ok()
+                {
+                    Ok(())
+                } else {
+                    client.paste_input(pane_id, text)
+                }
+            }
+        }
     }
 }
 

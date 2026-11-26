@@ -30,11 +30,18 @@ pub struct McpTrimCommand {
 
 pub fn run(cmd: McpTrimCommand) -> Result<()> {
     let (program, args) = cmd.command.split_first().ok_or_else(|| anyhow!("no command after --"))?;
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command
         .spawn()
         .with_context(|| format!("starting {program}"))?;
     let mut to_child = child.stdin.take().ok_or_else(|| anyhow!("no stdin for {program}"))?;

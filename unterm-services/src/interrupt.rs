@@ -19,9 +19,17 @@
 //!   removed, because taking it off is a race whose loser exits with
 //!   STATUS_CONTROL_C_EXIT.
 //! - A process that has a console of its own is not asked to give it up. The
-//!   window and the MCP server have none, which is what makes this safe there;
-//!   in a console program the same call would take that program's own output
-//!   away mid-run. `stop_foreground` still stops the command either way.
+//!   window has none, which is what makes this safe there. The background
+//!   service and the MCP server do have one -- hidden, but theirs: every
+//!   console program they start shares it instead of opening a window. They
+//!   hand the attaching to a short-lived helper ([`run_console_helper`]), a
+//!   copy of their own program, so their console stays where it is.
+//!
+//! The service once did it itself, because the check looked for a console
+//! *window* and a hidden console has none. Giving its console up took the
+//! service down with the interrupt it raised; had it survived, every terminal
+//! opened afterwards would have flashed a console window on the desktop, the
+//! terminal host it starts having no console left to share.
 
 /// What was done to interrupt a pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,18 +102,96 @@ pub fn stop_foreground(_shell_pid: u32, _foreground: Option<u32>) -> anyhow::Res
     Ok(Interrupt::Byte)
 }
 
-/// Whether this process has a console of its own.
+/// Whether this process has a console of its own, shown or not.
 ///
-/// `GetConsoleWindow` returns null for a process with no console attached,
-/// which is what the window and the MCP server are. A console app -- the CLI,
-/// a test harness -- gets a handle back, and for those `FreeConsole` is not
-/// something to do behind their backs.
+/// Not `GetConsoleWindow`: a console started with `CREATE_NO_WINDOW` -- the
+/// background service's -- has no window and is still the console everything
+/// the service starts shares. `GetConsoleCP` answers 0 only when there is no
+/// console at all, which is what the window is.
 #[cfg(windows)]
 fn owns_a_console() -> bool {
-    use winapi::um::wincon::GetConsoleWindow;
+    use winapi::um::consoleapi::GetConsoleCP;
 
-    // SAFETY: no arguments, no ownership; it reports a handle or null.
-    !unsafe { GetConsoleWindow() }.is_null()
+    // SAFETY: no arguments; it reports a code page, or 0 with no console.
+    unsafe { GetConsoleCP() != 0 }
+}
+
+/// The argument that makes a program act as the console helper.
+pub const CONSOLE_HELPER_ARG: &str = "--console-ctrl-helper";
+
+static CONSOLE_HELPER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Name the program that reaches other consoles for this process: one whose
+/// `main` starts with [`run_console_helper`] -- normally this program itself.
+/// Without one, a process with a console of its own declines to attach.
+pub fn use_console_helper(program: std::path::PathBuf) {
+    let _ = CONSOLE_HELPER.set(program);
+}
+
+/// Run as the console helper when the arguments ask for it, and say with what
+/// exit code to leave; `None` for an ordinary start.
+///
+/// `--console-ctrl-helper interrupt <pid>`: raise Ctrl+C on that process's
+/// console; 0 when it was raised. `--console-ctrl-helper mode <pid>`: 0 when
+/// the program on that console expects Ctrl+C to be a signal. Anything else
+/// is 2. The helper gives up its own console to do it, which is the point:
+/// it is a process nothing else needs.
+pub fn run_console_helper() -> Option<i32> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() != Some(CONSOLE_HELPER_ARG) {
+        return None;
+    }
+    let action = args.next();
+    let pid = args.next().and_then(|pid| pid.parse::<u32>().ok());
+    #[cfg(windows)]
+    {
+        let Some(pid) = pid.filter(|pid| *pid != 0 && *pid != u32::MAX) else {
+            return Some(2);
+        };
+        Some(match action.as_deref() {
+            Some("interrupt") => i32::from(interrupt_here(pid).is_err()),
+            Some("mode") => i32::from(!mode_here(pid)),
+            _ => 2,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (action, pid);
+        Some(2)
+    }
+}
+
+/// Ask the helper; `None` when there is none or it could not run.
+#[cfg(windows)]
+fn ask_helper(action: &str, pid: u32) -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let program = CONSOLE_HELPER.get()?;
+    // A hidden console of its own, never a window: it frees that console
+    // straight away, and a new one would be shown on the desktop.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut child = Command::new(program)
+        .args([CONSOLE_HELPER_ARG, action, &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.code() == Some(0)),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// Keep the interrupt we raise from ending us as well.
@@ -148,8 +234,6 @@ fn protect_this_process() {
 #[cfg(windows)]
 pub fn interrupt_process_group(pid: u32) -> anyhow::Result<Interrupt> {
     use anyhow::anyhow;
-    use std::sync::Mutex;
-    use winapi::um::wincon::{AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, CTRL_C_EVENT};
 
     // `AttachConsole` reads (DWORD)-1 as ATTACH_PARENT_PROCESS. A pid that
     // arrives as u32::MAX -- a stale handle, a bad cast, a pane whose child
@@ -160,26 +244,41 @@ pub fn interrupt_process_group(pid: u32) -> anyhow::Result<Interrupt> {
         return Err(anyhow!("refusing to interrupt process group {pid}"));
     }
 
-    // Attaching to a console is process-wide: two interrupts at once would
-    // each free the other's console out from under it.
-    static ATTACHING: Mutex<()> = Mutex::new(());
-    let _guard = ATTACHING.lock().unwrap_or_else(|err| err.into_inner());
-
     // A process can be attached to one console, so reaching another one means
     // giving up ours -- and that is not a private act. Everything in this
     // process that was using the console loses it at the same moment, which
-    // in a console program means its own output. The window and the MCP
-    // server have no console, so there is nothing to give up and nothing to
-    // break; anywhere else, say so instead of doing damage. `stop_foreground`
+    // in a console program means its own output. The window has no console,
+    // so there is nothing to give up and nothing to break; a process with one
+    // sends its helper, or says so instead of doing damage. `stop_foreground`
     // still stops the command, by the route below this one.
     //
     // Found the hard way: run from a console, this took out the test harness
     // mid-run -- stdout gone, then STATUS_CONTROL_C_EXIT -- and then the gate.
+    // Later the background service too, whose console is hidden.
     if owns_a_console() {
-        return Err(anyhow!(
-            "refusing to detach this process's own console to signal {pid}"
-        ));
+        return match ask_helper("interrupt", pid) {
+            Some(true) => Ok(Interrupt::ConsoleEvent),
+            Some(false) => Err(anyhow!("could not interrupt process {pid}")),
+            None => Err(anyhow!(
+                "refusing to detach this process's own console to signal {pid}"
+            )),
+        };
     }
+    interrupt_here(pid)
+}
+
+/// Attach to `pid`'s console and raise Ctrl+C there, from this process.
+/// Only for a process with no console to lose: the window, or the helper.
+#[cfg(windows)]
+fn interrupt_here(pid: u32) -> anyhow::Result<Interrupt> {
+    use anyhow::anyhow;
+    use std::sync::Mutex;
+    use winapi::um::wincon::{AttachConsole, FreeConsole, GenerateConsoleCtrlEvent, CTRL_C_EVENT};
+
+    // Attaching to a console is process-wide: two interrupts at once would
+    // each free the other's console out from under it.
+    static ATTACHING: Mutex<()> = Mutex::new(());
+    let _guard = ATTACHING.lock().unwrap_or_else(|err| err.into_inner());
 
     protect_this_process();
 
@@ -229,13 +328,6 @@ pub fn interrupt_process_group(pid: u32) -> anyhow::Result<Interrupt> {
 /// editor was waiting for, so when the mode cannot be read the answer is no.
 #[cfg(windows)]
 pub fn expects_interrupt_signal(pid: u32) -> bool {
-    use std::sync::Mutex;
-    use winapi::um::consoleapi::GetConsoleMode;
-    use winapi::um::fileapi::{CreateFileA, OPEN_EXISTING};
-    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::wincon::{AttachConsole, FreeConsole, ENABLE_PROCESSED_INPUT};
-    use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
-
     if pid == u32::MAX || pid == 0 {
         return false;
     }
@@ -244,10 +336,24 @@ pub fn expects_interrupt_signal(pid: u32) -> bool {
     // and attaching means giving up our own. A process that has one keeps it:
     // taking it away would take that process's own output with it, which is
     // exactly what this did to the test harness -- stdout gone mid-run, and
-    // the suite dead. No answer is the safe answer here anyway; see below.
+    // the suite dead. Its helper asks instead; with none, no answer is the
+    // safe answer anyway; see below.
     if owns_a_console() {
-        return false;
+        return ask_helper("mode", pid).unwrap_or(false);
     }
+    mode_here(pid)
+}
+
+/// Read the console mode of `pid`'s console from this process.
+/// Only for a process with no console to lose: the window, or the helper.
+#[cfg(windows)]
+fn mode_here(pid: u32) -> bool {
+    use std::sync::Mutex;
+    use winapi::um::consoleapi::GetConsoleMode;
+    use winapi::um::fileapi::{CreateFileA, OPEN_EXISTING};
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::wincon::{AttachConsole, FreeConsole, ENABLE_PROCESSED_INPUT};
+    use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
 
     static ATTACHING: Mutex<()> = Mutex::new(());
     let _guard = ATTACHING.lock().unwrap_or_else(|err| err.into_inner());

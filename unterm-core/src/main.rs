@@ -2,7 +2,47 @@ use anyhow::Result;
 use unterm_core::lifetime::{self, CoreMode};
 use unterm_core::{clear_discovery, try_acquire_instance_lock, write_discovery, CoreServer};
 
+#[cfg(windows)]
+struct WindowsHighResTimer(bool);
+
+#[cfg(windows)]
+impl WindowsHighResTimer {
+    fn enable() -> Self {
+        #[link(name = "winmm")]
+        extern "system" {
+            fn timeBeginPeriod(uPeriod: u32) -> u32;
+        }
+        // SAFETY: standard WinMM timer period API; paired with timeEndPeriod(1) on Drop.
+        let ok = unsafe { timeBeginPeriod(1) == 0 };
+        Self(ok)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsHighResTimer {
+    fn drop(&mut self) {
+        if self.0 {
+            #[link(name = "winmm")]
+            extern "system" {
+                fn timeEndPeriod(uPeriod: u32) -> u32;
+            }
+            // SAFETY: matches successful timeBeginPeriod(1) above.
+            unsafe {
+                timeEndPeriod(1);
+            }
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    // A copy of this program reaches other consoles for it (Ctrl+C in a
+    // terminal), so the Core never gives up its own hidden console.
+    if let Some(code) = unterm_services::interrupt::run_console_helper() {
+        std::process::exit(code);
+    }
+    if let Ok(program) = std::env::current_exe() {
+        unterm_services::interrupt::use_console_helper(program);
+    }
     let args = CoreArgs::parse(std::env::args_os().skip(1))?;
     if args.version {
         println!("unterm-core {}", unterm_protocol::PRODUCT_VERSION);
@@ -12,6 +52,8 @@ fn main() -> Result<()> {
         print_help();
         return Ok(());
     }
+    #[cfg(windows)]
+    let _high_res_timer = WindowsHighResTimer::enable();
 
     // Single-instance gate: concurrent GUI/CLI launches may race to
     // spawn a core; only the lock holder may bind and publish

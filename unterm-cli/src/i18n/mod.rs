@@ -182,6 +182,8 @@ fn detect_os_locale() -> Option<&'static str> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         if let Ok(output) = std::process::Command::new("reg")
             .args([
                 "query",
@@ -189,6 +191,8 @@ fn detect_os_locale() -> Option<&'static str> {
                 "/v",
                 "LocaleName",
             ])
+            .stdin(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             if output.status.success() {

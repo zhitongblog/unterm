@@ -49,7 +49,14 @@ fn target(cmd: &UpdateCommand) -> Result<(std::path::PathBuf, String)> {
     };
     // Its own answer to --version, rather than ours: the point of --app is
     // updating an install other than the one running this command.
-    let output = std::process::Command::new(&exe).arg("--version").output()?;
+    let mut probe = std::process::Command::new(&exe);
+    probe.arg("--version").stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        probe.creation_flags(0x0800_0000);
+    }
+    let output = probe.output()?;
     let text = String::from_utf8_lossy(&output.stdout);
     let version = text
         .split_whitespace()

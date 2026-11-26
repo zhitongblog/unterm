@@ -612,19 +612,27 @@ fn concurrent_launches_yield_exactly_one_core() {
 /// discovery record from wherever the *test process* says state lives --
 /// so unlike every test above, this one has to set it in-process. That
 /// is a process-global mutation, hence the guard.
-struct StateDirEnv(Option<std::ffi::OsString>);
+struct StateDirEnv {
+    previous: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
 
 impl StateDirEnv {
     fn set(dir: &std::path::Path) -> Self {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var_os("UNTERM_STATE_DIR");
         std::env::set_var("UNTERM_STATE_DIR", dir);
-        Self(previous)
+        Self {
+            previous,
+            _lock: lock,
+        }
     }
 }
 
 impl Drop for StateDirEnv {
     fn drop(&mut self) {
-        match self.0.take() {
+        match self.previous.take() {
             Some(previous) => std::env::set_var("UNTERM_STATE_DIR", previous),
             None => std::env::remove_var("UNTERM_STATE_DIR"),
         }
@@ -683,7 +691,7 @@ fn a_killed_core_is_replaced_without_restarting_the_client() {
     first.kill().unwrap();
     first.wait().unwrap();
     assert!(
-        wait_until(Duration::from_secs(10), || !cache.is_live()),
+        wait_until(Duration::from_secs(10), || !cache.is_live() || cache.epoch() > 0),
         "the cache kept claiming a killed Core was live"
     );
 

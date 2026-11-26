@@ -186,6 +186,18 @@ fn request_graphics(window: Arc<Window>, width: u32, height: u32) -> anyhow::Res
 /// If the surface will not configure, say so rather than falling back: the
 /// fallback exists for "this machine's GPU stack does not work", and this
 /// process has already proved that it does.
+fn preferred_present_mode(capabilities: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
+    #[cfg(target_os = "windows")]
+    if capabilities
+        .present_modes
+        .contains(&wgpu::PresentMode::Mailbox)
+    {
+        return wgpu::PresentMode::Mailbox;
+    }
+    let _ = capabilities;
+    wgpu::PresentMode::AutoVsync
+}
+
 fn surface_on(
     shared: SharedGpu,
     window: Arc<Window>,
@@ -213,8 +225,8 @@ fn surface_on(
             format,
             width: width.max(1),
             height: height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
+            present_mode: preferred_present_mode(&capabilities),
+            desired_maximum_frame_latency: 1,
             alpha_mode: capabilities.alpha_modes[0],
             view_formats: vec![],
         },
@@ -278,10 +290,10 @@ fn attach_backdrop(live: &mut Live, shared: &SharedGpu, format: wgpu::TextureFor
             format,
             width: live.width,
             height: live.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: preferred_present_mode(&capabilities),
             alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         },
     );
     if let Some(error) = pollster::block_on(shared.device.pop_error_scope()) {
@@ -396,10 +408,10 @@ fn try_backend(
             format,
             width: width.max(1),
             height: height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: preferred_present_mode(&capabilities),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         },
     );
     if let Some(error) = pollster::block_on(device.pop_error_scope()) {
@@ -16947,9 +16959,14 @@ impl App {
             // writes. A skipped request costs nothing: the busy tick fires
             // within the same interval and asks again, so the trailing
             // frame always lands.
+            let min_frame_gap = if crate::statsbar::user_typing_recently() {
+                std::time::Duration::from_millis(1)
+            } else {
+                std::time::Duration::from_millis(8)
+            };
             let frame_due = self
                 .window.presented_at
-                .map_or(true, |at| at.elapsed() >= std::time::Duration::from_millis(8));
+                .map_or(true, |at| at.elapsed() >= min_frame_gap);
             let asked_just_now = waiting.is_some_and(|waited| waited < UNANSWERED);
             if frame_due && !asked_just_now {
                 if let Some(live) = self.window.state.as_ref() {
@@ -17170,7 +17187,7 @@ impl Live {
                 present_mode: wgpu::PresentMode::AutoVsync,
                 alpha_mode: self.alpha_mode,
                 view_formats: vec![],
-                desired_maximum_frame_latency: 2,
+                desired_maximum_frame_latency: 1,
             },
         );
         if let Some(composition) = self.composition.as_ref() {

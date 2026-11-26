@@ -148,6 +148,38 @@ fn attach_parent_console() {
     }
 }
 
+#[cfg(windows)]
+struct WindowsHighResTimer(bool);
+
+#[cfg(windows)]
+impl WindowsHighResTimer {
+    fn enable() -> Self {
+        #[link(name = "winmm")]
+        extern "system" {
+            fn timeBeginPeriod(uPeriod: u32) -> u32;
+        }
+        // SAFETY: standard WinMM timer period API; paired with timeEndPeriod(1) on Drop.
+        let ok = unsafe { timeBeginPeriod(1) == 0 };
+        Self(ok)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsHighResTimer {
+    fn drop(&mut self) {
+        if self.0 {
+            #[link(name = "winmm")]
+            extern "system" {
+                fn timeEndPeriod(uPeriod: u32) -> u32;
+            }
+            // SAFETY: matches successful timeBeginPeriod(1) above.
+            unsafe {
+                timeEndPeriod(1);
+            }
+        }
+    }
+}
+
 pub fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     attach_parent_console();
@@ -162,6 +194,8 @@ pub fn main() -> std::process::ExitCode {
         print!("{}", help_text());
         return std::process::ExitCode::SUCCESS;
     }
+    #[cfg(windows)]
+    let _high_res_timer = WindowsHighResTimer::enable();
     env_logger::Builder::from_env(env_logger::Env::default().filter_or("UNTERM_LOG", "info"))
         .init();
     install_panic_reporter();

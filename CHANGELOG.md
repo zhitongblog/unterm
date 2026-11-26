@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.72.1 — 2026-11-26
+
+### Fixed
+
+- **Eliminated Windows typing latency & UI-thread stalls (`unterm-app`, `unterm-core`).**
+  - Enabled 1ms OS timer resolution on Windows (`winmm::timeBeginPeriod(1)` with RAII `timeEndPeriod(1)` on exit) in both `unterm-app` and `unterm-core`, removing Windows' default 15.6ms timer quantization across `EventHub`, input echo wakeups, and `winit::ControlFlow::WaitUntil`.
+  - Moved `AppEngine::Core` `write_input` / `paste_input` onto a dedicated non-blocking coalescing worker thread (`unterm-input-tx`), preventing Win32 keyboard input from blocking on TCP round-trips or ConPTY stalls and coalescing rapid consecutive keystrokes into a single IPC write.
+  - Lowered DX12 swapchain `desired_maximum_frame_latency` from `2` to `1`, preferred tear-free `PresentMode::Mailbox` on Windows when supported, and dropped active-typing `frame_due` throttling from `8ms` to `1ms`.
+- **Eliminated Windows console black-box flashes (`unterm-cli`, `unterm-services`, `unterm-core`).**
+  - Added `CREATE_NO_WINDOW` (`0x0800_0000`) to `unterm-cli`'s Windows `reg query` locale detection (`i18n/mod.rs`), `mcp-trim`, `remote-core`, and `update` version probes so launching `agy` / MCP hosts never flashes a `cmd.exe` / `reg.exe` window.
+  - Cherry-picked hidden-console `Ctrl+C` helper fix (`#73` `6163702`, `interrupt.rs`, `unterm-core`, `unterm-cli`) so `unterm-core` no longer drops its hidden console on `Ctrl+C` (which previously caused subsequent `OpenConsole.exe` launches to flash black windows or crash the background Core).
+- **Hardened `process_e2e` parallel isolation (`unterm-core/tests/process_e2e.rs`).**
+  - Added a `Mutex` guard to `StateDirEnv` so `a_killed_core_is_replaced_without_restarting_the_client` no longer races with sibling tests under parallel `cargo test`.
+
 ## v0.72.0 — 2026-11-24
 
 ### Added

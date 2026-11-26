@@ -399,6 +399,14 @@ enum SubCommand {
 }
 
 fn main() -> Result<()> {
+    // The MCP server has a console of its own too: a copy of this program
+    // reaches other consoles for it (see `unterm_services::interrupt`).
+    if let Some(code) = unterm_services::interrupt::run_console_helper() {
+        std::process::exit(code);
+    }
+    if let Ok(program) = std::env::current_exe() {
+        unterm_services::interrupt::use_console_helper(program);
+    }
     let opts = Opt::parse();
     apply_transient_lang(opts.lang.as_deref());
     set_target_instance(opts.instance.as_deref());

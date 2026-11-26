@@ -138,8 +138,18 @@ pub fn build_ssh_tunnel_args(
     args
 }
 
+fn hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
+}
+
 fn probe_remote_core(target: &str, ssh_port: Option<u16>) -> Result<(u16, String)> {
-    let mut cmd = Command::new("ssh");
+    let mut cmd = hidden_command("ssh");
     if let Some(port) = ssh_port {
         cmd.arg("-p").arg(port.to_string());
     }
@@ -186,7 +196,7 @@ pub fn run(cmd: RemoteCoreCommand, json_out: bool) -> Result<()> {
             let local_port = pick_local_port(local_port)?;
             let name = sanitize_name(name.as_deref().unwrap_or(&target));
             let ssh_args = build_ssh_tunnel_args(&target, ssh_port, local_port, remote_port);
-            let child = Command::new("ssh")
+            let child = hidden_command("ssh")
                 .args(&ssh_args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -264,8 +274,9 @@ pub fn run(cmd: RemoteCoreCommand, json_out: bool) -> Result<()> {
                         .stderr(Stdio::null())
                         .status();
                     #[cfg(windows)]
-                    let _ = Command::new("taskkill")
+                    let _ = hidden_command("taskkill")
                         .args(["/F", "/PID", &rec.tunnel_pid.to_string()])
+                        .stdin(Stdio::null())
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
                         .status();
