@@ -1,0 +1,174 @@
+---
+import { AGENT_LANDINGS, type AgentLandingData } from "../data/agents";
+import { COMPETITORS } from "../data/competitors";
+import { resolveRelease } from "../lib/release";
+import type { Stats } from "../lib/stats";
+import enUS from "../i18n/en-US.json";
+
+interface Props {
+  agent: AgentLandingData;
+  dict: Record<string, string>;
+  pathPrefix: string;
+  stats: Stats;
+}
+
+const { agent, dict, pathPrefix, stats } = Astro.props as Props;
+const t = (k: string) => dict[k] ?? (enUS as Record<string, string>)[k] ?? k;
+const isZh = pathPrefix === "/zh-CN";
+const release = resolveRelease(stats);
+const otherAgents = AGENT_LANDINGS.filter((a) => a.slug !== agent.slug);
+const topCompare = COMPETITORS.filter((c) =>
+  ["windows-terminal", "warp", "iterm2", "ghostty"].includes(c.slug),
+);
+---
+
+<section class="relative overflow-hidden">
+  <div class="absolute pointer-events-none -top-48 left-1/2 -translate-x-1/2 w-[1000px] h-[800px] rounded-full"
+       style="background: radial-gradient(closest-side, rgb(232 179 75 / 0.11), transparent 70%);"></div>
+
+  <div class="relative max-w-5xl mx-auto px-6 pt-16 sm:pt-20 pb-12">
+    <nav class="text-xs text-notion-faint mb-6 flex items-center gap-2">
+      <a href={pathPrefix || "/"} class="hover:text-notion-ink">Unterm</a>
+      <span>/</span>
+      <span class="text-notion-muted">{isZh ? `${agent.name} 专属运行环境` : `For ${agent.name}`}</span>
+    </nav>
+
+    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-notion-surface/80 border border-notion-border text-xs font-mono text-notion-teal mb-5">
+      <span class="w-1.5 h-1.5 rounded-full bg-notion-teal"></span>
+      <span>{isZh ? agent.eyebrowZh : agent.eyebrow}</span>
+      <span class="text-zinc-700">·</span>
+      <span>{release.tag}</span>
+    </div>
+
+    <h1 class="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-zinc-50 leading-[1.08] text-balance">
+      {isZh ? agent.h1Zh : agent.h1}
+    </h1>
+    <p class="mt-5 text-lg text-notion-muted max-w-3xl leading-relaxed">
+      {isZh ? agent.subtitleZh : agent.subtitle}
+    </p>
+
+    <div class="mt-8 flex flex-wrap items-center gap-3">
+      <a href={`/api/download?v=${release.tag}`}
+         class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-notion-green hover:bg-notion-teal text-zinc-950 font-semibold transition shadow-lg shadow-amber-500/20">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/></svg>
+        <span>{t("hero.cta.download")} ({release.tag})</span>
+      </a>
+      <a href={`${pathPrefix}/#install`}
+         class="inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-notion-border bg-notion-surface/60 hover:border-notion-borderStrong text-notion-ink font-medium transition">
+        {isZh ? "全部平台 & 国内镜像" : "All platforms & mirrors"}
+      </a>
+      <a href={`${pathPrefix}/#pain-points`}
+         class="inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-notion-border bg-notion-surface/40 hover:border-notion-borderStrong text-notion-muted hover:text-notion-ink text-sm transition">
+        {isZh ? "查看全部 8 大痛点 →" : "All 8 pain points →"}
+      </a>
+    </div>
+
+    <div class="mt-8 rounded-xl border border-notion-border bg-notion-sunken/80 overflow-hidden">
+      <div class="px-4 py-2 border-b border-notion-border flex items-center justify-between text-xs font-mono text-notion-faint">
+        <span>{isZh ? `1 分钟接入 ${agent.name}` : `Quick start for ${agent.name}`}</span>
+        <span class="text-notion-teal">MIT · $0 · 100% Local</span>
+      </div>
+      <pre class="p-4 text-xs sm:text-sm font-mono text-notion-ink overflow-x-auto leading-relaxed"><code>{agent.quickStartCmd}</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============== AGENT-SPECIFIC PAIN POINTS ============== -->
+<section class="py-16 border-t border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-notion-ink">
+      {isZh
+        ? `在传统原生终端跑 ${agent.name} 的核心痛点，Unterm 逐个根治`
+        : `Core pain points when running ${agent.name} in a native terminal — solved`}
+    </h2>
+    <div class="mt-8 grid md:grid-cols-2 gap-4">
+      {agent.pains.map((p) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/60 p-5 flex flex-col gap-3">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-mono text-rose-300 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
+              {isZh ? p.tagZh : p.tag}
+            </span>
+            <span class="text-xs font-mono text-emerald-400">{p.badge}</span>
+          </div>
+          <p class="text-sm text-notion-muted leading-relaxed">
+            {isZh ? p.problemZh : p.problem}
+          </p>
+          <p class="text-sm text-notion-ink leading-relaxed border-t border-notion-border/70 pt-3">
+            <strong class="text-emerald-300">{t("home.pain.fixLabel")}</strong>
+            {isZh ? p.fixZh : p.fix}
+          </p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== POWER WORKFLOWS ============== -->
+<section class="py-16 border-t border-notion-border">
+  <div class="max-w-5xl mx-auto px-6">
+    <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-notion-ink">
+      {isZh ? `用 Unterm 解锁 ${agent.name} 进阶工作流` : `Power workflows for ${agent.name} in Unterm`}
+    </h2>
+    <div class="mt-8 grid md:grid-cols-2 gap-5">
+      {agent.workflows.map((w) => (
+        <div class="rounded-xl border border-notion-border bg-notion-surface/40 p-6 flex flex-col gap-3">
+          <h3 class="text-lg font-semibold text-notion-ink">{isZh ? w.titleZh : w.title}</h3>
+          <p class="text-sm text-notion-muted leading-relaxed flex-1">{isZh ? w.bodyZh : w.body}</p>
+          <pre class="rounded-lg border border-notion-border bg-notion-sunken/80 px-3.5 py-2.5 text-xs font-mono text-notion-teal overflow-x-auto"><code>{w.cmd}</code></pre>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== AGENT FAQ ============== -->
+<section class="py-16 border-t border-notion-border">
+  <div class="max-w-4xl mx-auto px-6">
+    <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight text-notion-ink">
+      {isZh ? `${agent.name} 常见问题` : `FAQ: Running ${agent.name} in Unterm`}
+    </h2>
+    <div class="mt-8 divide-y divide-zinc-800 border border-notion-border rounded-xl bg-notion-surface/40">
+      {agent.faqs.map((f) => (
+        <details class="group p-5" open>
+          <summary class="cursor-pointer list-none font-medium text-notion-ink flex items-center justify-between gap-4">
+            <span>{isZh ? f.qZh : f.q}</span>
+            <span class="text-notion-faint group-open:rotate-45 transition-transform">+</span>
+          </summary>
+          <p class="mt-3 text-sm text-notion-muted leading-relaxed">{isZh ? f.aZh : f.a}</p>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<!-- ============== CROSS-LINKS (SEO INTERNAL GRAPH) ============== -->
+<section class="py-14 border-t border-notion-border">
+  <div class="max-w-5xl mx-auto px-6 flex flex-col gap-6">
+    <div>
+      <div class="text-xs font-mono uppercase tracking-widest text-notion-faint mb-3">
+        {isZh ? "其他 AI Coding CLI 专属指南" : "Also built for"}
+      </div>
+      <div class="flex flex-wrap gap-3">
+        {otherAgents.map((o) => (
+          <a href={`${pathPrefix}/for/${o.slug}`}
+             class="px-4 py-2 rounded-lg border border-notion-border bg-notion-surface/50 hover:border-notion-borderStrong text-sm font-medium text-notion-ink transition">
+            Unterm for {o.name} →
+          </a>
+        ))}
+      </div>
+    </div>
+    <div>
+      <div class="text-xs font-mono uppercase tracking-widest text-notion-faint mb-3">
+        {isZh ? "与其他终端横向对比" : "Compare Unterm against other terminals"}
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {topCompare.map((c) => (
+          <a href={`${pathPrefix}/compare/${c.slug}`}
+             class="px-3 py-1.5 rounded-lg border border-notion-border text-sm text-notion-muted hover:text-notion-ink hover:border-notion-borderStrong transition">
+            Unterm vs {c.name}
+          </a>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,45 @@
+---
+// Localized AI Coding CLI landing pages: /<lang>/for/claude-code, /<lang>/for/codex, /<lang>/for/agy
+import Base from "../../../layouts/Base.astro";
+import AgentLanding from "../../../components/AgentLanding.astro";
+import { LOCALES } from "../../../i18n/locales";
+import { DICTS, NON_DEFAULT_LANGS } from "../../../i18n/dicts";
+import { fetchStats } from "../../../lib/stats";
+import {
+  AGENT_LANDINGS,
+  getAgentLanding,
+  agentAlternates,
+  agentJsonLd,
+} from "../../../data/agents";
+
+export function getStaticPaths() {
+  return NON_DEFAULT_LANGS.flatMap((lang) =>
+    AGENT_LANDINGS.map((a) => ({ params: { lang, agent: a.slug } })),
+  );
+}
+
+const { lang, agent: slug } = Astro.params;
+const agent = getAgentLanding(slug as string)!;
+const dict = DICTS[lang as string];
+const pathPrefix = `/${lang}`;
+const isZh = lang === "zh-CN";
+const stats = await fetchStats();
+const seo = {
+  title: isZh ? agent.titleZh : agent.title,
+  description: isZh ? agent.descZh : agent.desc,
+  canonicalPath: `${pathPrefix}/for/${agent.slug}`,
+  xDefault: `https://unterm.app/for/${agent.slug}`,
+  jsonLd: agentJsonLd(agent, lang as string, pathPrefix),
+};
+---
+
+<Base
+  lang={lang as string}
+  dict={dict}
+  alternates={agentAlternates(agent.slug, LOCALES)}
+  locales={LOCALES}
+  pathPrefix={pathPrefix}
+  seo={seo}
+>
+  <AgentLanding agent={agent} dict={dict} pathPrefix={pathPrefix} stats={stats} />
+</Base>

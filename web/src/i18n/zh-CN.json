@@ -655,5 +655,14 @@
   "home.pain.8.tag": "痛点 08 · AI 改乱工作区难撤销，高危命令无护栏",
   "home.pain.8.badge": "✓ 检查点 + 护栏",
   "home.pain.8.problem": "Agent 一次改了十几个文件却引入回归，没建 commit 根本撤不回；误把多行脚本或 rm -rf 粘进终端直接回车执行。",
-  "home.pain.8.fix": "零污染隐藏 Git 检查点（refs/unterm/checkpoints/）一键无损回滚、Cmd+Shift+G 内嵌 Diff 单文件打回、多行高危粘贴安全拦截条，以及 3 档风险自治策略与完整审计日志。"
+  "home.pain.8.fix": "零污染隐藏 Git 检查点（refs/unterm/checkpoints/）一键无损回滚、Cmd+Shift+G 内嵌 Diff 单文件打回、多行高危粘贴安全拦截条，以及 3 档风险自治策略与完整审计日志。",
+  "cmp.c.windows-terminal.title": "Unterm vs Windows Terminal：Windows 跑 Claude Code、Codex 与 Agy 的最佳替代",
+  "cmp.c.windows-terminal.desc": "Windows Terminal 是系统默认终端；Unterm 是专为 AI Coding CLI 打造的纯 Rust GPU 运行环境，根治 Windows 打字延迟、cmd 闪黑窗、TUI 撕裂与多 Agent 改代码冲突。",
+  "cmp.c.windows-terminal.tagline": "Windows Terminal 适合日常敲几行 PowerShell；当你在 Windows 上全天候跑 Claude Code、Codex 或 Agy CLI 时，Unterm 逐个根治系统终端的底层痛点。",
+  "cmp.c.windows-terminal.intro": "Windows Terminal 是优秀的开源默认终端，但在 Windows 10/11 上全天候多开全屏 AI Coding CLI（Claude Code、Codex CLI、Antigravity agy）时，痛点会立刻暴露：15.6ms 系统时钟带来的打字发粘、后台 MCP / Git 探测狂闪 cmd 黑窗、Shift+Enter 误发送、以及开了一堆 Tab 不知道谁卡在 [y/n] 等审批。",
+  "cmp.c.windows-terminal.a1": "<strong>根治 Windows 打字延迟与 cmd 闪黑窗。</strong> Unterm 内置独立非阻塞合并输入线程（<code>unterm-input-tx</code>）、Windows 1ms 时钟（<code>timeBeginPeriod(1)</code>）、DX12 Mailbox 零帧排队、Win32 <code>WM_CHAR</code> 孤儿字符回收，以及全链路强制 <code>CREATE_NO_WINDOW</code> 与隐藏控制台 <code>Ctrl+C</code> 助手，打字跟手且全天候零黑框干扰。",
+  "cmp.c.windows-terminal.a2": "<strong>原生 Agent Cockpit、Fleet Arena 与费用 HUD。</strong> 一眼看清所有 Claude Code / Codex / Agy 窗格的运行与待审批状态；一键在独立 Git Worktree 并行跑多个 Agent 零冲突竞速；<code>Ctrl+Shift+I</code> 跨窗格按 <code>Y</code>/<code>N</code> 放行或用 Unterm Pocket 手机扫码审批；实时聚合每日 Token 与费用水位。",
+  "cmp.c.windows-terminal.a3": "<strong>165 个本地 MCP 方法 + 三端完全一致。</strong> 每个 Unterm 窗口自带本地 127.0.0.1 Token 鉴权 MCP 服务器，Agent 可直接控制分屏、执行命令、读取回滚历史并借助 OSC 133 一键跳至失败命令块，Windows / macOS / Linux 体验完全一致。",
+  "cmp.c.windows-terminal.win": "Windows Terminal 在 Windows 11 上开箱预装，深度集成 WSL、Azure Cloud Shell 与 Visual Studio Developer Command Prompt，适合轻量级原生 Windows Shell 使用。",
+  "cmp.c.windows-terminal.verdict": "偶尔开个 PowerShell 或 WSL？Windows Terminal 已经够用。如果在 Windows 上重度使用 Claude Code、Codex CLI 或 Agy CLI，受够了打字卡顿、闪黑窗和来回切 Tab 审批——Unterm 就是为你打造的。"
 }

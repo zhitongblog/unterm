@@ -166,12 +166,12 @@ const fleetSteps = [
 ];
 
 const agents = [
-  { name: "Claude Code", vendor: "Anthropic", dot: "bg-amber-400" },
-  { name: "Codex CLI", vendor: "OpenAI", dot: "bg-notion-teal" },
-  { name: "Gemini CLI", vendor: "Google", dot: "bg-sky-400" },
-  { name: "Antigravity (agy)", vendor: "Google DeepMind", dot: "bg-indigo-400" },
-  { name: "OpenCode · Qwen", vendor: "SST · Alibaba", dot: "bg-violet-400" },
-  { name: "Cursor · Windsurf", vendor: "1-Click MCP", dot: "bg-emerald-400" },
+  { name: "Claude Code", vendor: "Anthropic", dot: "bg-amber-400", href: "/for/claude-code" },
+  { name: "Codex CLI", vendor: "OpenAI", dot: "bg-notion-teal", href: "/for/codex" },
+  { name: "Antigravity (agy)", vendor: "Google DeepMind", dot: "bg-indigo-400", href: "/for/agy" },
+  { name: "Gemini CLI", vendor: "Google", dot: "bg-sky-400", href: null },
+  { name: "OpenCode · Qwen", vendor: "SST · Alibaba", dot: "bg-violet-400", href: null },
+  { name: "Cursor · Windsurf", vendor: "1-Click MCP", dot: "bg-emerald-400", href: null },
 ];
 
 // The recipes the home page points at; the guide has the rest.
@@ -661,15 +661,28 @@ unterm-cli agent inbox`;
     <h2 class="text-3xl font-semibold tracking-tight text-notion-ink">{t("home.agents.title")}</h2>
     <p class="mt-3 text-notion-muted max-w-2xl mx-auto">{t("home.agents.sub")}</p>
     <div class="mt-10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-      {agents.map((a) => (
-        <div class="rounded-xl border border-notion-border bg-notion-surface/50 px-4 py-4 text-left">
-          <div class="flex items-center gap-2">
-            <span class={`inline-block h-2 w-2 rounded-full ${a.dot}`}></span>
-            <span class="text-sm font-semibold text-notion-ink">{a.name}</span>
+      {agents.map((a) =>
+        a.href ? (
+          <a href={pathPrefix + a.href} class="group rounded-xl border border-notion-border bg-notion-surface/50 hover:border-notion-teal/60 hover:bg-notion-surface px-4 py-4 text-left transition">
+            <div class="flex items-center gap-2">
+              <span class={`inline-block h-2 w-2 rounded-full ${a.dot}`}></span>
+              <span class="text-sm font-semibold text-notion-ink group-hover:text-white">{a.name}</span>
+            </div>
+            <div class="mt-1 text-xs text-notion-teal flex items-center justify-between">
+              <span>{a.vendor}</span>
+              <span>→</span>
+            </div>
+          </a>
+        ) : (
+          <div class="rounded-xl border border-notion-border bg-notion-surface/50 px-4 py-4 text-left">
+            <div class="flex items-center gap-2">
+              <span class={`inline-block h-2 w-2 rounded-full ${a.dot}`}></span>
+              <span class="text-sm font-semibold text-notion-ink">{a.name}</span>
+            </div>
+            <div class="mt-1 text-xs text-notion-faint">{a.vendor}</div>
           </div>
-          <div class="mt-1 text-xs text-notion-faint">{a.vendor}</div>
-        </div>
-      ))}
+        )
+      )}
     </div>
   </div>
 </section>

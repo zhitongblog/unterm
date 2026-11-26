@@ -1,20 +1,35 @@
 # Unterm
 
-**The terminal AI agents can drive.**
+**The best terminal runtime & native assistant for Claude Code, Codex & Agy CLI — and the terminal AI agents can drive.**
 
 [![GitHub stars](https://img.shields.io/github/stars/zhitongblog/unterm?style=social)](https://github.com/zhitongblog/unterm/stargazers) [![AtomGit](https://atomgit.com/zhitongblog/unterm/star/badge.svg)](https://atomgit.com/zhitongblog/unterm) [![Latest release](https://img.shields.io/github/v/release/zhitongblog/unterm)](https://github.com/zhitongblog/unterm/releases/latest) [![AtomGit 镜像](https://img.shields.io/badge/中国镜像-atomgit.com%2Fzhitongblog%2Funterm-e60012.svg)](https://atomgit.com/zhitongblog/unterm)
 
-[**Download the latest release**](https://github.com/zhitongblog/unterm/releases/latest) · 🪞 [**AtomGit 国内高速下载 (China Mirror)**](https://atomgit.com/zhitongblog/unterm/releases) · [**Website**](https://unterm.app) · [**Docs**](https://unterm.app/docs/)
+[**Download the latest release (`v0.72.1`)**](https://github.com/zhitongblog/unterm/releases/latest) · 🪞 [**AtomGit 国内高速下载 (China Mirror)**](https://atomgit.com/zhitongblog/unterm/releases) · [**Website (16 Languages)**](https://unterm.app) · [**For Claude Code**](https://unterm.app/for/claude-code) · [**For Codex**](https://unterm.app/for/codex) · [**For Agy**](https://unterm.app/for/agy) · [**Docs**](https://unterm.app/docs/)
 
 If Unterm is useful to you, a ⭐ on GitHub or [AtomGit](https://atomgit.com/zhitongblog/unterm) helps other people find it.
 
 ![Agent Cockpit: three agents working, the Inbox surfaces the one that needs you, Enter jumps to it](assets/demo/agent-cockpit.gif)
 
+Traditional terminals (Terminal.app, Windows Terminal, iTerm2, Electron terminals) were designed for typing one command at a time — not running **Claude Code**, **Codex CLI**, and **Antigravity (`agy`)** all day. Built on Unterm's pure-Rust GPU **`next-core`** engine (macOS / Windows / Linux, MIT, $0, 100% local), Unterm solves the 8 biggest native terminal pain points and exposes **165 authenticated local MCP methods** (`+ auth.login`) so any AI agent can drive the terminal directly.
+
+### 8 Native Terminal Pain Points Solved
+
+| # | Native Terminal Pain Point | Unterm Kernel / Runtime Solution |
+|---|---|---|
+| **01** | **Typing lag, dropped keys & CJK IME glitches** under Windows 15.6ms timers or heavy agent output | Dedicated non-blocking coalescing input worker (`unterm-input-tx`), Windows 1ms timer (`timeBeginPeriod(1)`), DX12 Mailbox 1-frame latency, Win32 `WM_CHAR` orphan recovery, `<2ms` input |
+| **02** | **Full-screen TUI tearing, flicker & Shift+Enter submits** in Claude Code / Agy | Pure-Rust GPU renderer with global `?2026` synchronized output, main-screen soft-wrap reflow, ECMA-48 CJK cell splitting, Kitty keyboard protocol + `modifyOtherKeys` |
+| **03** | **Windows cmd/OpenConsole black-box flashes & Ctrl+C crashes** | Enforced `CREATE_NO_WINDOW` across every background subprocess & MCP bridge, hidden-console `Ctrl+C` helper, zero-spawn sidebar Git state caching |
+| **04** | **Parallel agents overwriting each other** in the same repo (`.git/index.lock`) | **Native Fleet Arena & Git Worktree Studio**: spin up 2–3 agents in isolated worktrees in 1 click, compare live `+added -deleted` diffs, 1-click squash-merge the winner |
+| **05** | **Lost in tabs waiting on `[y/n]` approval prompts** | **Agent Cockpit** live state dots, 6-line sidebar hover peeks, `Ctrl+Shift+I` cross-pane `Y`/`N` quick-approve, plus **Unterm Pocket** QR mobile approvals over LAN/Tailscale |
+| **06** | **Context overflow, scattered token bills & re-explaining tasks** | **Daily Telemetry HUD** (tokens, USD cost, context %, success rate), 85% 1-click `/compact` alert, and portable **Handoff (`H`)** between agents |
+| **07** | **Digging through build logs & browser errors to feed AI** | **OSC 133** 1-click jump to last failed command block, `Ctrl+S` (`✦AI`) search-to-agent context feed, plus **Unzoo Browser** 1-click frontend error self-healing |
+| **08** | **Risky uncommitted AI edits & unsafe multi-line paste** | Zero-pollution **hidden Git checkpoints** (`refs/unterm/checkpoints/*`), inline Diff single-file revert (`Cmd+Shift+G`), multi-line paste guard, 3-tier risk-graded autonomy & audit logs |
+
 Cross-platform terminal (macOS / Linux / Windows) built on Unterm's native
 `next-core` terminal engine, with one design bet: the terminal itself is
 controllable from the outside by any AI agent over MCP. Claude Code, Codex,
-Gemini CLI, Cursor, Aider, your own scripts — they all get the same JSON-RPC
-surface (**152 authenticated methods plus `auth.login`**) to spawn shells, run
+Antigravity (`agy`), Gemini CLI, OpenCode, Qwen Code, Cursor, Aider — they all get the same JSON-RPC
+surface (**165 authenticated methods plus `auth.login`** and **`--mcp-trim`** saving ~30k tokens per turn) to spawn shells, run
 commands, read pane state, capture screenshots, record sessions, and run the
 Agent Cockpit. (Theme, language and `unterm.conf` are not on MCP; they are set
 through Web Settings, `unterm-cli`, or the file.)
@@ -73,12 +88,12 @@ Full docs: [unterm.app/docs/agent-cockpit](https://unterm.app/docs/agent-cockpit
 Pre-built artifacts are published on GitHub Releases and mirrored on AtomGit (for fast direct downloads in mainland China):
 
 - **Global (GitHub Releases)**: https://github.com/zhitongblog/unterm/releases/latest
-- **中国大陆高速下载 (AtomGit 镜像 / 免登录直链 `v0.71.25`)**: https://atomgit.com/zhitongblog/unterm/releases/tag/v0.71.25
-  - **macOS (Universal arm64+x86_64)**: [Unterm-macos-v0.71.25.dmg](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-macos-v0.71.25.dmg)
-  - **Windows x64**: [Unterm-0.71.25-x64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-0.71.25-x64.msi) · [Unterm-windows-x64-v0.71.25.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-windows-x64-v0.71.25.zip)
-  - **Windows ARM64**: [Unterm-0.71.25-arm64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-0.71.25-arm64.msi) · [Unterm-windows-arm64-v0.71.25.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-windows-arm64-v0.71.25.zip)
-  - **Linux x86_64**: [unterm-v0.71.25.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/unterm-v0.71.25.deb) · [Unterm-v0.71.25-x86_64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-v0.71.25-x86_64.AppImage)
-  - **Linux ARM64**: [unterm-v0.71.25.arm64.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/unterm-v0.71.25.arm64.deb) · [Unterm-v0.71.25-aarch64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.71.25/Unterm-v0.71.25-aarch64.AppImage)
+- **中国大陆高速下载 (AtomGit 镜像 / 免登录直链 `v0.72.1`)**: https://atomgit.com/zhitongblog/unterm/releases/tag/v0.72.1
+  - **macOS (Universal arm64+x86_64)**: [Unterm-macos-v0.72.1.dmg](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-macos-v0.72.1.dmg)
+  - **Windows x64**: [Unterm-0.72.1-x64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-0.72.1-x64.msi) · [Unterm-windows-x64-v0.72.1.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-windows-x64-v0.72.1.zip)
+  - **Windows ARM64**: [Unterm-0.72.1-arm64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-0.72.1-arm64.msi) · [Unterm-windows-arm64-v0.72.1.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-windows-arm64-v0.72.1.zip)
+  - **Linux x86_64**: [unterm-v0.72.1.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/unterm-v0.72.1.deb) · [Unterm-v0.72.1-x86_64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-v0.72.1-x86_64.AppImage)
+  - **Linux ARM64**: [unterm-v0.72.1.arm64.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/unterm-v0.72.1.arm64.deb) · [Unterm-v0.72.1-aarch64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.72.1/Unterm-v0.72.1-aarch64.AppImage)
 
 | Platform | Artifact                                                    |
 | -------- | ----------------------------------------------------------- |

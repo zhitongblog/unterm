@@ -1,0 +1,40 @@
+---
+// Default-locale (en-US) AI Coding CLI landing pages: /for/claude-code, /for/codex, /for/agy
+import Base from "../../layouts/Base.astro";
+import AgentLanding from "../../components/AgentLanding.astro";
+import { LOCALES } from "../../i18n/locales";
+import enUS from "../../i18n/en-US.json";
+import { fetchStats } from "../../lib/stats";
+import {
+  AGENT_LANDINGS,
+  getAgentLanding,
+  agentAlternates,
+  agentJsonLd,
+} from "../../data/agents";
+
+export function getStaticPaths() {
+  return AGENT_LANDINGS.map((a) => ({ params: { agent: a.slug } }));
+}
+
+const { agent: slug } = Astro.params;
+const agent = getAgentLanding(slug as string)!;
+const stats = await fetchStats();
+const seo = {
+  title: agent.title,
+  description: agent.desc,
+  canonicalPath: `/for/${agent.slug}`,
+  xDefault: `https://unterm.app/for/${agent.slug}`,
+  jsonLd: agentJsonLd(agent, "en-US", ""),
+};
+---
+
+<Base
+  lang="en-US"
+  dict={enUS}
+  alternates={agentAlternates(agent.slug, LOCALES)}
+  locales={LOCALES}
+  pathPrefix=""
+  seo={seo}
+>
+  <AgentLanding agent={agent} dict={enUS} pathPrefix="" stats={stats} />
+</Base>
