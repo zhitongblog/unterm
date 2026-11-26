@@ -26,7 +26,7 @@ use unterm_engine::{
 };
 
 #[derive(Debug)]
-enum QueuedInput {
+pub(crate) enum QueuedInput {
     Write { pane_id: usize, text: String },
     Paste { pane_id: usize, text: String },
 }
