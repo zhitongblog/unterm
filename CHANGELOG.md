@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.73.1 — 2026-11-27
+
+### Added
+
+- **Direct Selection Delete & Cut Inside Active Input Lines (`unterm-app/src/select.rs`, `window.rs`).**
+  - Drag-selecting text inside the active shell or AI Coding CLI input line (Claude Code, Codex, Agy) and pressing `Backspace` or `Delete` now deletes only the selected span directly (computing exact cursor moves and backspaces, handling CJK wide-character cells and soft-wrapped multi-line inputs cleanly).
+  - Added `Cmd+X` (macOS) / `Ctrl+Shift+X` (Windows & Linux) to cut the selected input span to the clipboard and delete it in one step.
+  - Automatically ignores selections in historical scrollback output or alternate-screen apps (`vim`, `less`, `htop`, `tmux`) so prompts are never accidentally edited.
+
 ## v0.73.0 — 2026-11-27
 
 ### Added
