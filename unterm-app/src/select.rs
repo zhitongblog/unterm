@@ -63,6 +63,129 @@ impl Drag {
     }
 }
 
+/// Build the terminal keystroke sequence (Left/Right cursor moves + Backspaces)
+/// that deletes `selection` when it lies inside the active logical input line
+/// containing the cursor.
+///
+/// Returns `None` when:
+/// - the alternate screen is active (vim / less / htop / tmux),
+/// - the selection falls outside the cursor's soft-wrapped logical line
+///   (e.g. historical scrollback output above the prompt), or
+/// - the selection covers no non-empty characters.
+pub fn selection_delete_sequence(
+    selection: Selection,
+    lines: &[unterm_engine::StyledScreenLine],
+    cursor_row_idx: usize,
+    cursor_col: usize,
+    application_cursor_keys: bool,
+    alt_screen_active: bool,
+) -> Option<String> {
+    if alt_screen_active || selection.is_empty() {
+        return None;
+    }
+    let cur_line = lines.get(cursor_row_idx)?;
+    let cur_scroll_row = cur_line.row;
+
+    // Expand across any soft-wrapped rows that belong to the same logical
+    // input line as the cursor.
+    let mut logical_start = cursor_row_idx;
+    while logical_start > 0 && lines[logical_start - 1].wrapped {
+        logical_start -= 1;
+    }
+    let mut logical_end = cursor_row_idx;
+    while logical_end + 1 < lines.len() && lines[logical_end].wrapped {
+        logical_end += 1;
+    }
+
+    let (start, end) = selection.normalized();
+    let min_row = lines[logical_start].row;
+    let max_row = lines[logical_end].row;
+    if start.row < min_row || end.row > max_row {
+        return None;
+    }
+
+    // Flatten the logical line into non-spacer character entries:
+    // `(scroll_row, start_col, end_col_exclusive, ch)`.
+    let mut chars: Vec<(i64, usize, usize, char)> = Vec::new();
+    for line in &lines[logical_start..=logical_end] {
+        for (col, cell) in line.cells.iter().enumerate() {
+            if cell.width == 0 {
+                // Wide-glyph trailing spacer cell — not a separate character.
+                continue;
+            }
+            let w = (cell.width as usize).max(1);
+            chars.push((line.row, col, col + w, cell.ch));
+        }
+    }
+
+    // Trim trailing padding spaces beyond the cursor and last non-blank glyph
+    // so dragging past the end of the line clamps to the actual typed text.
+    let last_meaningful = chars
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, (r, c, _, ch))| {
+            !ch.is_whitespace() || (*r == cur_scroll_row && *c < cursor_col)
+        })
+        .map(|(i, _)| i + 1)
+        .unwrap_or(0);
+    chars.truncate(last_meaningful);
+    if chars.is_empty() {
+        return None;
+    }
+
+    // Map `(row, col)` to a character index in `0..=chars.len()`.
+    let pos_to_idx = |target_row: i64, target_col: usize| -> usize {
+        for (idx, &(r, c_start, c_end, _)) in chars.iter().enumerate() {
+            if r > target_row || (r == target_row && target_col < c_end) {
+                // If target_col lands inside or before this glyph, snap to it.
+                let _ = c_start;
+                return idx;
+            }
+        }
+        chars.len()
+    };
+
+    let cursor_idx = pos_to_idx(cur_scroll_row, cursor_col);
+    let sel_start_idx = pos_to_idx(start.row, start.column);
+    // Selection endpoints in Unterm are inclusive on `end.column`.
+    let sel_end_idx = pos_to_idx(end.row, end.column.saturating_add(1));
+
+    if sel_end_idx <= sel_start_idx {
+        return None;
+    }
+    let delete_count = sel_end_idx - sel_start_idx;
+    if delete_count > 4096 {
+        return None;
+    }
+
+    let left = if application_cursor_keys {
+        "\x1bOD"
+    } else {
+        "\x1b[D"
+    };
+    let right = if application_cursor_keys {
+        "\x1bOC"
+    } else {
+        "\x1b[C"
+    };
+
+    let mut out = String::with_capacity(delete_count * 4);
+    if sel_end_idx > cursor_idx {
+        for _ in 0..(sel_end_idx - cursor_idx) {
+            out.push_str(right);
+        }
+    } else if cursor_idx > sel_end_idx {
+        for _ in 0..(cursor_idx - sel_end_idx) {
+            out.push_str(left);
+        }
+    }
+    for _ in 0..delete_count {
+        out.push('\x7f');
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +274,86 @@ mod tests {
         let selection = drag.selection().expect("a moved drag selects");
 
         assert_eq!(selection.shape, SelectionShape::Block);
+    }
+
+    fn make_line(row: i64, text: &str, wrapped: bool) -> unterm_engine::StyledScreenLine {
+        let mut cells = Vec::new();
+        for ch in text.chars() {
+            let is_wide = ch as u32 >= 0x2E80;
+            let width = if is_wide { 2 } else { 1 };
+            cells.push(unterm_engine::StyledCell {
+                ch,
+                combining: None,
+                width,
+                style: unterm_engine::CellStyle::default(),
+            });
+            if is_wide {
+                cells.push(unterm_engine::StyledCell {
+                    ch: ' ',
+                    combining: None,
+                    width: 0,
+                    style: unterm_engine::CellStyle::default(),
+                });
+            }
+        }
+        unterm_engine::StyledScreenLine {
+            row,
+            cells,
+            wrapped,
+        }
+    }
+
+    #[test]
+    fn deletes_selected_ascii_span_before_cursor() {
+        let lines = vec![make_line(10, "$ echo hello world   ", false)];
+        let mut sel = Selection::new(SelectionPoint::new(7, 10), SelectionShape::Linear);
+        sel.extend_to(SelectionPoint::new(12, 10));
+        let seq = selection_delete_sequence(sel, &lines, 0, 18, false, false).unwrap();
+        assert_eq!(seq, format!("{}{}", "\x1b[D".repeat(5), "\x7f".repeat(6)));
+    }
+
+    #[test]
+    fn deletes_selected_span_after_cursor_using_right_arrows() {
+        let lines = vec![make_line(10, "$ echo hello world", false)];
+        let mut sel = Selection::new(SelectionPoint::new(13, 10), SelectionShape::Linear);
+        sel.extend_to(SelectionPoint::new(17, 10));
+        let seq = selection_delete_sequence(sel, &lines, 0, 7, true, false).unwrap();
+        assert_eq!(seq, format!("{}{}", "\x1bOC".repeat(11), "\x7f".repeat(5)));
+    }
+
+    #[test]
+    fn counts_cjk_wide_characters_as_single_backspaces() {
+        let lines = vec![make_line(5, "> 你好世界", false)];
+        let mut sel = Selection::new(SelectionPoint::new(2, 5), SelectionShape::Linear);
+        sel.extend_to(SelectionPoint::new(5, 5));
+        let seq = selection_delete_sequence(sel, &lines, 0, 10, false, false).unwrap();
+        assert_eq!(seq, format!("{}{}", "\x1b[D".repeat(2), "\x7f".repeat(2)));
+    }
+
+    #[test]
+    fn deletes_across_soft_wrapped_input_rows() {
+        let lines = vec![
+            make_line(20, "> first ", true),
+            make_line(21, "second", false),
+        ];
+        let mut sel = Selection::new(SelectionPoint::new(5, 20), SelectionShape::Linear);
+        sel.extend_to(SelectionPoint::new(2, 21));
+        let seq = selection_delete_sequence(sel, &lines, 1, 6, false, false).unwrap();
+        assert_eq!(seq, format!("{}{}", "\x1b[D".repeat(3), "\x7f".repeat(6)));
+    }
+
+    #[test]
+    fn ignores_historical_scrollback_and_alt_screen_selections() {
+        let lines = vec![
+            make_line(9, "previous output line", false),
+            make_line(10, "$ current input", false),
+        ];
+        let mut sel = Selection::new(SelectionPoint::new(0, 9), SelectionShape::Linear);
+        sel.extend_to(SelectionPoint::new(7, 9));
+        assert!(selection_delete_sequence(sel, &lines, 1, 15, false, false).is_none());
+
+        let mut on_prompt = Selection::new(SelectionPoint::new(2, 10), SelectionShape::Linear);
+        on_prompt.extend_to(SelectionPoint::new(8, 10));
+        assert!(selection_delete_sequence(on_prompt, &lines, 1, 15, false, true).is_none());
     }
 }

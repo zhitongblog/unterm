@@ -7926,6 +7926,42 @@ impl App {
         self.window.drawn_revision = None;
     }
 
+    /// Delete the currently selected text span when it lies inside the active
+    /// input line containing the cursor (e.g. shell prompt or Claude Code /
+    /// Codex / Agy input box). Returns `true` when the selection was consumed.
+    fn delete_active_selection(&mut self, pane: usize) -> bool {
+        let Some(selection) = self.window.drag.and_then(|drag| drag.selection()) else {
+            return false;
+        };
+        let Ok(snapshot) = self.engine.read_styled_screen(pane) else {
+            return false;
+        };
+        let modes = self.engine.pane_modes(pane).unwrap_or_default();
+        let Ok(cursor_row_idx) = usize::try_from(snapshot.cursor.y) else {
+            return false;
+        };
+        let Some(seq) = crate::select::selection_delete_sequence(
+            selection,
+            &snapshot.lines,
+            cursor_row_idx,
+            snapshot.cursor.x,
+            modes.application_cursor_keys,
+            modes.alt_screen_active,
+        ) else {
+            return false;
+        };
+        unterm_services::ghost_text::cancel_input(pane as u64);
+        let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
+        let _ = self.engine.write_input(pane, &seq);
+        self.window.drag = None;
+        self.window.selected = None;
+        self.window.drawn_revision = None;
+        if let Some(live) = self.window.state.as_ref() {
+            live.window.request_redraw();
+        }
+        true
+    }
+
     fn toggle_git_panel(&mut self) {
         self.window.git_panel = match self.window.git_panel {
             Some(_) => None,
@@ -17616,7 +17652,7 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                let Some(live) = self.window.state.as_ref() else {
+                let Some(live_session_id) = self.window.state.as_ref().map(|s| s.session_id) else {
                     return;
                 };
 
@@ -17647,7 +17683,41 @@ impl ApplicationHandler for App {
                 }
 
                 let pane = self.focused_session();
-                let startup_pending = live.session_id == 0;
+                let startup_pending = live_session_id == 0;
+                // When the user has dragged a selection inside the active input
+                // line (shell or AI CLI prompt), Backspace/Delete deletes the
+                // selected span directly, and Cmd+X / Ctrl+Shift+X cuts it.
+                if !startup_pending && self.window.drag.is_some() {
+                    let plain_delete = !self.window.ctrl_held
+                        && !self.window.alt_held
+                        && !self.window.shift_held
+                        && !self.window.super_held
+                        && matches!(
+                            &event.logical_key,
+                            Key::Named(winit::keyboard::NamedKey::Backspace)
+                                | Key::Named(winit::keyboard::NamedKey::Delete)
+                        );
+                    if plain_delete && self.delete_active_selection(pane) {
+                        return;
+                    }
+                    let is_cut = matches!(
+                        &event.logical_key,
+                        Key::Character(ch) if ch.eq_ignore_ascii_case("x")
+                    ) && ((cfg!(target_os = "macos")
+                        && self.window.super_held
+                        && !self.window.ctrl_held
+                        && !self.window.alt_held)
+                        || (!cfg!(target_os = "macos")
+                            && self.window.ctrl_held
+                            && self.window.shift_held
+                            && !self.window.alt_held));
+                    if is_cut {
+                        self.copy_selection();
+                        if self.delete_active_selection(pane) {
+                            return;
+                        }
+                    }
+                }
                 if crate::ghost::is_accept_key(
                     &event.logical_key,
                     self.window.ctrl_held,
@@ -17679,7 +17749,7 @@ impl ApplicationHandler for App {
                     if startup_pending {
                         return;
                     }
-                    self.run_key_action(action, live.session_id);
+                    self.run_key_action(action, live_session_id);
                     return;
                 }
 
