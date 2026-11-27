@@ -27,7 +27,8 @@ use std::sync::OnceLock;
 /// One canonical language code per supported translation. The first entry is
 /// the fallback (English).
 pub const LOCALE_CODES: &[&str] = &[
-    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "de-DE", "fr-FR", "it-IT", "hi-IN",
+    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "es-ES", "pt-BR", "de-DE", "fr-FR", "it-IT",
+    "ru-RU", "ar-SA", "hi-IN", "vi-VN", "id-ID", "tr-TR",
 ];
 
 /// Embedded JSON dictionaries. The mapping below is the single source of
@@ -39,10 +40,17 @@ const LOCALE_BUNDLES: &[(&str, &str, &str)] = &[
     ("zh-TW", "繁體中文", include_str!("locales/zh-TW.json")),
     ("ja-JP", "日本語", include_str!("locales/ja.json")),
     ("ko-KR", "한국어", include_str!("locales/ko.json")),
+    ("es-ES", "Español", include_str!("locales/es.json")),
+    ("pt-BR", "Português (Brasil)", include_str!("locales/pt-BR.json")),
     ("de-DE", "Deutsch", include_str!("locales/de.json")),
     ("fr-FR", "Français", include_str!("locales/fr.json")),
     ("it-IT", "Italiano", include_str!("locales/it.json")),
+    ("ru-RU", "Русский", include_str!("locales/ru.json")),
+    ("ar-SA", "العربية", include_str!("locales/ar.json")),
     ("hi-IN", "हिन्दी", include_str!("locales/hi.json")),
+    ("vi-VN", "Tiếng Việt", include_str!("locales/vi.json")),
+    ("id-ID", "Bahasa Indonesia", include_str!("locales/id.json")),
+    ("tr-TR", "Türkçe", include_str!("locales/tr.json")),
 ];
 
 type Dict = HashMap<String, String>;

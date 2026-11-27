@@ -40,6 +40,16 @@ const LOCALE_BUNDLES: &[(&str, &str, &str)] = &[
         include_str!("../../../unterm-services/src/i18n/locales/ko.json"),
     ),
     (
+        "es-ES",
+        "Español",
+        include_str!("../../../unterm-services/src/i18n/locales/es.json"),
+    ),
+    (
+        "pt-BR",
+        "Português (Brasil)",
+        include_str!("../../../unterm-services/src/i18n/locales/pt-BR.json"),
+    ),
+    (
         "de-DE",
         "Deutsch",
         include_str!("../../../unterm-services/src/i18n/locales/de.json"),
@@ -55,14 +65,40 @@ const LOCALE_BUNDLES: &[(&str, &str, &str)] = &[
         include_str!("../../../unterm-services/src/i18n/locales/it.json"),
     ),
     (
+        "ru-RU",
+        "Русский",
+        include_str!("../../../unterm-services/src/i18n/locales/ru.json"),
+    ),
+    (
+        "ar-SA",
+        "العربية",
+        include_str!("../../../unterm-services/src/i18n/locales/ar.json"),
+    ),
+    (
         "hi-IN",
         "हिन्दी",
         include_str!("../../../unterm-services/src/i18n/locales/hi.json"),
     ),
+    (
+        "vi-VN",
+        "Tiếng Việt",
+        include_str!("../../../unterm-services/src/i18n/locales/vi.json"),
+    ),
+    (
+        "id-ID",
+        "Bahasa Indonesia",
+        include_str!("../../../unterm-services/src/i18n/locales/id.json"),
+    ),
+    (
+        "tr-TR",
+        "Türkçe",
+        include_str!("../../../unterm-services/src/i18n/locales/tr.json"),
+    ),
 ];
 
 const LOCALE_CODES: &[&str] = &[
-    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "de-DE", "fr-FR", "it-IT", "hi-IN",
+    "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "es-ES", "pt-BR", "de-DE", "fr-FR", "it-IT",
+    "ru-RU", "ar-SA", "hi-IN", "vi-VN", "id-ID", "tr-TR",
 ];
 
 type Dict = HashMap<String, String>;
@@ -139,10 +175,17 @@ fn map_to_canonical(raw: &str) -> Option<&'static str> {
         }
         "ja" => Some("ja-JP"),
         "ko" => Some("ko-KR"),
+        "es" => Some("es-ES"),
+        "pt" => Some("pt-BR"),
         "de" => Some("de-DE"),
         "fr" => Some("fr-FR"),
         "it" => Some("it-IT"),
+        "ru" => Some("ru-RU"),
+        "ar" => Some("ar-SA"),
         "hi" => Some("hi-IN"),
+        "vi" => Some("vi-VN"),
+        "id" | "in" => Some("id-ID"),
+        "tr" => Some("tr-TR"),
         "en" => Some("en-US"),
         _ => None,
     }

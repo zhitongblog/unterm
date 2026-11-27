@@ -12,6 +12,15 @@ Unterm is a terminal that agents can drive and that shows you what the agents in
 
 Most of what follows is terminal groundwork: the protocols modern command-line tools expect, and the install and update paths people expect from a daily driver. The agent surface (MCP, CLI, Agent Cockpit) already ships; see the [MCP reference](/docs/mcp-reference) and [Agent Cockpit](/docs/agent-cockpit).
 
+## Shipped in v0.72.0 – v0.72.1
+
+### Purpose-built runtime for Claude Code, Codex CLI & Antigravity (agy)
+
+- **Windows zero-lag input & zero console flashes (`v0.72.1`)** — 1ms Windows system timer (`timeBeginPeriod(1)`), dedicated non-blocking coalescing input worker (`unterm-input-tx`), DX12 Mailbox 1-frame latency, enforced `CREATE_NO_WINDOW` across all background subprocesses and MCP bridges, and a hidden-console `Ctrl+C` helper.
+- **Native Fleet Arena & Daily Telemetry HUD (`v0.72.0`)** — race 2–3 agents (Claude Code, Codex, Agy) side by side in isolated Git worktrees with live `+added -deleted` comparison and 1-click winner squash-merge; track cross-session daily tokens, estimated USD cost, peak context %, task success rate, and configurable daily budget alerts.
+- **OSC 133 Command Blocks, Search-to-AI & Remote Core over SSH (`v0.72.0`)** — 1-click jump to the last failed command block, `Ctrl+S` (`✦AI`) search-to-agent context feeding, and `unterm-cli remote-core attach/list/detach` over SSH tunnels.
+- **Global 16-language support** — English, 简体中文, 繁體中文, 日本語, 한국어, Español, Português (Brasil), Deutsch, Français, Italiano, Русский, العربية (RTL), हिन्दी, Tiếng Việt, Bahasa Indonesia, and Türkçe across desktop, CLI, Web Settings, and website.
+
 ## Shipped in v0.71.22
 
 ### Mobile & Agent Harness

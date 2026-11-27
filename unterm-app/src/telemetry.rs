@@ -308,6 +308,66 @@ impl DailyTelemetrySummary {
     pub fn total_cost_usd(&self) -> f64 {
         self.agents.iter().map(|a| a.total_cost_usd).sum()
     }
+
+    /// Evaluate today's spend against a user-configured daily USD budget
+    /// (`UNTERM_DAILY_BUDGET_USD`, or `None` when disabled/zero).
+    pub fn budget_alert(&self, daily_budget_usd: Option<f64>) -> Option<BudgetAlert> {
+        let limit = daily_budget_usd.filter(|v| v.is_finite() && *v > 0.0)?;
+        let spent = self.total_cost_usd();
+        let pct = ((spent / limit) * 100.0).round().clamp(0.0, 999.0) as u16;
+        let level = if pct >= 100 {
+            BudgetLevel::Exceeded
+        } else if pct >= 80 {
+            BudgetLevel::Warning
+        } else {
+            BudgetLevel::Normal
+        };
+        Some(BudgetAlert {
+            spent_usd: spent,
+            limit_usd: limit,
+            percent: pct,
+            level,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum BudgetLevel {
+    Normal,
+    /// >= 80% of daily budget consumed.
+    Warning,
+    /// >= 100% of daily budget consumed.
+    Exceeded,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BudgetAlert {
+    pub spent_usd: f64,
+    pub limit_usd: f64,
+    pub percent: u16,
+    pub level: BudgetLevel,
+}
+
+impl BudgetAlert {
+    pub fn badge(&self) -> String {
+        let icon = match self.level {
+            BudgetLevel::Exceeded => "⛔ ",
+            BudgetLevel::Warning => "⚠ ",
+            BudgetLevel::Normal => "",
+        };
+        format!(
+            "{icon}${:.2} / ${:.2} ({}%)",
+            self.spent_usd, self.limit_usd, self.percent
+        )
+    }
+}
+
+/// Reads optional daily USD spend budget from `UNTERM_DAILY_BUDGET_USD`.
+pub fn configured_daily_budget_usd() -> Option<f64> {
+    std::env::var("UNTERM_DAILY_BUDGET_USD")
+        .ok()
+        .and_then(|raw| raw.trim().trim_start_matches('$').parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
 }
 
 #[cfg(test)]
@@ -352,5 +412,27 @@ mod tests {
         assert_eq!(summary.agents[0].success_rate_pct(), Some(50));
         assert!(summary.agents[0].summary_line().contains("200.0k tok"));
         assert!(summary.agents[0].summary_line().contains("$2.00"));
+    }
+
+    #[test]
+    fn evaluates_daily_budget_thresholds_and_badges() {
+        let mut summary = DailyTelemetrySummary {
+            day_index: 20001,
+            agents: Vec::new(),
+        };
+        let s1 = extract_from_lines(&["100k tokens · $8.50 · ctx: 60%".to_string()]);
+        summary.record_sample("claude", &s1, Some(true));
+        let warn = summary.budget_alert(Some(10.0)).expect("budget alert");
+        assert_eq!(warn.level, BudgetLevel::Warning);
+        assert_eq!(warn.percent, 85);
+        assert!(warn.badge().contains("⚠ $8.50 / $10.00 (85%)"));
+
+        let s2 = extract_from_lines(&["50k tokens · $2.00 · ctx: 70%".to_string()]);
+        summary.record_sample("codex", &s2, Some(true));
+        let over = summary.budget_alert(Some(10.0)).expect("budget alert");
+        assert_eq!(over.level, BudgetLevel::Exceeded);
+        assert_eq!(over.percent, 105);
+        assert!(over.badge().contains("⛔ $10.50 / $10.00 (105%)"));
+        assert!(summary.budget_alert(Some(0.0)).is_none());
     }
 }

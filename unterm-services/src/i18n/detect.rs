@@ -40,10 +40,17 @@ pub fn map_to_canonical(raw: &str) -> Option<&'static str> {
         }
         "ja" => Some("ja-JP"),
         "ko" => Some("ko-KR"),
+        "es" => Some("es-ES"),
+        "pt" => Some("pt-BR"),
         "de" => Some("de-DE"),
         "fr" => Some("fr-FR"),
         "it" => Some("it-IT"),
+        "ru" => Some("ru-RU"),
+        "ar" => Some("ar-SA"),
         "hi" => Some("hi-IN"),
+        "vi" => Some("vi-VN"),
+        "id" | "in" => Some("id-ID"),
+        "tr" => Some("tr-TR"),
         "en" => Some("en-US"),
         _ => None,
     }
