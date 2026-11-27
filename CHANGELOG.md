@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.73.0 — 2026-11-27
+
+### Added
+
+- **Global 16-Language Support Across Desktop, CLI, Web Settings & Website (`unterm-services`, `unterm-cli`, `web`).**
+  - Expanded desktop UI, CLI, Web Settings, OS locale auto-detection, and website from 9 to **16 global languages**: English (`en-US`), 简体中文 (`zh-CN`), 繁體中文 (`zh-TW`), 日本語 (`ja-JP`), 한국어 (`ko-KR`), Español (`es-ES`), Português (Brasil) (`pt-BR`), Deutsch (`de-DE`), Français (`fr-FR`), Italiano (`it-IT`), Русский (`ru-RU`), العربية (`ar-SA`, with RTL layout on web), हिन्दी (`hi-IN`), Tiếng Việt (`vi-VN`), Bahasa Indonesia (`id-ID`), and Türkçe (`tr-TR`).
+  - All 7 newly added desktop locale dictionaries (`es.json`, `pt-BR.json`, `ru.json`, `ar.json`, `vi.json`, `id.json`, `tr.json`) maintain 100% key and placeholder parity (683 keys) with `en.json`.
+- **Daily Cost Budget Alerts (`unterm-app/src/telemetry.rs`).**
+  - Added configurable daily USD spend budget evaluation (`UNTERM_DAILY_BUDGET_USD`, `DailyTelemetrySummary::budget_alert`, `BudgetLevel::Warning` at 80%, `BudgetLevel::Exceeded` at 100%) with concise HUD badges (`⚠ $8.50 / $10.00 (85%)`, `⛔ $10.50 / $10.00 (105%)`).
+- **Website Positioning, Agent Landing Pages & SEO/GEO Upgrade (`web`, `README.md`).**
+  - Repositioned Unterm around **Claude Code · Codex · Agy CLI** with an 8-item Native Terminal Pain Points section translated across all 16 languages.
+  - Added dedicated landing pages (`/for/claude-code`, `/for/codex`, `/for/agy`) and `/compare/windows-terminal` across all 16 languages, dynamic build-time `sitemap.xml` (262 URLs with `hreflang`), and refreshed `llms.txt` / `llms-full.txt`.
+
 ## v0.72.1 — 2026-11-26
 
 ### Fixed

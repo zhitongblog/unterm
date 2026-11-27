@@ -370,7 +370,7 @@ export function agentJsonLd(
       name: `Unterm for ${agent.name}`,
       applicationCategory: "DeveloperApplication",
       operatingSystem: "macOS, Windows, Linux",
-      softwareVersion: "0.72.1",
+      softwareVersion: "0.73.0",
       url,
       downloadUrl: "https://github.com/zhitongblog/unterm/releases/latest",
       description,
