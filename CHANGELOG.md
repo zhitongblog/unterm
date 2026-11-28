@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.74.0 — 2026-11-28
+
+### Added
+
+- **IDE-Grade Input Line Editing (`unterm-app/src/select.rs`, `window.rs`).**
+  - **Retained active selection after mouse release:** dragging to select text keeps the highlight visible after releasing the mouse button so pressing `Backspace`, `Delete`, or `Cmd+X` / `Ctrl+Shift+X` immediately edits the selection cleanly.
+  - **Click-to-move cursor inside active input lines:** clicking any character on the active shell or AI Coding CLI input line (Claude Code, Codex, Agy) moves the cursor directly to that column (handling CJK wide characters and soft-wrapped multi-line inputs while ignoring links, historical scrollback, and alternate-screen apps).
+  - **Type-to-replace & paste-to-replace selection:** typing printable characters or pasting (`Cmd+V` / `Ctrl+Shift+V`) while an input-line selection is active automatically deletes the selected span and inserts the new text.
+- **Daily Cost Budget Alerts in Telemetry HUD (`unterm-app/src/telemetry.rs`, `window.rs`).**
+  - Wired `UNTERM_DAILY_BUDGET_USD` and `DailyTelemetrySummary::budget_alert()` directly into the Cross-Session Daily Telemetry Summary palette, surfacing live normal (`✓`), 80% warning (`⚠`), and 100% exceeded (`⛔`) budget status rows.
+- **AI Prompt Template Library (`unterm-app/src/prompts.rs`, `palette.rs`, `window.rs`).**
+  - Added Command Palette `✨ AI Prompt Templates` with 6 built-in bilingual developer templates (Git Diff Code Review, Regression Tests, Root-Cause Debug, Performance Audit, Security Audit, PR Summary) plus custom user templates loaded from `~/.unterm/prompts.json`.
+
 ## v0.73.1 — 2026-11-27
 
 ### Added

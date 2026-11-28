@@ -1,6 +1,6 @@
 [package]
 name = "unterm-profile"
-version = "0.73.1"
+version = "0.74.0"
 authors = ["Alex <lixd220@gmail.com>"]
 edition = "2021"
 publish = false

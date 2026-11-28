@@ -4,7 +4,7 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/zhitongblog/unterm?style=social)](https://github.com/zhitongblog/unterm/stargazers) [![AtomGit](https://atomgit.com/zhitongblog/unterm/star/badge.svg)](https://atomgit.com/zhitongblog/unterm) [![Latest release](https://img.shields.io/github/v/release/zhitongblog/unterm)](https://github.com/zhitongblog/unterm/releases/latest) [![AtomGit 镜像](https://img.shields.io/badge/中国镜像-atomgit.com%2Fzhitongblog%2Funterm-e60012.svg)](https://atomgit.com/zhitongblog/unterm)
 
-[**Download the latest release (`v0.73.1`)**](https://github.com/zhitongblog/unterm/releases/latest) · 🪞 [**AtomGit 国内高速下载 (China Mirror)**](https://atomgit.com/zhitongblog/unterm/releases) · [**Website (16 Languages)**](https://unterm.app) · [**For Claude Code**](https://unterm.app/for/claude-code) · [**For Codex**](https://unterm.app/for/codex) · [**For Agy**](https://unterm.app/for/agy) · [**Docs**](https://unterm.app/docs/)
+[**Download the latest release (`v0.74.0`)**](https://github.com/zhitongblog/unterm/releases/latest) · 🪞 [**AtomGit 国内高速下载 (China Mirror)**](https://atomgit.com/zhitongblog/unterm/releases) · [**Website (16 Languages)**](https://unterm.app) · [**For Claude Code**](https://unterm.app/for/claude-code) · [**For Codex**](https://unterm.app/for/codex) · [**For Agy**](https://unterm.app/for/agy) · [**Docs**](https://unterm.app/docs/)
 
 If Unterm is useful to you, a ⭐ on GitHub or [AtomGit](https://atomgit.com/zhitongblog/unterm) helps other people find it.
 
@@ -88,12 +88,12 @@ Full docs: [unterm.app/docs/agent-cockpit](https://unterm.app/docs/agent-cockpit
 Pre-built artifacts are published on GitHub Releases and mirrored on AtomGit (for fast direct downloads in mainland China):
 
 - **Global (GitHub Releases)**: https://github.com/zhitongblog/unterm/releases/latest
-- **中国大陆高速下载 (AtomGit 镜像 / 免登录直链 `v0.73.1`)**: https://atomgit.com/zhitongblog/unterm/releases/tag/v0.73.1
-  - **macOS (Universal arm64+x86_64)**: [Unterm-macos-v0.73.1.dmg](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-macos-v0.73.1.dmg)
-  - **Windows x64**: [Unterm-0.73.1-x64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-0.73.1-x64.msi) · [Unterm-windows-x64-v0.73.1.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-windows-x64-v0.73.1.zip)
-  - **Windows ARM64**: [Unterm-0.73.1-arm64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-0.73.1-arm64.msi) · [Unterm-windows-arm64-v0.73.1.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-windows-arm64-v0.73.1.zip)
-  - **Linux x86_64**: [unterm-v0.73.1.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/unterm-v0.73.1.deb) · [Unterm-v0.73.1-x86_64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-v0.73.1-x86_64.AppImage)
-  - **Linux ARM64**: [unterm-v0.73.1.arm64.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/unterm-v0.73.1.arm64.deb) · [Unterm-v0.73.1-aarch64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.73.1/Unterm-v0.73.1-aarch64.AppImage)
+- **中国大陆高速下载 (AtomGit 镜像 / 免登录直链 `v0.74.0`)**: https://atomgit.com/zhitongblog/unterm/releases/tag/v0.74.0
+  - **macOS (Universal arm64+x86_64)**: [Unterm-macos-v0.74.0.dmg](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-macos-v0.74.0.dmg)
+  - **Windows x64**: [Unterm-0.74.0-x64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-0.74.0-x64.msi) · [Unterm-windows-x64-v0.74.0.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-windows-x64-v0.74.0.zip)
+  - **Windows ARM64**: [Unterm-0.74.0-arm64.msi](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-0.74.0-arm64.msi) · [Unterm-windows-arm64-v0.74.0.zip](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-windows-arm64-v0.74.0.zip)
+  - **Linux x86_64**: [unterm-v0.74.0.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/unterm-v0.74.0.deb) · [Unterm-v0.74.0-x86_64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-v0.74.0-x86_64.AppImage)
+  - **Linux ARM64**: [unterm-v0.74.0.arm64.deb](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/unterm-v0.74.0.arm64.deb) · [Unterm-v0.74.0-aarch64.AppImage](https://atomgit.com/zhitongblog/unterm/releases/download/v0.74.0/Unterm-v0.74.0-aarch64.AppImage)
 
 | Platform | Artifact                                                    |
 | -------- | ----------------------------------------------------------- |
