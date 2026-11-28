@@ -1070,6 +1070,7 @@ impl WindowState {
             tabs: unterm_engine::next_core::tabs::TabRegistry::new(),
             tab_id: None,
             drag: None,
+            active_selection: None,
             swallow_left_after_secondary: false,
             secondary_gesture: crate::mouse::SecondaryGesture::default(),
             selected: None,
@@ -1157,6 +1158,10 @@ struct WindowState {
     tab_id: Option<usize>,
     /// The selection being dragged out, if one is.
     drag: Option<crate::select::Drag>,
+    /// The completed selection retained after mouse release so the user sees
+    /// what is selected and can press Backspace/Delete, Cmd+X, paste, or type
+    /// directly to replace it.
+    active_selection: Option<unterm_engine::next_core::selection::Selection>,
     /// Whether the rest of the current left-button gesture is spoken for.
     ///
     /// A Ctrl+Left press consumed as a macOS secondary click swallows its own
@@ -2915,7 +2920,7 @@ impl App {
     /// you had. Drawn in the scheme's own highlight, with its own text colour,
     /// because those two were chosen together.
     fn append_selection(&mut self, quads: &mut unterm_render::quads::FrameQuads) {
-        let Some(selection) = self.window.drag.and_then(|drag| drag.selection()) else {
+        let Some(selection) = self.current_selection() else {
             return;
         };
         let Some(live) = self.window.state.as_ref() else {
@@ -6718,6 +6723,12 @@ impl App {
             return;
         };
         let session_id = live.session_id;
+        // If the user has an active selection inside the current input line,
+        // delete it first so pasting replaces the selected text like an editor.
+        if self.current_selection().is_some() {
+            let pane = self.focused_session();
+            let _ = self.delete_active_selection(pane);
+        }
         let tx = self.clipboard_tx.clone();
         crate::clipboard::run(tx, move || {
             let result = arboard::Clipboard::new()
@@ -7926,11 +7937,20 @@ impl App {
         self.window.drawn_revision = None;
     }
 
+    /// The active terminal selection — either currently being dragged or
+    /// retained after releasing the mouse button.
+    fn current_selection(&self) -> Option<unterm_engine::next_core::selection::Selection> {
+        self.window
+            .drag
+            .and_then(|drag| drag.selection())
+            .or(self.window.active_selection)
+    }
+
     /// Delete the currently selected text span when it lies inside the active
     /// input line containing the cursor (e.g. shell prompt or Claude Code /
     /// Codex / Agy input box). Returns `true` when the selection was consumed.
     fn delete_active_selection(&mut self, pane: usize) -> bool {
-        let Some(selection) = self.window.drag.and_then(|drag| drag.selection()) else {
+        let Some(selection) = self.current_selection() else {
             return false;
         };
         let Ok(snapshot) = self.engine.read_styled_screen(pane) else {
@@ -7954,12 +7974,42 @@ impl App {
         let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
         let _ = self.engine.write_input(pane, &seq);
         self.window.drag = None;
+        self.window.active_selection = None;
         self.window.selected = None;
         self.window.drawn_revision = None;
         if let Some(live) = self.window.state.as_ref() {
             live.window.request_redraw();
         }
         true
+    }
+
+    /// Move the live terminal cursor to a clicked cell when the click lands
+    /// inside the active logical input line (shell or AI CLI prompt).
+    fn move_cursor_to_click(
+        &mut self,
+        pane: usize,
+        target: unterm_engine::next_core::selection::SelectionPoint,
+    ) {
+        let Ok(snapshot) = self.engine.read_styled_screen(pane) else {
+            return;
+        };
+        let modes = self.engine.pane_modes(pane).unwrap_or_default();
+        let Ok(cursor_row_idx) = usize::try_from(snapshot.cursor.y) else {
+            return;
+        };
+        let Some(seq) = crate::select::cursor_move_sequence(
+            target,
+            &snapshot.lines,
+            cursor_row_idx,
+            snapshot.cursor.x,
+            modes.application_cursor_keys,
+            modes.alt_screen_active,
+        ) else {
+            return;
+        };
+        unterm_services::ghost_text::cancel_input(pane as u64);
+        let _ = self.engine.write_input(pane, &seq);
+        self.window.drawn_revision = None;
     }
 
     fn toggle_git_panel(&mut self) {
@@ -12832,7 +12882,14 @@ impl App {
             summary.record_sample(&status.agent, &sample, outcome);
         }
 
+        let budget = crate::telemetry::configured_daily_budget_usd();
+        let budget_alert = summary.budget_alert(budget);
+
         let mut entries = Vec::new();
+        let total_hint = match &budget_alert {
+            Some(alert) if alert.level != crate::telemetry::BudgetLevel::Normal => alert.badge(),
+            _ => "Live cross-session summary".to_string(),
+        };
         entries.push(crate::palette::Entry {
             label: if is_zh {
                 format!(
@@ -12849,9 +12906,38 @@ impl App {
                     summary.agents.len()
                 )
             },
-            hint: "Live cross-session summary".to_string(),
+            hint: total_hint,
             command: crate::palette::Command::Nothing,
         });
+        if let Some(alert) = &budget_alert {
+            entries.push(crate::palette::Entry {
+                label: match alert.level {
+                    crate::telemetry::BudgetLevel::Exceeded => {
+                        if is_zh {
+                            format!("⛔ 已超出每日费用预算：{}", alert.badge())
+                        } else {
+                            format!("⛔ Daily budget exceeded: {}", alert.badge())
+                        }
+                    }
+                    crate::telemetry::BudgetLevel::Warning => {
+                        if is_zh {
+                            format!("⚠ 接近每日费用预算上限：{}", alert.badge())
+                        } else {
+                            format!("⚠ Approaching daily budget: {}", alert.badge())
+                        }
+                    }
+                    crate::telemetry::BudgetLevel::Normal => {
+                        if is_zh {
+                            format!("✓ 今日预算水位：{}", alert.badge())
+                        } else {
+                            format!("✓ Daily budget status: {}", alert.badge())
+                        }
+                    }
+                },
+                hint: "UNTERM_DAILY_BUDGET_USD".to_string(),
+                command: crate::palette::Command::Nothing,
+            });
+        }
         for agent in &summary.agents {
             entries.push(crate::palette::Entry {
                 label: format!("  ✦ {} ({} panes)", agent.agent, agent.sessions_seen),
@@ -17684,10 +17770,13 @@ impl ApplicationHandler for App {
 
                 let pane = self.focused_session();
                 let startup_pending = live_session_id == 0;
-                // When the user has dragged a selection inside the active input
-                // line (shell or AI CLI prompt), Backspace/Delete deletes the
-                // selected span directly, and Cmd+X / Ctrl+Shift+X cuts it.
-                if !startup_pending && self.window.drag.is_some() {
+                // When the user has an active selection inside the current input
+                // line (shell or AI CLI prompt):
+                // - Backspace/Delete deletes the selected span directly
+                // - Cmd+X / Ctrl+Shift+X cuts it
+                // - Typing a printable character replaces it
+                // - Any other non-modifier key clears the retained selection
+                if !startup_pending && self.current_selection().is_some() {
                     let plain_delete = !self.window.ctrl_held
                         && !self.window.alt_held
                         && !self.window.shift_held
@@ -17716,6 +17805,32 @@ impl ApplicationHandler for App {
                         if self.delete_active_selection(pane) {
                             return;
                         }
+                    }
+                    let is_plain_printable = !self.window.ctrl_held
+                        && !self.window.alt_held
+                        && !self.window.super_held
+                        && matches!(
+                            &event.logical_key,
+                            Key::Character(_) | Key::Named(winit::keyboard::NamedKey::Space)
+                        );
+                    if is_plain_printable {
+                        // Delete selected span before letting the typed char
+                        // flow through to the shell so typing replaces selection.
+                        let _ = self.delete_active_selection(pane);
+                    }
+                    // Clear retained selection highlight on non-copy keys so it
+                    // never lingers once the user resumes typing/navigating.
+                    let is_copy_chord = matches!(
+                        &event.logical_key,
+                        Key::Character(ch) if ch.eq_ignore_ascii_case("c")
+                    ) && (self.window.super_held || self.window.ctrl_held);
+                    let is_paste_chord = matches!(
+                        &event.logical_key,
+                        Key::Character(ch) if ch.eq_ignore_ascii_case("v")
+                    ) && (self.window.super_held || self.window.ctrl_held);
+                    if !is_copy_chord && !is_paste_chord {
+                        self.window.active_selection = None;
+                        self.window.drawn_revision = None;
                     }
                 }
                 if crate::ghost::is_accept_key(
@@ -18365,6 +18480,7 @@ impl ApplicationHandler for App {
                             n if n >= 3 => self.select_line_at(cell),
                             _ => {
                                 self.window.drag = Some(crate::select::Drag::start(cell, shape));
+                                self.window.active_selection = None;
                                 self.window.selected = None;
                             }
                         }
@@ -18378,16 +18494,30 @@ impl ApplicationHandler for App {
                             .window.drag
                             .map(|drag| drag.selection().is_none())
                             .unwrap_or(false);
+                        let completed_selection =
+                            self.window.drag.and_then(|drag| drag.selection());
                         self.update_selection();
                         self.window.drag = None;
+                        self.window.active_selection = completed_selection;
                         if self.window.selected.is_some() {
                             // Selecting is copying, exactly as it was before:
                             // release the button and the text is already on
-                            // the clipboard.
+                            // the clipboard -- while keeping the selection
+                            // active so Backspace/Delete/typing/paste can edit it.
                             self.copy_selection();
-                        } else if was_click && !self.window.shift_held && !self.window.ctrl_held {
+                            self.window.drawn_revision = None;
+                        } else if was_click
+                            && !self.window.shift_held
+                            && !self.window.ctrl_held
+                            && !self.window.alt_held
+                            && !self.window.super_held
+                        {
                             if let Some(link) = self.link_under_pointer() {
                                 self.open_terminal_link(&link);
+                            } else {
+                                let cell = self.cell_under_pointer();
+                                let pane = self.focused_session();
+                                self.move_cursor_to_click(pane, cell);
                             }
                         }
                     }

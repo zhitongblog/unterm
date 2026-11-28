@@ -186,6 +186,101 @@ pub fn selection_delete_sequence(
     Some(out)
 }
 
+/// Build the Left/Right arrow escape sequence to move the terminal cursor from
+/// its live position to `target` when the user clicks inside the active logical
+/// input line (shell prompt or Claude Code / Codex / Agy input box).
+///
+/// Returns `None` when:
+/// - the alternate screen is active (`vim` / `less` / `htop` / `tmux`),
+/// - the click lands outside the cursor's soft-wrapped logical line, or
+/// - the cursor is already at the clicked character.
+pub fn cursor_move_sequence(
+    target: SelectionPoint,
+    lines: &[unterm_engine::StyledScreenLine],
+    cursor_row_idx: usize,
+    cursor_col: usize,
+    application_cursor_keys: bool,
+    alt_screen_active: bool,
+) -> Option<String> {
+    if alt_screen_active {
+        return None;
+    }
+    let cur_line = lines.get(cursor_row_idx)?;
+    let cur_scroll_row = cur_line.row;
+
+    let mut logical_start = cursor_row_idx;
+    while logical_start > 0 && lines[logical_start - 1].wrapped {
+        logical_start -= 1;
+    }
+    let mut logical_end = cursor_row_idx;
+    while logical_end + 1 < lines.len() && lines[logical_end].wrapped {
+        logical_end += 1;
+    }
+
+    let min_row = lines[logical_start].row;
+    let max_row = lines[logical_end].row;
+    if target.row < min_row || target.row > max_row {
+        return None;
+    }
+
+    let mut chars: Vec<(i64, usize, usize, char)> = Vec::new();
+    for line in &lines[logical_start..=logical_end] {
+        for (col, cell) in line.cells.iter().enumerate() {
+            if cell.width == 0 {
+                continue;
+            }
+            let w = (cell.width as usize).max(1);
+            chars.push((line.row, col, col + w, cell.ch));
+        }
+    }
+
+    let last_meaningful = chars
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, (r, c, _, ch))| {
+            !ch.is_whitespace() || (*r == cur_scroll_row && *c < cursor_col)
+        })
+        .map(|(i, _)| i + 1)
+        .unwrap_or(0);
+    chars.truncate(last_meaningful);
+    if chars.is_empty() {
+        return None;
+    }
+
+    let pos_to_idx = |target_row: i64, target_col: usize| -> usize {
+        for (idx, &(r, _c_start, c_end, _)) in chars.iter().enumerate() {
+            if r > target_row || (r == target_row && target_col < c_end) {
+                return idx;
+            }
+        }
+        chars.len()
+    };
+
+    let cursor_idx = pos_to_idx(cur_scroll_row, cursor_col);
+    let target_idx = pos_to_idx(target.row, target.column);
+    if target_idx == cursor_idx {
+        return None;
+    }
+    let steps = target_idx.abs_diff(cursor_idx);
+    if steps > 4096 {
+        return None;
+    }
+
+    let arrow = if target_idx > cursor_idx {
+        if application_cursor_keys {
+            "\x1bOC"
+        } else {
+            "\x1b[C"
+        }
+    } else if application_cursor_keys {
+        "\x1bOD"
+    } else {
+        "\x1b[D"
+    };
+    Some(arrow.repeat(steps))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +450,34 @@ mod tests {
         let mut on_prompt = Selection::new(SelectionPoint::new(2, 10), SelectionShape::Linear);
         on_prompt.extend_to(SelectionPoint::new(8, 10));
         assert!(selection_delete_sequence(on_prompt, &lines, 1, 15, false, true).is_none());
+    }
+
+    #[test]
+    fn moves_cursor_to_clicked_column_on_active_input_line() {
+        let lines = vec![make_line(10, "$ echo hello world   ", false)];
+        // Cursor at end (18), click on 'h' of "hello" (col 7) -> 11 left arrows
+        let seq = cursor_move_sequence(SelectionPoint::new(7, 10), &lines, 0, 18, false, false)
+            .unwrap();
+        assert_eq!(seq, "\x1b[D".repeat(11));
+
+        // Cursor at col 7, click on 'w' of "world" (col 13) -> 6 right arrows (app mode)
+        let seq2 = cursor_move_sequence(SelectionPoint::new(13, 10), &lines, 0, 7, true, false)
+            .unwrap();
+        assert_eq!(seq2, "\x1bOC".repeat(6));
+    }
+
+    #[test]
+    fn click_move_counts_cjk_wide_chars_and_ignores_scrollback_or_alt_screen() {
+        let lines = vec![
+            make_line(4, "history output", false),
+            make_line(5, "> 你好世界", false),
+        ];
+        // Cursor at end (col 10), click on '好' (col 4..6) -> 3 left arrows ('界', '世', '好')
+        let seq =
+            cursor_move_sequence(SelectionPoint::new(4, 5), &lines, 1, 10, false, false).unwrap();
+        assert_eq!(seq, "\x1b[D".repeat(3));
+        // Clicking history line or in alt-screen does nothing
+        assert!(cursor_move_sequence(SelectionPoint::new(2, 4), &lines, 1, 10, false, false).is_none());
+        assert!(cursor_move_sequence(SelectionPoint::new(4, 5), &lines, 1, 10, false, true).is_none());
     }
 }
