@@ -260,6 +260,10 @@ pub enum Command {
     CleanupArenaRun { run_id: String },
     /// Open the cross-session Daily Agent Telemetry summary (Tokens, Cost, Success Rate).
     OpenTelemetrySummary,
+    /// Open the curated + user-extensible AI Prompt Template Library (`~/.unterm/prompts.json`).
+    OpenPromptTemplates,
+    /// Insert a selected prompt template directly into the focused terminal / AI Agent pane.
+    InsertPromptTemplate { text: String },
     /// A row that is information rather than a verb. The Insights card is a
     /// list to read, not a list to run, and pressing a line of it should do
     /// nothing rather than whatever a guess would be.

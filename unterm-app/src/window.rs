@@ -12949,6 +12949,39 @@ impl App {
         self.window.drawn_revision = None;
     }
 
+    fn open_prompt_templates_palette(&mut self) {
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let user_path = unterm_protocol::state_path("prompts.json");
+        let templates = crate::prompts::load_all_templates(user_path.as_deref(), is_zh);
+        let entries: Vec<crate::palette::Entry> = templates
+            .into_iter()
+            .map(|tpl| crate::palette::Entry {
+                label: tpl.title,
+                hint: if tpl.hint.is_empty() {
+                    "~/.unterm/prompts.json".to_string()
+                } else {
+                    tpl.hint
+                },
+                command: crate::palette::Command::InsertPromptTemplate { text: tpl.prompt },
+            })
+            .collect();
+        self.window.palette = Some(crate::palette::Palette::new(entries));
+        self.window.drawn_revision = None;
+    }
+
+    fn insert_prompt_template(&mut self, text: &str) {
+        let pane = self.focused_session();
+        let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
+        let _ = self.engine.scroll_viewport_to(pane, isize::MAX);
+        let _ = self.engine.write_input(pane, text);
+        self.show_notice(if is_zh {
+            "\u{2713} 已插入 Prompt 模板到当前输入框（按 Enter 发送）".to_string()
+        } else {
+            "\u{2713} Inserted prompt template into active pane (press Enter to send)".to_string()
+        });
+        self.window.drawn_revision = None;
+    }
+
     fn fix_failure_with_agent(&mut self, program: &str) {
         let is_zh = unterm_services::i18n::current_locale().starts_with("zh");
         let source_pane = self.focused_session();
@@ -14533,6 +14566,10 @@ impl App {
             }
             crate::palette::Command::OpenTelemetrySummary => {
                 self.open_telemetry_summary_palette()
+            }
+            crate::palette::Command::OpenPromptTemplates => self.open_prompt_templates_palette(),
+            crate::palette::Command::InsertPromptTemplate { text } => {
+                self.insert_prompt_template(&text)
             }
             crate::palette::Command::ConfirmSafePaste { pane_id, text } => {
                 self.perform_paste_input(pane_id, &text)
@@ -20234,6 +20271,15 @@ fn command_entries() -> Vec<crate::palette::Entry> {
         },
         hint: "Telemetry HUD".to_string(),
         command: crate::palette::Command::OpenTelemetrySummary,
+    });
+    entries.push(crate::palette::Entry {
+        label: if is_zh {
+            "✨ AI Prompt 模板库 — 一键插入审查 / 单测 / 排障 / 安全审计 Prompt".to_string()
+        } else {
+            "✨ AI Prompt Templates — Insert Code Review / Test / Debug / Audit Prompts".to_string()
+        },
+        hint: "~/.unterm/prompts.json".to_string(),
+        command: crate::palette::Command::OpenPromptTemplates,
     });
     entries.push(crate::palette::Entry {
         label: if is_zh {

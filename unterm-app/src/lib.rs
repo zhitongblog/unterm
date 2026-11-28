@@ -40,6 +40,7 @@ mod links;
 mod mcp_host;
 mod mouse;
 mod palette;
+mod prompts;
 mod panes;
 mod paneselect;
 mod scroll;
